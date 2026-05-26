@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-Item \"C:\\\\Users\\\\cenk_\\\\ValoCase\\\\Assets\\\\_ValoCase\\\\Resources\\\\ContentDatabase.asset\")",
+      "Bash(Select-Object LastWriteTime)",
+      "Bash(Get-Item \"C:\\\\Users\\\\cenk_\\\\ValoCase\\\\Assets\\\\_ValoCase\\\\Data\\\\Skins\\\\*.asset\")",
+      "Bash(Select-Object Name, LastWriteTime)",
+      "Bash(find /c/Users/cenk_/AppData/LocalLow -name \"valocase_save.json\" 2>/dev/null)",
+      "Bash(.venvScriptspython.exe -c ' *)",
+      "Bash(python -c \"import sys; print\\(sys.executable\\)\")",
+      "Bash(Select-String -Pattern \"error CS|Error|error:\")",
+      "Bash(Select-Object -Last 60)",
+      "Bash(python3 -c ' *)"
+    ]
+  }
+}

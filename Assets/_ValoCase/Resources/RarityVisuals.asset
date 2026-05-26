@@ -1,0 +1,45 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: ce5c445a4dfc8f245808c11bf0fdf0bd, type: 3}
+  m_Name: RarityVisuals
+  m_EditorClassIdentifier: Assembly-CSharp::ValoCase.Data.RarityVisualSO
+  entries:
+  - rarity: 0
+    primaryColor: {r: 0.55, g: 0.65, b: 0.78, a: 1}
+    glowColor: {r: 0.66, g: 0.78000003, b: 0.936, a: 1.2}
+    textColor: {r: 1, g: 1, b: 1, a: 1}
+    glowIntensity: 0.6
+    cardBgColor: {r: 0.22, g: 0.3, b: 0.45, a: 1}
+  - rarity: 1
+    primaryColor: {r: 0, g: 0.961, b: 1, a: 1}
+    glowColor: {r: 0, g: 1.1532, b: 1.2, a: 1.2}
+    textColor: {r: 1, g: 1, b: 1, a: 1}
+    glowIntensity: 0.9
+    cardBgColor: {r: 0.06, g: 0.3, b: 0.68, a: 1}
+  - rarity: 2
+    primaryColor: {r: 0.69, g: 0.149, b: 1, a: 1}
+    glowColor: {r: 0.828, g: 0.17880002, b: 1.2, a: 1.2}
+    textColor: {r: 1, g: 1, b: 1, a: 1}
+    glowIntensity: 1.1
+    cardBgColor: {r: 0.35, g: 0.08, b: 0.65, a: 1}
+  - rarity: 3
+    primaryColor: {r: 1, g: 0.176, b: 0.667, a: 1}
+    glowColor: {r: 1.2, g: 0.21120001, b: 0.8004, a: 1.2}
+    textColor: {r: 1, g: 1, b: 1, a: 1}
+    glowIntensity: 1.3
+    cardBgColor: {r: 0.62, g: 0.07, b: 0.3, a: 1}
+  - rarity: 4
+    primaryColor: {r: 0.224, g: 1, b: 0.078, a: 1}
+    glowColor: {r: 0.26880002, g: 1.2, b: 0.093600005, a: 1.2}
+    textColor: {r: 1, g: 1, b: 1, a: 1}
+    glowIntensity: 1.6
+    cardBgColor: {r: 0.06, g: 0.48, b: 0.1, a: 1}

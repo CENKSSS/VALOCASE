@@ -1,0 +1,26 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 2e8399d2d31cc9e49ad2a2515e25ea63, type: 3}
+  m_Name: Case_case_limited
+  m_EditorClassIdentifier: Assembly-CSharp::ValoCase.Data.CaseDefinitionSO
+  caseId: case_limited
+  displayName: Night Market Cache
+  description: "Night Market Cache \u2014 fan portfolio case."
+  vpPrice: 1275
+  caseIcon: {fileID: 0}
+  bannerArt: {fileID: 0}
+  dropTable: {fileID: 11400000, guid: 66654890261b093438a4ecfecfa0d440, type: 2}
+  isFeatured: 1
+  isLimited: 1
+  unlockType: 0
+  unlockRequirement: 0
+  themeColor: {r: 0.92, g: 0.23, b: 0.29, a: 1}

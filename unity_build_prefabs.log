@@ -1,0 +1,23 @@
+[Licensing::Module] Trying to connect to existing licensing client channel...
+Built from '6000.4/staging' branch; Version is '6000.4.7f1 (f3c3c4248748) revision 15975364'; Using compiler version '194234433'; Build Type 'Release'
+OS: 'Windows 11  (10.0.26200) CoreSingleLanguage' Language: 'tr' Physical Memory: 16052 MB
+[Licensing::IpcConnector] Connection to channel LicenseClient-cenk_ refused
+BatchMode: 1, IsHumanControllingUs: 0, StartBugReporterOnCrash: 0, Is64bit: 1
+System  architecture: x64
+Process architecture: x64
+Date: 2026-05-17T21:19:48Z
+[Licensing::Module] Successfully launched the LicensingClient (PId: 15548)
+
+COMMAND LINE ARGUMENTS:
+C:\Program Files\Unity\Hub\Editor\6000.4.7f1\Editor\Unity.exe
+-batchmode
+-quit
+-projectPath
+C:\Users\cenk_\ValoCase
+-executeMethod
+ValoCase.Editor.ValoCaseUIBuilder.BuildPrefabs
+-logFile
+C:\Users\cenk_\ValoCase\unity_build_prefabs.log
+Successfully changed project path to: C:\Users\cenk_\ValoCase
+C:/Users/cenk_/ValoCase
+Exiting without the bug reporter. Application will terminate with return code 1

@@ -1,0 +1,46 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 962b8aae01bdc8843a7ccefe82c71577, type: 3}
+  m_Name: DropTable_Premium
+  m_EditorClassIdentifier: Assembly-CSharp::ValoCase.Data.CaseDropTableSO
+  rarityWeights:
+  - rarity: 0
+    weightPercent: 38
+  - rarity: 1
+    weightPercent: 30
+  - rarity: 2
+    weightPercent: 20
+  - rarity: 3
+    weightPercent: 9
+  - rarity: 4
+    weightPercent: 3
+  possibleDrops:
+  - skin: {fileID: 11400000, guid: d746f2a95589f9f40883671e627d8725, type: 2}
+    skinWeightOverride: 0
+  - skin: {fileID: 11400000, guid: 470d5ef0255852848a303123443c4239, type: 2}
+    skinWeightOverride: 0
+  - skin: {fileID: 11400000, guid: 12bad3130e408e6459f039d84ce69113, type: 2}
+    skinWeightOverride: 0
+  - skin: {fileID: 11400000, guid: e6933e9cb0279b549ad4000b4d5e60c7, type: 2}
+    skinWeightOverride: 0
+  - skin: {fileID: 11400000, guid: 1ff356deb7a77674bacbc2d42217aaad, type: 2}
+    skinWeightOverride: 0
+  - skin: {fileID: 11400000, guid: 09cb72a99d37e8c4390eda9c2017ea6a, type: 2}
+    skinWeightOverride: 0
+  - skin: {fileID: 11400000, guid: 9e98e276210fc65478a74b40f6ac07d1, type: 2}
+    skinWeightOverride: 0
+  - skin: {fileID: 11400000, guid: ba5cf4c6c39379f4db66ade99db52922, type: 2}
+    skinWeightOverride: 0
+  - skin: {fileID: 11400000, guid: 697b26d2c07ebbd4a9f078a3827047e8, type: 2}
+    skinWeightOverride: 0
+  - skin: {fileID: 11400000, guid: 67b0be5a41432d44aa10d8a8a5d42e79, type: 2}
+    skinWeightOverride: 0
