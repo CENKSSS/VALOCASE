@@ -203,6 +203,9 @@ namespace ValoCase.UI.Screens
             _showingInventory = inventory;
             UpdateTabVisuals();
             RebuildGrid();
+            // Tab değişince scroll'u en üste al
+            if (_skinScrollRect != null)
+                _skinScrollRect.normalizedPosition = new Vector2(0, 1f);
         }
 
         void UpdateTabVisuals()
@@ -359,7 +362,12 @@ namespace ValoCase.UI.Screens
                 {
                     int inputVp = _selectedInput?.VpValue ?? 0;
 
-                    foreach (var s in ctx.Content.Skins)
+                    // ctx.Content.Skins boş olabilirse GetFilteredSkins fallback'i kullan
+                    IReadOnlyList<SkinDefinitionSO> allSkins = ctx.Content.Skins;
+                    if (allSkins == null || allSkins.Count == 0)
+                        allSkins = ctx.Content.GetFilteredSkins(null, null);
+
+                    foreach (var s in allSkins)
                     {
                         if (s == null) continue;
                         if (_selectedInput != null && s.SkinId == _selectedInput.SkinId) continue;
@@ -408,6 +416,14 @@ namespace ValoCase.UI.Screens
                 if (i < _cardPool.Count) card = _cardPool[i];
                 else { card = CreateCard(skinGridRoot); _cardPool.Add(card); }
                 BindCard(card, skins[i]);
+            }
+
+            // ContentSizeFitter aynı frame'de güncellemez — layout'u zorla tetikle
+            if (skinGridRoot != null)
+            {
+                var gridRt = skinGridRoot.GetComponent<RectTransform>();
+                if (gridRt != null)
+                    UnityEngine.UI.LayoutRebuilder.ForceRebuildLayoutImmediate(gridRt);
             }
         }
 

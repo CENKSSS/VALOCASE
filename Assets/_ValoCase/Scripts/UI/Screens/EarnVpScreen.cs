@@ -68,7 +68,8 @@ namespace ValoCase.UI.Screens
         };
 
         // ── Runtime state ─────────────────────────────────────────────────────
-        bool      _builtUi;
+        bool        _builtUi;
+        ScreenType  _prevScreen;   // captured on OnShown — used by back button
         bool      _holding;
         float     _holdStartTime;
         int       _comboCount;
@@ -115,12 +116,27 @@ namespace ValoCase.UI.Screens
 
         void Awake()
         {
+            // Legacy builder back button → reuse with correct navigation
             if (backButton != null)
-                backButton.onClick.AddListener(() => navigator?.Navigate(ScreenType.MainMenu));
+                backButton.onClick.AddListener(OnBackClicked);
+        }
+
+        void OnBackClicked()
+        {
+            // Return to whichever screen opened VP Kazan.
+            // Exclude self (EarnVp) and Settings from valid return targets.
+            var target = (_prevScreen != ScreenType.EarnVp &&
+                          _prevScreen != ScreenType.Settings)
+                ? _prevScreen
+                : ScreenType.Tools;
+            Debug.Log("[VP_KAZAN] Back clicked, returning to: " + target);
+            navigator?.Navigate(target);
         }
 
         protected override void OnShown()
         {
+            // Capture previous screen before UINavigator updates it
+            _prevScreen = navigator?.PreviousScreen ?? ScreenType.Tools;
             BuildUiOnce();
             _lastMousePos       = ReadMousePosition();
             _lastMouseMoveTime  = Time.time;
@@ -537,6 +553,43 @@ namespace ValoCase.UI.Screens
             UpdateComboVisual();
             UpdateMultiplierLabel(0f);
             UpdateSessionLabel();
+
+            // ── BACK button — added LAST so it renders on top of all content ──
+            // anchorMin/Max = (0,1): top-left corner of screen
+            // anchoredPosition = (28, -88): 88px below top (TopProfileBar 72px + 16px gap)
+            var backBtn = new GameObject("BackBtn",
+                typeof(RectTransform), typeof(Image), typeof(Button), typeof(Outline));
+            backBtn.transform.SetParent(rt, false);
+            var backRt = (RectTransform)backBtn.transform;
+            backRt.anchorMin        = new Vector2(0f, 1f);
+            backRt.anchorMax        = new Vector2(0f, 1f);
+            backRt.pivot            = new Vector2(0f, 1f);
+            backRt.anchoredPosition = new Vector2(28f, -88f);
+            backRt.sizeDelta        = new Vector2(96f, 36f);
+
+            var backImg = backBtn.GetComponent<Image>();
+            backImg.color = new Color(0.031f, 0.055f, 0.102f, 0.97f);   // dark navy, fully opaque
+
+            var backOl = backBtn.GetComponent<Outline>();
+            backOl.effectColor    = new Color(1f, 0.122f, 0.224f, 0.80f);  // neon red border
+            backOl.effectDistance = new Vector2(1.5f, -1.5f);
+
+            var backLbl = CreateTmp(backBtn.transform, "Lbl", "BACK",
+                12f, FontStyles.Bold, TextAlignmentOptions.Center, Color.white);
+            backLbl.characterSpacing = 2f;
+            var bRt = backLbl.rectTransform;
+            bRt.anchorMin = Vector2.zero; bRt.anchorMax = Vector2.one;
+            bRt.offsetMin = bRt.offsetMax = Vector2.zero;
+
+            var backBtnComp = backBtn.GetComponent<Button>();
+            backBtnComp.transition = Selectable.Transition.None;
+            backBtnComp.onClick.AddListener(OnBackClicked);
+
+            // Render on top of everything inside EarnVpScreen
+            backBtn.transform.SetAsLastSibling();
+
+            Debug.Log("[VP_KAZAN] Back button created active=" + backBtn.activeInHierarchy);
+            Debug.Log("[VP_KAZAN] Back button sibling=" + backBtn.transform.GetSiblingIndex());
         }
 
         // ── Hold zone: layered rings + text ──────────────────────────────────

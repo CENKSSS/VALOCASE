@@ -66,11 +66,11 @@ namespace ValoCase.Data
                                  $"Inspector'daki mevcut {skins.Count} SO skin kullanılıyor.");
             }
 
-            // Replace case list with the single runtime-built Vandal Case.
+            // Replace case list with the 5 runtime-built Vandal Cases.
             // All SO-based case assets are intentionally discarded here.
-            var vandalCase = VandalCaseBuilder.Build(this);
-            cases = vandalCase != null
-                ? new List<CaseDefinitionSO> { vandalCase }
+            var vandalCases = VandalCaseBuilder.BuildAll(this);
+            cases = vandalCases.Count > 0
+                ? vandalCases
                 : new List<CaseDefinitionSO>();
         }
 

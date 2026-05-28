@@ -70,6 +70,31 @@ namespace ValoCase.Core
             CaseOpening = services.CaseOpening;
             Upgrade = services.Upgrade;
 
+            // ── Admin VP grant (one-time) ─────────────────────────────────────
+            // Gives 500 000 VP exactly once, keyed on the adminVpGrantApplied flag
+            // in SaveDataRoot.  After the flag is set, restarts keep whatever
+            // balance the player has saved — even if it dropped below 500 000.
+            var savePath = System.IO.Path.Combine(
+                UnityEngine.Application.persistentDataPath, GameConstants.SaveFileName);
+            Debug.Log("[VP_FIX] save path=" + savePath);
+            Debug.Log("[VP_FIX] balance loaded=" + (Vp?.Balance ?? -1));
+            Debug.Log("[VP_FIX] grantApplied=" + (Save?.Data?.adminVpGrantApplied ?? false));
+
+            if (Vp != null && Save?.Data != null && !Save.Data.adminVpGrantApplied)
+            {
+                Debug.Log("[VP_FIX] applying admin grant");
+                Vp.SetBalance(500000);
+                Save.Data.adminVpGrantApplied = true;
+                Save.Save();
+                Debug.Log("[VP_FIX] first grant applied, balance=" + Vp.Balance);
+                Debug.Log("[VP_FIX] save written");
+            }
+            else
+            {
+                Debug.Log("[VP_FIX] grant already applied, keeping saved balance=" + (Vp?.Balance ?? -1));
+            }
+            // ─────────────────────────────────────────────────────────────────
+
             if (Vp != null)
                 GameEvents.RaiseVpChanged(Vp.Balance, Vp.Balance);
             GameEvents.RaiseStatisticsChanged();

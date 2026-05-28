@@ -10,6 +10,8 @@ namespace ValoCase.UI
         Weapons,
         Upgrade,
         CaseBattle,
-        EarnVp
+        EarnVp,
+        Tools,
+        Market
     }
 }

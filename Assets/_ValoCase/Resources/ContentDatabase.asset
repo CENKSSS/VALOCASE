@@ -1159,5 +1159,10 @@ MonoBehaviour:
   - {fileID: 0}
   cases:
   - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
   skinRootPathOverride: 
   loadSkinsFromFileSystem: 1

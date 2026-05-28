@@ -45,15 +45,20 @@ namespace ValoCase.Data
             _rankMap.TryGetValue(rarity, out var r) ? r : 0;
 
         // ── VP values ─────────────────────────────────────────────────────────
-        // Özel=1000  Üstün=2000  İhtişamlı=3000  Ultra=4000  Seçkin=5000
+        // Midpoints of the per-rarity VP ranges used for Vandal skins:
+        //   Select    500 – 900   → 700
+        //   Deluxe    900 – 1500  → 1200
+        //   Premium   1500 – 2500 → 2000
+        //   Exclusive 2500 – 4000 → 3250
+        //   Ultra     4000 – 7000 → 5500
         public static int GetVp(SkinRarity rarity) => rarity switch
         {
-            SkinRarity.Select    => 1000,
-            SkinRarity.Deluxe    => 2000,
-            SkinRarity.Premium   => 3000,
-            SkinRarity.Ultra     => 4000,
-            SkinRarity.Exclusive => 5000,
-            _                    => 1000,
+            SkinRarity.Select    =>  700,
+            SkinRarity.Deluxe    => 1200,
+            SkinRarity.Premium   => 2000,
+            SkinRarity.Exclusive => 3250,
+            SkinRarity.Ultra     => 5500,
+            _                    =>  700,
         };
 
         // ── Display labels ────────────────────────────────────────────────────

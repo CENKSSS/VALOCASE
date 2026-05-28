@@ -121,13 +121,17 @@ namespace ValoCase.Data
                 var ext = Path.GetExtension(filePath);
                 if (!imageExts.Contains(ext)) continue;
 
-                var skinName = Path.GetFileNameWithoutExtension(filePath);
-                if (string.IsNullOrWhiteSpace(skinName)) continue;
+                // rawName: original filename (no ext), used for stable IDs and duplicate check.
+                // skinName: human-readable display name — underscores become spaces.
+                //   Prime_Vandal.png → display "Prime Vandal", id stays "Vandal_Select_Prime_Vandal"
+                var rawName  = Path.GetFileNameWithoutExtension(filePath);
+                if (string.IsNullOrWhiteSpace(rawName)) continue;
+                var skinName = rawName.Replace('_', ' ').Trim();
 
                 // ── KEY FIX: rarity is part of the ID ────────────────────────
                 // "Vandal_Select_Skin1" and "Vandal_Deluxe_Skin1" are DIFFERENT
                 // skins — no false de-duplication even when filenames match.
-                var skinId = $"{weaponName}_{rarity}_{skinName}";
+                var skinId = $"{weaponName}_{rarity}_{rawName}";
 
                 var sprite = LoadSprite(filePath, skinId);
                 if (sprite == null) continue;

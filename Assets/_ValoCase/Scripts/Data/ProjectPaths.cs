@@ -41,10 +41,10 @@ namespace ValoCase.Data
             Path.Combine(ProjectRoot, "Semboller");
 
         /// <summary>
-        /// Desktop/ValorantProject/Case/ — case icon images (VCase.png etc.).
+        /// Desktop/ValorantProject/Cases/ — case icon images (VCase.png etc.).
         /// </summary>
         public static readonly string CaseIconsRoot =
-            Path.Combine(ProjectRoot, "Case");
+            Path.Combine(ProjectRoot, "Cases");
 
         /// <summary>
         /// Desktop/ValorantProject/Arayuz/ — UI art assets (backgrounds, logos, etc.).

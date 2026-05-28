@@ -39,6 +39,12 @@ namespace ValoCase.UI.Screens
         Sprite          _pendingSprite;
         Sprite          _circleMaskSprite;
 
+        // ── Save-button dirty state ───────────────────────────────────────────
+        bool            _hasUnsavedChanges = true;
+        Image           _saveBtnImg;
+        Outline         _saveBtnOl;
+        TextMeshProUGUI _saveBtnLbl;
+
         // ── Palette ───────────────────────────────────────────────────────────
         static readonly Color BgPanel       = new Color(0.022f, 0.015f, 0.060f, 0.97f);
         static readonly Color BgCard        = new Color(0.055f, 0.042f, 0.110f, 1.00f);
@@ -66,6 +72,9 @@ namespace ValoCase.UI.Screens
 
         protected override void OnShown()
         {
+            var previousScreen = (navigator != null) ? navigator.PreviousScreen : ScreenType.MainMenu;
+            Debug.Log("[SETTINGS] Opened from: " + previousScreen);
+
             // Legacy name input — restore from save data
             if (playerNameInput != null)
             {
@@ -77,6 +86,10 @@ namespace ValoCase.UI.Screens
             ProfileManager.EnsureInitialized();
             BuildProfileSectionOnce();
             RefreshProfileSection();
+
+            // Reset dirty state each time the screen opens — SAVE starts active
+            _hasUnsavedChanges = true;
+            SetSaveButtonActive(true);
 
             PlayerProfileData.OnProfileChanged += RefreshProfileSection;
         }
@@ -90,7 +103,14 @@ namespace ValoCase.UI.Screens
         // LEGACY SETTINGS HANDLERS
         // ═════════════════════════════════════════════════════════════════════
 
-        void OnBackClicked() => navigator?.Navigate(ScreenType.MainMenu);
+        void OnBackClicked()
+        {
+            var dest = (navigator != null && navigator.PreviousScreen != ScreenType.Settings)
+                ? navigator.PreviousScreen
+                : ScreenType.MainMenu;
+            Debug.Log("[SETTINGS] Exit returning to: " + dest);
+            navigator?.Navigate(dest);
+        }
 
         void SaveLegacyProfile()
         {
@@ -108,9 +128,9 @@ namespace ValoCase.UI.Screens
             GameEvents.RaiseToast("Save reset.");
         }
 
-        public void OnSfxToggle(bool on)     => SoundManager.Instance?.SetSfxEnabled(on);
-        public void OnMusicToggle(bool on)   => SoundManager.Instance?.SetMusicEnabled(on);
-        public void OnHapticsToggle(bool on) => HapticManager.Instance?.SetEnabled(on);
+        public void OnSfxToggle(bool on)     { SoundManager.Instance?.SetSfxEnabled(on);  MarkDirty(); }
+        public void OnMusicToggle(bool on)   { SoundManager.Instance?.SetMusicEnabled(on); MarkDirty(); }
+        public void OnHapticsToggle(bool on) { HapticManager.Instance?.SetEnabled(on);     MarkDirty(); }
 
         // ═════════════════════════════════════════════════════════════════════
         // PROFILE SECTION — built once, right-anchored panel
@@ -125,39 +145,37 @@ namespace ValoCase.UI.Screens
 
             var rt = (RectTransform)transform;
 
-            // ── Outer panel — right edge, full height, 420 px wide ────────────
+            // ── Outer panel — centered, with top/bottom reserved zones ──────────
+            // offsetMax.y = -230  → top edge sits 230 px below screen top
+            //                       (TopProfileBar 72 px + 158 px breathing room)
+            // offsetMin.y =  94   → bottom edge sits 94 px above screen bottom
+            //                       (BottomNavBar 90 px + 4 px gap)
             var panel = PR(rt, "ProfilePanel",
-                new Vector2(1f, 0f), Vector2.one, new Vector2(1f, 0.5f));
-            panel.anchoredPosition = new Vector2(-10f, 0f);
-            panel.sizeDelta        = new Vector2(420f, 0f);
+                Vector2.zero, Vector2.one, new Vector2(0.5f, 0.5f));
+            panel.offsetMin = new Vector2(60f, 110f);
+            panel.offsetMax = new Vector2(-60f, -95f);
+            Debug.Log("[SETTINGS_LAYOUT] shifted content down");
 
             var panelImg = panel.gameObject.AddComponent<Image>();
             panelImg.color = BgPanel;
-
-            // Left border line
-            var lBorder = PR(panel, "LBorder",
-                Vector2.zero, new Vector2(0f, 1f), new Vector2(0f, 0.5f));
-            lBorder.anchoredPosition = Vector2.zero;
-            lBorder.sizeDelta        = new Vector2(2f, 0f);
-            lBorder.gameObject.AddComponent<Image>().color = AccentPink;
 
             // Top glow bleed
             var tg = PR(panel, "TGlow",
                 new Vector2(0f, 1f), Vector2.one, new Vector2(0.5f, 1f));
             tg.anchoredPosition = Vector2.zero;
-            tg.sizeDelta        = new Vector2(0f, 90f);
+            tg.sizeDelta        = new Vector2(0f, 44f);
             tg.gameObject.AddComponent<Image>().color = AccentPinkGlow;
 
             // ── "PROFILE" section header (36 px) ─────────────────────────────
             var header = PR(panel, "ProfileHeader",
                 new Vector2(0f, 1f), Vector2.one, new Vector2(0.5f, 1f));
             header.anchoredPosition = Vector2.zero;
-            header.sizeDelta        = new Vector2(0f, 36f);
+            header.sizeDelta        = new Vector2(0f, 44f);
             header.gameObject.AddComponent<Image>().color =
-                new Color(1f, 0.18f, 0.55f, 0.06f);
+                new Color(1f, 0.18f, 0.55f, 0.10f);
 
-            var hLbl = PT(header, "HLbl", "  PROFILE",
-                9f, FontStyles.Bold, TextAlignmentOptions.Left, AccentPink);
+            var hLbl = PT(header, "HLbl", "SETTINGS",
+                18f, FontStyles.Bold, TextAlignmentOptions.Center, TextWhite);
             hLbl.characterSpacing = 4f;
             SFull(hLbl.rectTransform);
 
@@ -172,7 +190,7 @@ namespace ValoCase.UI.Screens
             var scroll = PR(panel, "Scroll",
                 Vector2.zero, Vector2.one, new Vector2(0.5f, 0.5f));
             scroll.offsetMin = new Vector2(0f, 0f);
-            scroll.offsetMax = new Vector2(0f, -36f);
+            scroll.offsetMax = new Vector2(0f, -44f);
 
             var sr = scroll.gameObject.AddComponent<ScrollRect>();
             sr.horizontal        = false;
@@ -209,10 +227,10 @@ namespace ValoCase.UI.Screens
 
             var vlg = cGo.GetComponent<VerticalLayoutGroup>();
             vlg.childAlignment        = TextAnchor.UpperCenter;
-            vlg.spacing               = 0f;
+            vlg.spacing               = 6f;
             vlg.childForceExpandWidth  = true;
             vlg.childForceExpandHeight = false;
-            vlg.padding = new RectOffset(14, 14, 16, 16);
+            vlg.padding = new RectOffset(14, 14, 10, 16);
 
             cGo.GetComponent<ContentSizeFitter>().verticalFit =
                 ContentSizeFitter.FitMode.PreferredSize;
@@ -230,10 +248,140 @@ namespace ValoCase.UI.Screens
             var selHint = PT(cRt, "GridHint", "SELECT AVATAR",
                 8f, FontStyles.Bold, TextAlignmentOptions.Left, AccentPink);
             selHint.characterSpacing = 3.5f;
-            selHint.gameObject.AddComponent<LayoutElement>().minHeight = 22f;
+            selHint.gameObject.AddComponent<LayoutElement>().minHeight = 18f;
 
             // ── Avatar grid ───────────────────────────────────────────────────
             BuildAvatarGrid(cRt.transform);
+
+            // ── Spacer ────────────────────────────────────────────────────────
+            var sp1 = new GameObject("Sp1", typeof(RectTransform), typeof(LayoutElement));
+            sp1.transform.SetParent(cRt.transform, false);
+            sp1.GetComponent<LayoutElement>().minHeight = 8f;
+
+            // ── Audio section header ──────────────────────────────────────────
+            var audioHdr = PT(cRt, "AudioHdr", "AUDIO",
+                8f, FontStyles.Bold, TextAlignmentOptions.Left, AccentPink);
+            audioHdr.characterSpacing = 3.5f;
+            audioHdr.gameObject.AddComponent<LayoutElement>().minHeight = 18f;
+
+            BuildDivider(cRt.transform);
+
+            // ── Toggles ───────────────────────────────────────────────────────
+            sfxToggle     = BuildSettingsToggle(cRt.transform, "SFX");
+            musicToggle   = BuildSettingsToggle(cRt.transform, "Music");
+            hapticsToggle = BuildSettingsToggle(cRt.transform, "Haptics");
+            sfxToggle.onValueChanged.AddListener(OnSfxToggle);
+            musicToggle.onValueChanged.AddListener(OnMusicToggle);
+            hapticsToggle.onValueChanged.AddListener(OnHapticsToggle);
+
+            // ── Spacer ────────────────────────────────────────────────────────
+            var sp2 = new GameObject("Sp2", typeof(RectTransform), typeof(LayoutElement));
+            sp2.transform.SetParent(cRt.transform, false);
+            sp2.GetComponent<LayoutElement>().minHeight = 12f;
+
+            // ── Action button row: [SAVE] [ÇIK] ──────────────────────────────
+            var btnRow = new GameObject("BtnRow",
+                typeof(RectTransform), typeof(HorizontalLayoutGroup), typeof(LayoutElement));
+            btnRow.transform.SetParent(cRt.transform, false);
+            btnRow.GetComponent<LayoutElement>().minHeight = 44f;
+            var hlg = btnRow.GetComponent<HorizontalLayoutGroup>();
+            hlg.spacing               = 8f;
+            hlg.childForceExpandWidth  = true;
+            hlg.childForceExpandHeight = true;
+
+            saveProfileButton = BuildActionButton(btnRow.transform, "SAVE", AccentPink);
+            _saveBtnImg = saveProfileButton.GetComponent<Image>();
+            _saveBtnOl  = saveProfileButton.GetComponent<Outline>();
+            _saveBtnLbl = saveProfileButton.GetComponentInChildren<TextMeshProUGUI>();
+            saveProfileButton.onClick.AddListener(OnProfileSaveClicked);
+
+            var exitBtn = BuildActionButton(btnRow.transform, "ÇIK", TextDim);
+            exitBtn.onClick.AddListener(OnBackClicked);
+
+            // ── Bottom spacer ─────────────────────────────────────────────────
+            var sp3 = new GameObject("Sp3", typeof(RectTransform), typeof(LayoutElement));
+            sp3.transform.SetParent(cRt.transform, false);
+            sp3.GetComponent<LayoutElement>().minHeight = 8f;
+
+            // ── Wire legacy input ref so SaveLegacyProfile still works ────────
+            playerNameInput = _displayNameInput;
+        }
+
+        // ── Audio toggle row (LayoutGroup driven) ─────────────────────────────
+        Toggle BuildSettingsToggle(Transform parent, string label)
+        {
+            var row = new GameObject($"Toggle_{label}",
+                typeof(RectTransform), typeof(Toggle), typeof(LayoutElement));
+            row.transform.SetParent(parent, false);
+            row.GetComponent<LayoutElement>().minHeight = 32f;
+
+            var toggle = row.GetComponent<Toggle>();
+            toggle.transition = Selectable.Transition.None;
+
+            // Checkbox background
+            var bgGo = new GameObject("BG", typeof(RectTransform), typeof(Image));
+            bgGo.transform.SetParent(row.transform, false);
+            var bgRt = (RectTransform)bgGo.transform;
+            bgRt.anchorMin        = new Vector2(0f, 0.5f);
+            bgRt.anchorMax        = new Vector2(0f, 0.5f);
+            bgRt.pivot            = new Vector2(0f, 0.5f);
+            bgRt.anchoredPosition = new Vector2(12f, 0f);
+            bgRt.sizeDelta        = new Vector2(36f, 20f);
+            var bgImg = bgGo.GetComponent<Image>();
+            bgImg.color        = BgCard;
+            toggle.targetGraphic = bgImg;
+
+            // Checkmark fill
+            var ckGo = new GameObject("Checkmark", typeof(RectTransform), typeof(Image));
+            ckGo.transform.SetParent(bgGo.transform, false);
+            var ckRt = (RectTransform)ckGo.transform;
+            ckRt.anchorMin = Vector2.zero; ckRt.anchorMax = Vector2.one;
+            ckRt.offsetMin = new Vector2(2f, 2f); ckRt.offsetMax = new Vector2(-2f, -2f);
+            var ckImg = ckGo.GetComponent<Image>();
+            ckImg.color   = AccentPink;
+            toggle.graphic = ckImg;
+
+            // Label
+            var lbl = PT(row.transform, "Label", label,
+                13f, FontStyles.Bold, TextAlignmentOptions.MidlineLeft, TextWhite);
+            var lRt = lbl.rectTransform;
+            lRt.anchorMin        = Vector2.zero;
+            lRt.anchorMax        = Vector2.one;
+            lRt.offsetMin        = new Vector2(58f, 0f);
+            lRt.offsetMax        = Vector2.zero;
+
+            toggle.isOn = true;
+            return toggle;
+        }
+
+        // ── Full-width action button (LayoutGroup driven) ─────────────────────
+        Button BuildActionButton(Transform parent, string label, Color tint)
+        {
+            var btnGo = new GameObject($"Btn_{label}",
+                typeof(RectTransform), typeof(Image), typeof(Button),
+                typeof(Outline), typeof(LayoutElement));
+            btnGo.transform.SetParent(parent, false);
+            btnGo.GetComponent<LayoutElement>().minHeight = 44f;
+            var btnImg = btnGo.GetComponent<Image>();
+            btnImg.color = new Color(0.03f, 0.020f, 0.075f, 0.96f);
+            var ol = btnGo.GetComponent<Outline>();
+            ol.effectColor    = tint;
+            ol.effectDistance = new Vector2(1.5f, -1.5f);
+
+            var lbl = PT(btnGo.transform, "Lbl", label,
+                13f, FontStyles.Bold, TextAlignmentOptions.Center, tint);
+            SFull(lbl.rectTransform);
+
+            var btn = btnGo.GetComponent<Button>();
+            btn.transition = Selectable.Transition.None;
+
+            var et = btnGo.AddComponent<EventTrigger>();
+            AddPE(et, EventTriggerType.PointerEnter,
+                _ => btnImg.color = new Color(tint.r * 0.15f, tint.g * 0.15f, tint.b * 0.15f, 0.96f));
+            AddPE(et, EventTriggerType.PointerExit,
+                _ => btnImg.color = new Color(0.03f, 0.020f, 0.075f, 0.96f));
+
+            return btn;
         }
 
         // ── Avatar preview: ring + circle + agent name ────────────────────────
@@ -242,9 +390,9 @@ namespace ValoCase.UI.Screens
             var block = new GameObject("AvPreviewBlock", typeof(RectTransform),
                 typeof(LayoutElement));
             block.transform.SetParent(parent, false);
-            block.GetComponent<LayoutElement>().minHeight = 148f;
+            block.GetComponent<LayoutElement>().minHeight = 104f;
 
-            const float bigAv = 100f;
+            const float bigAv = 76f;
 
             // Neon ring
             var ringGo = new GameObject("Ring", typeof(RectTransform), typeof(Image));
@@ -253,7 +401,7 @@ namespace ValoCase.UI.Screens
             ringRt.anchorMin        = new Vector2(0.5f, 0.5f);
             ringRt.anchorMax        = new Vector2(0.5f, 0.5f);
             ringRt.pivot            = new Vector2(0.5f, 0.5f);
-            ringRt.anchoredPosition = Vector2.zero;
+            ringRt.anchoredPosition = new Vector2(0f, 8f);
             ringRt.sizeDelta        = new Vector2(bigAv + 10f, bigAv + 10f);
             var rImg = ringGo.GetComponent<Image>();
             rImg.sprite        = _circleMaskSprite;
@@ -279,7 +427,7 @@ namespace ValoCase.UI.Screens
             _agentNameLbl.rectTransform.anchorMin        = new Vector2(0f, 0f);
             _agentNameLbl.rectTransform.anchorMax        = new Vector2(1f, 0f);
             _agentNameLbl.rectTransform.pivot            = new Vector2(0.5f, 0f);
-            _agentNameLbl.rectTransform.anchoredPosition = new Vector2(0f, 6f);
+            _agentNameLbl.rectTransform.anchoredPosition = new Vector2(0f, -4f);
             _agentNameLbl.rectTransform.sizeDelta        = new Vector2(0f, 18f);
             _agentNameLbl.enableWordWrapping             = false;
         }
@@ -287,18 +435,24 @@ namespace ValoCase.UI.Screens
         // ── Display name input + save button ──────────────────────────────────
         void BuildDisplayNameBlock(Transform parent)
         {
+            // Küçük üst boşluk
+            var topSp = new GameObject("DisplayNameTopSp", typeof(RectTransform), typeof(LayoutElement));
+            topSp.transform.SetParent(parent, false);
+            topSp.GetComponent<LayoutElement>().minHeight = 2f;
+
             // "DISPLAY NAME" label
             var hint = PT(parent, "DNHint", "DISPLAY NAME",
                 8f, FontStyles.Bold, TextAlignmentOptions.Left, AccentPink);
             hint.characterSpacing = 3f;
-            hint.gameObject.AddComponent<LayoutElement>().minHeight = 22f;
+            hint.gameObject.AddComponent<LayoutElement>().minHeight = 18f;
 
             // Input wrapper
             var iwGo = new GameObject("InputWrap",
                 typeof(RectTransform), typeof(Image), typeof(Outline), typeof(LayoutElement));
             iwGo.transform.SetParent(parent, false);
-            iwGo.GetComponent<LayoutElement>().minHeight = 48f;
+            iwGo.GetComponent<LayoutElement>().minHeight = 42f;
             iwGo.GetComponent<Image>().color = BgInput;
+
             var iwOl = iwGo.GetComponent<Outline>();
             iwOl.effectColor    = new Color(1f, 0.18f, 0.55f, 0.40f);
             iwOl.effectDistance = new Vector2(1f, -1f);
@@ -306,38 +460,7 @@ namespace ValoCase.UI.Screens
             _displayNameInput = BuildInputField(
                 (RectTransform)iwGo.transform, PlayerProfileData.Username);
 
-            // SAVE button
-            var saveGo = new GameObject("SaveBtn",
-                typeof(RectTransform), typeof(Image), typeof(Button),
-                typeof(Outline), typeof(LayoutElement));
-            saveGo.transform.SetParent(parent, false);
-            saveGo.GetComponent<LayoutElement>().minHeight = 46f;
-            saveGo.GetComponent<Image>().color = new Color(0.03f, 0.020f, 0.075f, 0.96f);
-            var saveOl = saveGo.GetComponent<Outline>();
-            saveOl.effectColor    = AccentPink;
-            saveOl.effectDistance = new Vector2(1.5f, -1.5f);
-
-            var saveLbl = PT(saveGo.transform, "Lbl", "SAVE  ✓",
-                12f, FontStyles.Bold, TextAlignmentOptions.Center, TextWhite);
-            SFull(saveLbl.rectTransform);
-
-            var saveBtn = saveGo.GetComponent<Button>();
-            saveBtn.transition = Selectable.Transition.None;
-            saveBtn.onClick.AddListener(OnProfileSaveClicked);
-
-            // Hover tint
-            var saveBtnImg = saveGo.GetComponent<Image>();
-            var et = saveGo.AddComponent<EventTrigger>();
-            AddPE(et, EventTriggerType.PointerEnter,
-                _ => saveBtnImg.color = new Color(1f, 0.18f, 0.55f, 0.12f));
-            AddPE(et, EventTriggerType.PointerExit,
-                _ => saveBtnImg.color = new Color(0.03f, 0.020f, 0.075f, 0.96f));
-
-            // Top spacing
-            var topSp = new GameObject("TopSp", typeof(RectTransform), typeof(LayoutElement));
-            topSp.transform.SetParent(parent, false);
-            topSp.GetComponent<LayoutElement>().minHeight = 8f;
-            topSp.transform.SetSiblingIndex(0);   // before hint
+            _displayNameInput.onValueChanged.AddListener(_ => MarkDirty());
         }
 
         // ── Separator ─────────────────────────────────────────────────────────
@@ -359,9 +482,9 @@ namespace ValoCase.UI.Screens
             gridGo.transform.SetParent(parent, false);
 
             var glg = gridGo.GetComponent<GridLayoutGroup>();
-            glg.cellSize        = new Vector2(84f, 108f);
+            glg.cellSize        = new Vector2(78f, 98f);
             glg.spacing         = new Vector2(8f, 8f);
-            glg.padding         = new RectOffset(4, 4, 6, 6);
+            glg.padding         = new RectOffset(4, 4, 4, 4);
             glg.childAlignment  = TextAnchor.UpperLeft;
             glg.constraint      = GridLayoutGroup.Constraint.FixedColumnCount;
             glg.constraintCount = 4;
@@ -370,7 +493,7 @@ namespace ValoCase.UI.Screens
                 ContentSizeFitter.FitMode.PreferredSize;
 
             var le = gridGo.GetComponent<LayoutElement>();
-            le.minHeight = 120f;
+            le.minHeight = 105f;
 
             _gridContent = gridGo.transform;
         }
@@ -465,10 +588,13 @@ namespace ValoCase.UI.Screens
             _pendingKey    = name;
             _pendingSprite = sprite;
 
+            Debug.Log("[SETTINGS_AVATAR] selected key=" + _pendingKey + " spriteNull=" + (_pendingSprite == null));
+
             if (_bigAvatarImg  != null) { _bigAvatarImg.color = Color.white; _bigAvatarImg.sprite = sprite; }
             if (_agentNameLbl  != null) _agentNameLbl.text = name;
 
             RefreshGridHighlights();
+            MarkDirty();
         }
 
         void RefreshGridHighlights()
@@ -491,14 +617,52 @@ namespace ValoCase.UI.Screens
         // ── Save clicked ──────────────────────────────────────────────────────
         void OnProfileSaveClicked()
         {
-            if (_displayNameInput != null &&
-                !string.IsNullOrWhiteSpace(_displayNameInput.text))
-                PlayerProfileData.SetUsername(_displayNameInput.text.Trim());
+            // Capture pending values into locals FIRST.
+            // SetUsername fires OnProfileChanged → RefreshProfileSection() which
+            // overwrites _pendingKey/_pendingSprite with the old saved data.
+            // Using locals ensures SetAvatar always receives the user's selection.
+            var newName   = (_displayNameInput != null) ? _displayNameInput.text.Trim() : null;
+            var newKey    = _pendingKey;
+            var newSprite = _pendingSprite;
 
-            if (_pendingSprite != null)
-                PlayerProfileData.SetAvatar(_pendingSprite, _pendingKey);
+            Debug.Log("[SETTINGS_AVATAR] saving key=" + newKey + " spriteNull=" + (newSprite == null));
+
+            if (!string.IsNullOrWhiteSpace(newName))
+                PlayerProfileData.SetUsername(newName);   // fires OnProfileChanged → RefreshProfileSection
+
+            if (newSprite != null)
+                PlayerProfileData.SetAvatar(newSprite, newKey);  // uses local copy — safe
+
+            Debug.Log("[SETTINGS_AVATAR] after save key=" + PlayerProfileData.AvatarKey);
 
             GameEvents.RaiseToast("Profile saved.");
+
+            _hasUnsavedChanges = false;
+            SetSaveButtonActive(false);
+            Debug.Log("[SETTINGS] Saved changes — save button disabled");
+        }
+
+        // ── Dirty-state helpers ───────────────────────────────────────────────
+        void MarkDirty()
+        {
+            if (_hasUnsavedChanges) return;
+            _hasUnsavedChanges = true;
+            SetSaveButtonActive(true);
+        }
+
+        void SetSaveButtonActive(bool active)
+        {
+            if (saveProfileButton == null) return;
+            saveProfileButton.interactable = active;
+            Color labelColor = active
+                ? AccentPink
+                : new Color(AccentPink.r * 0.35f, AccentPink.g * 0.35f, AccentPink.b * 0.35f, 0.50f);
+            Color bgColor = active
+                ? new Color(0.03f, 0.020f, 0.075f, 0.96f)
+                : new Color(0.02f, 0.015f, 0.050f, 0.55f);
+            if (_saveBtnImg != null) _saveBtnImg.color         = bgColor;
+            if (_saveBtnOl  != null) _saveBtnOl.effectColor    = labelColor;
+            if (_saveBtnLbl != null) _saveBtnLbl.color         = labelColor;
         }
 
         // ── Sync profile → UI ─────────────────────────────────────────────────

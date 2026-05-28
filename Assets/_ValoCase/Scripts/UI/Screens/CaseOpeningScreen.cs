@@ -46,6 +46,8 @@ namespace ValoCase.UI.Screens
         CaseDefinitionSO _selected;
         bool _buttonReady;
         bool _showingResult;
+        bool _backBtnCreated;
+        GameObject _runtimeBackBtn;
 
         // ── Visual-only neon pulse / burst (no gameplay logic) ───────────────
         Image      _spinOverlayBg;
@@ -58,6 +60,7 @@ namespace ValoCase.UI.Screens
             if (backButton != null) backButton.onClick.AddListener(OnBack);
             if (openButton != null) openButton.onClick.AddListener(OpenSelected);
             GameEvents.OnCaseOpened += OnCaseOpened;
+            EnsureBackButton();
         }
 
         // Start runs after all Awakes — canvas hierarchy is fully live.
@@ -76,6 +79,10 @@ namespace ValoCase.UI.Screens
             RefreshWallet();
             ShowSpinOverlay(false);
             GameEvents.OnVpChanged += OnVpChanged;
+
+            // Re-assert top sibling every time the screen is shown so no panel can cover the button.
+            if (_runtimeBackBtn != null)
+                _runtimeBackBtn.transform.SetAsLastSibling();
         }
 
         // Centers the OPEN CASE button under the case icon and parks the price
@@ -127,7 +134,8 @@ namespace ValoCase.UI.Screens
         void OnBack()
         {
             if (flow != null && flow.SessionActive) return;
-            navigator?.Navigate(ScreenType.MainMenu);
+            Debug.Log("[CASE_OPENING] Back clicked -> Shop");
+            navigator?.Navigate(ScreenType.Shop);
         }
 
         // ── TAMAM butonu ─────────────────────────────────────────────────────
@@ -160,6 +168,73 @@ namespace ValoCase.UI.Screens
             if (skipButton != null) skipButton.gameObject.SetActive(false);
         }
 
+        // Always creates a fresh visible runtime back button on the screen root.
+        // Uses _backBtnCreated so it only builds once per MonoBehaviour lifetime.
+        // Does NOT check the Inspector backButton field — that may be invisible/misconfigured.
+        void EnsureBackButton()
+        {
+            Debug.Log("[CASE_OPENING_BACK] EnsureBackButton called");
+
+            if (_backBtnCreated) return;
+            _backBtnCreated = true;
+
+            // ── Container — child of THIS transform (screen root, NOT a scroll/panel child) ──
+            var go = new GameObject("BackButton_Runtime",
+                typeof(RectTransform), typeof(Image), typeof(Button));
+            go.transform.SetParent(transform, false);
+            _runtimeBackBtn = go;
+
+            var rt = go.GetComponent<RectTransform>();
+            rt.anchorMin        = new Vector2(0f, 1f);
+            rt.anchorMax        = new Vector2(0f, 1f);
+            rt.pivot            = new Vector2(0f, 1f);
+            rt.anchoredPosition = new Vector2(24f, -185f);
+            rt.sizeDelta        = new Vector2(96f, 36f);
+
+            // Fully opaque background — alpha 1 so nothing makes it invisible
+            var img = go.GetComponent<Image>();
+            img.color = new Color(0.05f, 0.08f, 0.16f, 1f);
+
+            // Red neon border via Outline
+            var outline = go.AddComponent<Outline>();
+            outline.effectColor    = new Color(1f, 0.122f, 0.224f, 0.85f);
+            outline.effectDistance = new Vector2(1.5f, -1.5f);
+
+            // Button — wire to OnBack (respects flow.SessionActive guard inside OnBack)
+            var btn = go.GetComponent<Button>();
+            var bc  = btn.colors;
+            bc.normalColor      = Color.white;
+            bc.highlightedColor = new Color(1f, 0.85f, 0.85f, 1f);
+            bc.pressedColor     = new Color(0.75f, 0.50f, 0.50f, 1f);
+            btn.colors = bc;
+            btn.onClick.AddListener(OnBack);
+            backButton = btn;  // also update the serialized field so OnBack guard works
+
+            // ── Label — MUST be a separate child (TMP + Image can't share a GameObject) ──
+            var lblGo = new GameObject("Label", typeof(RectTransform));
+            lblGo.transform.SetParent(go.transform, false);
+            var lblRt = lblGo.GetComponent<RectTransform>();
+            lblRt.anchorMin = Vector2.zero;
+            lblRt.anchorMax = Vector2.one;
+            lblRt.offsetMin = Vector2.zero;
+            lblRt.offsetMax = Vector2.zero;
+            var lbl = lblGo.AddComponent<TextMeshProUGUI>();
+            lbl.text               = "GERİ";
+            lbl.fontSize           = 13f;
+            lbl.fontStyle          = FontStyles.Bold;
+            lbl.alignment          = TextAlignmentOptions.Center;
+            lbl.color              = new Color(0.925f, 0.910f, 0.882f, 1f);
+            lbl.enableWordWrapping = false;
+            lbl.raycastTarget      = false;
+
+            // Place on top of all other children so no panel covers it
+            go.transform.SetAsLastSibling();
+
+            Debug.Log("[CASE_OPENING_BACK] created active=" + go.activeInHierarchy);
+            Debug.Log("[CASE_OPENING_BACK] final pos=" + rt.anchoredPosition + " size=" + rt.sizeDelta);
+            Debug.Log("[CASE_OPENING_BACK] sibling=" + go.transform.GetSiblingIndex());
+        }
+
         void ConvertToTamam()
         {
             if (skipButton == null) return;
@@ -183,7 +258,7 @@ namespace ValoCase.UI.Screens
             skipButton.onClick.AddListener(() =>
             {
                 skipButton.gameObject.SetActive(false);
-                navigator?.Navigate(ScreenType.MainMenu);
+                navigator?.Navigate(ScreenType.Shop);
             });
 
             skipButton.gameObject.SetActive(true);
@@ -326,8 +401,13 @@ namespace ValoCase.UI.Screens
         void OpenSelected()
         {
             if (_selected == null || flow == null || flow.SessionActive) return;
-            if (openButton != null) openButton.interactable = false;
+            Debug.Log("[CASE] New open clicked — clearing previous result and starting fresh spin");
+
+            // Önceki result state'ini temizle — panel'i tekrar kasa bilgisiyle doldur
             _showingResult = false;
+            SelectCase(_selected);   // icon, label, fiyat ve drop list sıfırlanır
+
+            if (openButton != null) openButton.interactable = false;
             HideSkipButton();
             ShowSpinOverlay(true);
             flow.StartOpening(_selected);
@@ -407,7 +487,17 @@ namespace ValoCase.UI.Screens
             var popup = ValoCase.UI.SkinWinPopup.EnsureExists();
             Debug.Log("[DEBUG][CASE] EnsureExists() returned: " + popup);
             if (popup != null)
-                popup.Show(skin, () => navigator?.Navigate(ScreenType.MainMenu));
+                popup.Show(skin, () =>
+                {
+                    Debug.Log("[CASE] Confirm clicked — staying on result, ready for next open");
+                    _showingResult = false;
+                    if (openButton != null)
+                    {
+                        openButton.gameObject.SetActive(true);
+                        openButton.interactable = true;
+                    }
+                    EnsureInteractive();
+                });
             else
                 ConvertToTamam();
         }

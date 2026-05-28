@@ -18,13 +18,20 @@ namespace ValoCase.UI.Screens
     internal static class CaseBattleUiBuilder
     {
         // ── Roulette card constants (shared with animator) ────────────────────
-        internal const float CardW           = 104f;
-        internal const float CardH           = 136f;
+        internal const float CardW           = 132f;
+        internal const float CardH           = 156f;
         internal const float CardSpacing     = 10f;
-        internal const float CardStride      = CardW + CardSpacing;
+        // For VERTICAL reel, stride must be CardH + spacing (not CardW)
+        internal const float CardStride      = CardH + CardSpacing;
         internal const int   ResultCardIndex = 22;
         internal const int   PaddingAfter    = 5;
         internal const int   TotalCards      = ResultCardIndex + 1 + PaddingAfter; // 28
+
+        // Reel viewport shows exactly 2 card-heights → half / full / half layout.
+        internal const float ReelViewportH   = CardH * 2f;
+
+        // Internal column-build counter (reset in BuildArena, used for debug logs)
+        static int _buildColumnIndex;
 
         // ── Entry point ───────────────────────────────────────────────────────
         internal static CaseBattleUiRefs Build(RectTransform root)
@@ -34,10 +41,25 @@ namespace ValoCase.UI.Screens
             BuildBackground(root);
             BuildTitleBar(root, refs);
             BuildCostStrip(root, refs);
-            BuildArena(root, refs);
-            BuildFooter(root, refs);
-            BuildActionBar(root, refs);
-            BuildLobbyOverlay(root, refs);
+
+            // Wrap arena / footer / action bar under one container so the
+            // Setup and CasePicker states can hide them together.
+            var arenaPanelRt = UIFactory.CreateRectAnchored("ArenaPanel", root,
+                Vector2.zero, Vector2.one, new Vector2(0.5f, 0.5f));
+            arenaPanelRt.offsetMin = arenaPanelRt.offsetMax = Vector2.zero;
+            refs.ArenaPanel = arenaPanelRt.gameObject;
+
+            BuildArena(arenaPanelRt, refs);
+            BuildFooter(arenaPanelRt, refs);
+            BuildActionBar(arenaPanelRt, refs);
+            BuildLobbyOverlay(arenaPanelRt, refs);
+
+            // New flow panels (Setup / CasePicker) sit above ArenaPanel
+            BuildSetupPanel(root, refs);
+            BuildCasePickerPanel(root, refs);
+
+            // Final result popup — floats above everything
+            BuildFinalPopup(root, refs);
 
             return refs;
         }
@@ -186,7 +208,20 @@ namespace ValoCase.UI.Screens
                 aMin: new Vector2(0,      0), aMax: new Vector2(0.487f, 1), refs);
             BuildPlayerColumn(arena, refs.Opponent, isPlayer: false,
                 aMin: new Vector2(0.513f, 0), aMax: new Vector2(1,      1), refs);
-            BuildVsBadge(arena);
+
+            // Extra bot columns built up-front, hidden by default.
+            // Screen sets visibility + anchors based on selected player count.
+            BuildPlayerColumn(arena, refs.Bot2, isPlayer: false,
+                aMin: new Vector2(0f, 0f), aMax: new Vector2(0.001f, 1f), refs);
+            refs.Bot2.ColumnRect.gameObject.name = "Bot2Col";
+            refs.Bot2.ColumnRect.gameObject.SetActive(false);
+
+            BuildPlayerColumn(arena, refs.Bot3, isPlayer: false,
+                aMin: new Vector2(0f, 0f), aMax: new Vector2(0.001f, 1f), refs);
+            refs.Bot3.ColumnRect.gameObject.name = "Bot3Col";
+            refs.Bot3.ColumnRect.gameObject.SetActive(false);
+
+            BuildVsBadge(arena, refs);
         }
 
         static void BuildPlayerColumn(RectTransform arena, CaseBattlePanelRefs refs,
@@ -201,6 +236,7 @@ namespace ValoCase.UI.Screens
                 isPlayer ? "PlayerCol" : "OpponentCol",
                 arena, aMin, aMax, new Vector2(0.5f, 0.5f));
             col.offsetMin = col.offsetMax = Vector2.zero;
+            refs.ColumnRect = col;
 
             // Glassmorphism background
             var bgPanel = UIFactory.CreateRectAnchored("Bg", col,
@@ -210,6 +246,7 @@ namespace ValoCase.UI.Screens
             UIFactory.AddColoredBorder(bgPanel, accent, top: true,  height: 2f);
             UIFactory.AddSideGlow(bgPanel, accentSoft, left: true);
             UIFactory.AddSideGlow(bgPanel, accentSoft, left: false);
+            refs.PanelBackground = bgPanel.GetComponent<Image>();
 
             var topGlow = UIFactory.CreateRectAnchored("TopGlow", bgPanel,
                 new Vector2(0, 1), new Vector2(1, 1), new Vector2(0.5f, 1), addImage: true);
@@ -217,6 +254,7 @@ namespace ValoCase.UI.Screens
             topGlow.anchoredPosition = Vector2.zero;
             topGlow.GetComponent<Image>().color = accentGlow;
             topGlow.GetComponent<Image>().raycastTarget = false;
+            refs.HeaderGlow = topGlow.GetComponent<Image>();
 
             // ── Header (140 px) ───────────────────────────────────────────────
             const float headerH = 140f;
@@ -281,15 +319,19 @@ namespace ValoCase.UI.Screens
             vpLE.minHeight = vpLE.preferredHeight = 20f;
 
             // ── Vertical roulette reel ────────────────────────────────────────
-            const float rouletteW = 170f;
-            const float rouletteH = 420f;
+            // Viewport ~= 2 cards tall  →  half / full / half visible
+            const float rouletteH = CardH * 2f + 12f;
+            float rouletteW = CardW + 18f;
             var rouletteArea = UIFactory.CreateRectAnchored("RouletteArea", col,
                 new Vector2(0.5f, 1),
                 new Vector2(0.5f, 1),
                 new Vector2(0.5f, 1));
             rouletteArea.anchoredPosition = new Vector2(0, -headerH - 10f);
             rouletteArea.sizeDelta = new Vector2(rouletteW, rouletteH);
+            refs.RouletteAreaObject = rouletteArea.gameObject;
             BuildVerticalRoulette(rouletteArea, refs, border);
+
+            Debug.Log($"[CB_UI] Build column={col.gameObject.name} rouletteH={rouletteH} cardH={CardH} cardStride={CardStride}");
 
             // ── History scroll ────────────────────────────────────────────────
             const float scrollTop = headerH + rouletteH + 10f;
@@ -325,12 +367,13 @@ namespace ValoCase.UI.Screens
             crt.anchoredPosition = crt.sizeDelta = Vector2.zero;
 
             var glg = contentGo.GetComponent<GridLayoutGroup>();
-            glg.cellSize = new Vector2(104f, 136f);
-            glg.spacing = new Vector2(8f, 8f);
-            glg.padding = new RectOffset(5, 5, 5, 5);
+            // Default = 2-player size; reconfigured dynamically by ApplyColumnLayout.
+            glg.cellSize    = new Vector2(104f, 122f);
+            glg.spacing     = new Vector2(6f, 6f);
+            glg.padding     = new RectOffset(4, 4, 4, 4);
             glg.childAlignment = TextAnchor.UpperCenter;
-            glg.constraint = GridLayoutGroup.Constraint.FixedColumnCount;
-            glg.constraintCount = 3;
+            glg.constraint  = GridLayoutGroup.Constraint.FixedColumnCount;
+            glg.constraintCount = 2;
 
             var csf = contentGo.GetComponent<ContentSizeFitter>();
             csf.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
@@ -479,25 +522,28 @@ namespace ValoCase.UI.Screens
 
             refs.ReelContent = content;
 
-            // Center selector frame
+            // Center focus window — soft glow only, NO line / outline indicator.
+            // The winning card itself gets the highlight (handled by animator).
             var selector = UIFactory.CreateRectAnchored(
-                "Selector",
+                "FocusWindow",
                 frame,
                 new Vector2(0f, 0.5f),
                 new Vector2(1f, 0.5f),
                 new Vector2(0.5f, 0.5f),
                 addImage: true);
 
-            selector.sizeDelta = new Vector2(0, CardH + 10f);
+            selector.sizeDelta = new Vector2(0, CardH + 14f);
 
             var selectorImg = selector.GetComponent<Image>();
-            selectorImg.color = new Color(1f, 0.18f, 0.55f, 0.04f);
+            selectorImg.color           = new Color(1f, 0.18f, 0.55f, 0.07f);
+            selectorImg.raycastTarget   = false;
+            // (no Outline component — line indicator removed)
 
-            var ol = selector.gameObject.AddComponent<Outline>();
-            ol.effectColor = AccentPink;
-            ol.effectDistance = new Vector2(2f, -2f);
+            // Bump the soft center glow a bit so the focus window stands out
+            var cg = centerGlow.GetComponent<Image>();
+            cg.color = new Color(1f, 0.18f, 0.55f, 0.10f);
 
-            refs.CenterGlow  = centerGlow.GetComponent<Image>();
+            refs.CenterGlow  = cg;
             refs.CenterFrame = selectorImg;
         }
 
@@ -526,7 +572,7 @@ namespace ValoCase.UI.Screens
             indLine.SetAsLastSibling();
         }
 
-        static void BuildVsBadge(RectTransform arena)
+        static void BuildVsBadge(RectTransform arena, CaseBattleUiRefs refs)
         {
             var halo = UIFactory.CreateRectAnchored("VsHalo", arena,
                 new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
@@ -558,6 +604,8 @@ namespace ValoCase.UI.Screens
             lbl.rectTransform.localRotation = Quaternion.Euler(0f, 0f, -45f);
             lbl.characterSpacing = 2f;
             UIFactory.StretchFull(lbl.rectTransform);
+
+            refs.VsBadge = vs.gameObject;
         }
 
         // ── Footer (110 px above action bar) ─────────────────────────────────
@@ -582,22 +630,9 @@ namespace ValoCase.UI.Screens
                 s.GetComponent<Image>().raycastTarget = false;
             }
 
-            // Left: player total
-            var left = UIFactory.CreateRectAnchored("Left", footer,
-                new Vector2(0, 0), new Vector2(0.32f, 1), new Vector2(0, 0.5f));
-            left.offsetMin = new Vector2(20, 0); left.offsetMax = Vector2.zero;
-            UIFactory.AddVerticalLayout(left, spacing: 4,
-                align: TextAnchor.MiddleLeft, controlW: false, forceExpandW: false);
-
-            var hintL = UIFactory.CreateText(left, "Hint", "TOTAL", 10,
-                TextAlignmentOptions.MidlineLeft, TextDim, FontStyles.Bold);
-            hintL.characterSpacing = 2.5f;
-            refs.PlayerTotalLabel = UIFactory.CreateText(left, "Val", "(G) 0", 30,
-                TextAlignmentOptions.MidlineLeft, AccentGreen, FontStyles.Bold);
-
-            // Center: winner badge
+            // Winner badge — full-width (left/right total areas removed)
             refs.WinnerBadge = UIFactory.CreateRectAnchored("WinnerBadge", footer,
-                new Vector2(0.32f, 0), new Vector2(0.68f, 1),
+                new Vector2(0f, 0), new Vector2(1f, 1),
                 new Vector2(0.5f, 0.5f), addImage: true).gameObject;
             ((RectTransform)refs.WinnerBadge.transform).offsetMin =
                 ((RectTransform)refs.WinnerBadge.transform).offsetMax = Vector2.zero;
@@ -624,19 +659,6 @@ namespace ValoCase.UI.Screens
             var wnLE = refs.WinnerNameLabel.gameObject.AddComponent<LayoutElement>();
             wnLE.minHeight = wnLE.preferredHeight = 28f;
             refs.WinnerBadge.SetActive(false);
-
-            // Right: opponent total
-            var right = UIFactory.CreateRectAnchored("Right", footer,
-                new Vector2(0.68f, 0), new Vector2(1, 1), new Vector2(1, 0.5f));
-            right.offsetMin = Vector2.zero; right.offsetMax = new Vector2(-20, 0);
-            UIFactory.AddVerticalLayout(right, spacing: 4,
-                align: TextAnchor.MiddleRight, controlW: false, forceExpandW: false);
-
-            var hintR = UIFactory.CreateText(right, "Hint", "TOTAL", 10,
-                TextAlignmentOptions.MidlineRight, TextDim, FontStyles.Bold);
-            hintR.characterSpacing = 2.5f;
-            refs.OpponentTotalLabel = UIFactory.CreateText(right, "Val", "(G) 0", 30,
-                TextAlignmentOptions.MidlineRight, AccentGreen, FontStyles.Bold);
         }
 
         // ── Action bar (64 px bottom) ─────────────────────────────────────────
@@ -762,7 +784,7 @@ namespace ValoCase.UI.Screens
             return go.GetComponent<Button>();
         }
 
-        static (Button btn, Image bg, Outline ol) MakeCountChip(Transform parent,
+        internal static (Button btn, Image bg, Outline ol) MakeCountChip(Transform parent,
             string label, float width, float height)
         {
             var go = new GameObject($"Chip_{label}",
@@ -781,6 +803,298 @@ namespace ValoCase.UI.Screens
                 TextAlignmentOptions.Center, TextWhite, FontStyles.Bold);
             UIFactory.StretchFull(tmp.rectTransform);
             return (go.GetComponent<Button>(), bg, ol);
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // SETUP PANEL — ADD CASES card + player count + CREATE GAME
+        // ─────────────────────────────────────────────────────────────────────
+        static void BuildSetupPanel(RectTransform root, CaseBattleUiRefs refs)
+        {
+            const float topInset    = 72f + 96f + 12f;
+            const float bottomInset = 12f;
+
+            var panelRt = UIFactory.CreateRectAnchored("SetupPanel", root,
+                Vector2.zero, Vector2.one, new Vector2(0.5f, 0.5f), addImage: true);
+            panelRt.offsetMin = new Vector2(0, bottomInset);
+            panelRt.offsetMax = new Vector2(0, -topInset);
+            panelRt.GetComponent<Image>().color = new Color(0.022f, 0.015f, 0.055f, 0.95f);
+            refs.SetupPanel = panelRt.gameObject;
+
+            // Title
+            var titleTmp = UIFactory.CreateText(panelRt, "Title", "BATTLE SETUP",
+                18, TextAlignmentOptions.Center, TextWhite, FontStyles.Bold);
+            titleTmp.characterSpacing = 3f;
+            var titleRt = titleTmp.rectTransform;
+            titleRt.anchorMin = new Vector2(0, 1); titleRt.anchorMax = new Vector2(1, 1);
+            titleRt.pivot = new Vector2(0.5f, 1);
+            titleRt.anchoredPosition = new Vector2(0, -18);
+            titleRt.sizeDelta = new Vector2(0, 28);
+
+            // ADD CASES card (large central button)
+            var addBtnGo = new GameObject("AddCasesButton",
+                typeof(RectTransform), typeof(Image), typeof(Button), typeof(Outline));
+            addBtnGo.transform.SetParent(panelRt, false);
+            var addBtnRt = (RectTransform)addBtnGo.transform;
+            addBtnRt.anchorMin = new Vector2(0.5f, 1); addBtnRt.anchorMax = new Vector2(0.5f, 1);
+            addBtnRt.pivot = new Vector2(0.5f, 1);
+            addBtnRt.anchoredPosition = new Vector2(0, -64);
+            addBtnRt.sizeDelta = new Vector2(440, 220);
+            addBtnGo.GetComponent<Image>().color = new Color(0.05f, 0.035f, 0.10f, 0.95f);
+            var addOl = addBtnGo.GetComponent<Outline>();
+            addOl.effectColor = AccentPink; addOl.effectDistance = new Vector2(2f, -2f);
+            refs.AddCasesButton = addBtnGo.GetComponent<Button>();
+
+            var plusTmp = UIFactory.CreateText(addBtnRt, "Plus", "+", 64,
+                TextAlignmentOptions.Center, AccentPink, FontStyles.Bold);
+            var plusRt = plusTmp.rectTransform;
+            plusRt.anchorMin = plusRt.anchorMax = new Vector2(0.5f, 0.5f);
+            plusRt.pivot = new Vector2(0.5f, 0.5f);
+            plusRt.anchoredPosition = new Vector2(0, 22);
+            plusRt.sizeDelta = new Vector2(80, 80);
+
+            var hintTmp = UIFactory.CreateText(addBtnRt, "Hint", "ADD CASES", 14,
+                TextAlignmentOptions.Center, TextWhite, FontStyles.Bold);
+            hintTmp.characterSpacing = 3f;
+            var hintRt = hintTmp.rectTransform;
+            hintRt.anchorMin = new Vector2(0, 0); hintRt.anchorMax = new Vector2(1, 0);
+            hintRt.pivot = new Vector2(0.5f, 0);
+            hintRt.anchoredPosition = new Vector2(0, 22);
+            hintRt.sizeDelta = new Vector2(0, 20);
+
+            // Selected cases list (occupies the same area when non-empty)
+            var selRoot = UIFactory.CreateRectAnchored("SelectedCases", panelRt,
+                new Vector2(0.5f, 1), new Vector2(0.5f, 1), new Vector2(0.5f, 1));
+            selRoot.anchoredPosition = new Vector2(0, -64);
+            selRoot.sizeDelta = new Vector2(440, 220);
+            var selHl = selRoot.gameObject.AddComponent<HorizontalLayoutGroup>();
+            selHl.childAlignment = TextAnchor.MiddleCenter;
+            selHl.spacing = 10f;
+            selHl.childForceExpandWidth = selHl.childForceExpandHeight = false;
+            selHl.padding = new RectOffset(10, 10, 10, 10);
+            refs.SelectedCasesRoot = selRoot.transform;
+
+            // Make the selected-cases area itself a button so the user can tap
+            // it to re-open the picker even after AddCasesButton is hidden.
+            var editBtn = selRoot.gameObject.AddComponent<Button>();
+            editBtn.transition = Selectable.Transition.None;
+            refs.EditCasesButton = editBtn;
+
+            // Player count row
+            var pcRow = UIFactory.CreateRectAnchored("PlayerCountRow", panelRt,
+                new Vector2(0.5f, 0), new Vector2(0.5f, 0), new Vector2(0.5f, 0));
+            pcRow.anchoredPosition = new Vector2(0, 140);
+            pcRow.sizeDelta = new Vector2(340, 72);
+            var pcHl = pcRow.gameObject.AddComponent<HorizontalLayoutGroup>();
+            pcHl.childAlignment = TextAnchor.MiddleCenter;
+            pcHl.spacing = 12f;
+            pcHl.childForceExpandWidth = pcHl.childForceExpandHeight = false;
+
+            refs.PlayerCountButtons.Clear();
+            foreach (var c in new[] { 2, 3, 4 })
+            {
+                var (btn, bg, ol) = MakeCountChip(pcRow, c.ToString(), 72, 72);
+                refs.PlayerCountButtons.Add((btn, c, bg, ol));
+            }
+
+            // Total cost & cases labels
+            refs.TotalCostLabel = UIFactory.CreateText(panelRt, "TotalCost",
+                "TOTAL: (G) 0", 14, TextAlignmentOptions.Center, AccentGreen, FontStyles.Bold);
+            var tcRt = refs.TotalCostLabel.rectTransform;
+            tcRt.anchorMin = new Vector2(0, 0); tcRt.anchorMax = new Vector2(1, 0);
+            tcRt.pivot = new Vector2(0.5f, 0);
+            tcRt.anchoredPosition = new Vector2(0, 100);
+            tcRt.sizeDelta = new Vector2(0, 20);
+
+            refs.TotalCasesLabel = UIFactory.CreateText(panelRt, "TotalCases",
+                "CASES: 0", 11, TextAlignmentOptions.Center, TextDim, FontStyles.Bold);
+            var tcaRt = refs.TotalCasesLabel.rectTransform;
+            tcaRt.anchorMin = new Vector2(0, 0); tcaRt.anchorMax = new Vector2(1, 0);
+            tcaRt.pivot = new Vector2(0.5f, 0);
+            tcaRt.anchoredPosition = new Vector2(0, 82);
+            tcaRt.sizeDelta = new Vector2(0, 16);
+
+            // CREATE GAME button
+            refs.CreateGameButton = MakeCasinoBtn(panelRt, "CreateGameButton",
+                "CREATE GAME", 320, 56, AccentPink, AccentPink);
+            var cgRt = refs.CreateGameButton.GetComponent<RectTransform>();
+            cgRt.anchorMin = new Vector2(0.5f, 0); cgRt.anchorMax = new Vector2(0.5f, 0);
+            cgRt.pivot = new Vector2(0.5f, 0);
+            cgRt.anchoredPosition = new Vector2(0, 18);
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // CASE PICKER PANEL — scrollable grid of all cases + DONE
+        // ─────────────────────────────────────────────────────────────────────
+        static void BuildCasePickerPanel(RectTransform root, CaseBattleUiRefs refs)
+        {
+            const float topInset    = 72f + 96f + 12f;
+            const float bottomInset = 12f;
+
+            var panelRt = UIFactory.CreateRectAnchored("CasePickerPanel", root,
+                Vector2.zero, Vector2.one, new Vector2(0.5f, 0.5f), addImage: true);
+            panelRt.offsetMin = new Vector2(0, bottomInset);
+            panelRt.offsetMax = new Vector2(0, -topInset);
+            panelRt.GetComponent<Image>().color = new Color(0.022f, 0.015f, 0.055f, 0.97f);
+            refs.CasePickerPanel = panelRt.gameObject;
+
+            // Title
+            var titleTmp = UIFactory.CreateText(panelRt, "Title", "SELECT CASES",
+                18, TextAlignmentOptions.Center, TextWhite, FontStyles.Bold);
+            titleTmp.characterSpacing = 3f;
+            var titleRt = titleTmp.rectTransform;
+            titleRt.anchorMin = new Vector2(0, 1); titleRt.anchorMax = new Vector2(1, 1);
+            titleRt.pivot = new Vector2(0.5f, 1);
+            titleRt.anchoredPosition = new Vector2(0, -18);
+            titleRt.sizeDelta = new Vector2(0, 28);
+
+            // Scroll
+            var scrollGo = new GameObject("PickerScroll",
+                typeof(RectTransform), typeof(ScrollRect), typeof(Image));
+            scrollGo.transform.SetParent(panelRt, false);
+            var srt = (RectTransform)scrollGo.transform;
+            srt.anchorMin = Vector2.zero; srt.anchorMax = Vector2.one;
+            srt.offsetMin = new Vector2(16, 86);
+            srt.offsetMax = new Vector2(-16, -56);
+            scrollGo.GetComponent<Image>().color = new Color(0, 0, 0, 0.10f);
+
+            var sr = scrollGo.GetComponent<ScrollRect>();
+            sr.horizontal = false; sr.vertical = true;
+            sr.movementType = ScrollRect.MovementType.Elastic;
+            sr.elasticity = 0.10f; sr.inertia = true;
+            sr.decelerationRate = 0.14f; sr.scrollSensitivity = 40f;
+
+            var vpGo = new GameObject("Viewport",
+                typeof(RectTransform), typeof(Image), typeof(RectMask2D));
+            vpGo.transform.SetParent(scrollGo.transform, false);
+            var vprt = (RectTransform)vpGo.transform;
+            vprt.anchorMin = Vector2.zero; vprt.anchorMax = Vector2.one;
+            vprt.offsetMin = vprt.offsetMax = Vector2.zero;
+            vpGo.GetComponent<Image>().color = new Color(1, 1, 1, 0.01f);
+
+            var contentGo = new GameObject("PickerContent",
+                typeof(RectTransform), typeof(GridLayoutGroup), typeof(ContentSizeFitter));
+            contentGo.transform.SetParent(vpGo.transform, false);
+            var crt = (RectTransform)contentGo.transform;
+            crt.anchorMin = new Vector2(0, 1); crt.anchorMax = new Vector2(1, 1);
+            crt.pivot = new Vector2(0.5f, 1);
+            crt.anchoredPosition = crt.sizeDelta = Vector2.zero;
+
+            var glg = contentGo.GetComponent<GridLayoutGroup>();
+            glg.cellSize = new Vector2(180, 220);
+            glg.spacing = new Vector2(12, 12);
+            glg.padding = new RectOffset(8, 8, 8, 8);
+            glg.childAlignment = TextAnchor.UpperCenter;
+            glg.constraint = GridLayoutGroup.Constraint.FixedColumnCount;
+            glg.constraintCount = 3;
+
+            var csf = contentGo.GetComponent<ContentSizeFitter>();
+            csf.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
+            csf.verticalFit   = ContentSizeFitter.FitMode.PreferredSize;
+
+            sr.viewport = vprt; sr.content = crt;
+            refs.CasePickerGridRoot = contentGo.transform;
+
+            // DONE button
+            refs.DoneButton = MakeCasinoBtn(panelRt, "DoneButton",
+                "DONE", 260, 48, AccentPink, AccentPink);
+            var dRt = refs.DoneButton.GetComponent<RectTransform>();
+            dRt.anchorMin = new Vector2(0.5f, 0); dRt.anchorMax = new Vector2(0.5f, 0);
+            dRt.pivot = new Vector2(0.5f, 0);
+            dRt.anchoredPosition = new Vector2(0, 14);
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // FINAL RESULT POPUP — small modal that appears after battle ends
+        // ─────────────────────────────────────────────────────────────────────
+        static void BuildFinalPopup(RectTransform root, CaseBattleUiRefs refs)
+        {
+            // Full-screen dim overlay — blocks clicks on elements behind it
+            var overlay = UIFactory.CreateRectAnchored("FinalPopupOverlay", root,
+                Vector2.zero, Vector2.one, new Vector2(0.5f, 0.5f), addImage: true);
+            overlay.offsetMin = overlay.offsetMax = Vector2.zero;
+            overlay.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0.62f);
+            refs.FinalPopup = overlay.gameObject;
+
+            // Card
+            var card = UIFactory.CreateRectAnchored("FinalCard", overlay,
+                new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
+                new Vector2(0.5f, 0.5f), addImage: true);
+            card.sizeDelta = new Vector2(400, 290);
+            card.GetComponent<Image>().color = new Color(0.045f, 0.032f, 0.095f, 0.98f);
+            UIFactory.AddColoredBorder(card, AccentPink, top: true,  height: 2f);
+            UIFactory.AddColoredBorder(card, BorderPink, top: false, height: 1f);
+            UIFactory.AddSideGlow(card, AccentPinkSoft, left: true);
+            UIFactory.AddSideGlow(card, AccentPinkSoft, left: false);
+
+            // Top glow strip
+            var topGlow = UIFactory.CreateRectAnchored("TopGlow", card,
+                new Vector2(0, 1), new Vector2(1, 1), new Vector2(0.5f, 1), addImage: true);
+            topGlow.sizeDelta = new Vector2(0, 70f);
+            topGlow.anchoredPosition = Vector2.zero;
+            topGlow.GetComponent<Image>().color = new Color(1f, 0.18f, 0.55f, 0.07f);
+            topGlow.GetComponent<Image>().raycastTarget = false;
+
+            // Title label — "YOU WIN!" / "BOT 1 WINS" / "BERABERE"
+            refs.FinalPopupTitleLabel = UIFactory.CreateText(card, "Title", "YOU WIN!",
+                38, TextAlignmentOptions.Center, AccentGreen, FontStyles.Bold);
+            refs.FinalPopupTitleLabel.characterSpacing = 2f;
+            var tRt = refs.FinalPopupTitleLabel.rectTransform;
+            tRt.anchorMin = new Vector2(0, 1); tRt.anchorMax = new Vector2(1, 1);
+            tRt.pivot     = new Vector2(0.5f, 1);
+            tRt.anchoredPosition = new Vector2(0, -36);
+            tRt.sizeDelta = new Vector2(0, 50);
+
+            // Body label — draw-only secondary line (e.g. "Bakiye iade edildi"), hidden by default
+            refs.FinalPopupBodyLabel = UIFactory.CreateText(card, "Body", "",
+                13, TextAlignmentOptions.Center, TextWhite, FontStyles.Normal);
+            var bRt = refs.FinalPopupBodyLabel.rectTransform;
+            bRt.anchorMin = new Vector2(0, 1); bRt.anchorMax = new Vector2(1, 1);
+            bRt.pivot     = new Vector2(0.5f, 1);
+            bRt.anchoredPosition = new Vector2(0, -94);
+            bRt.sizeDelta = new Vector2(0, 22);
+            refs.FinalPopupBodyLabel.gameObject.SetActive(false);
+
+            // Total / refund label
+            refs.FinalPopupTotalLabel = UIFactory.CreateText(card, "Total", "Total: (G) 0",
+                15, TextAlignmentOptions.Center, TextDim, FontStyles.Normal);
+            var totRt = refs.FinalPopupTotalLabel.rectTransform;
+            totRt.anchorMin = new Vector2(0, 1); totRt.anchorMax = new Vector2(1, 1);
+            totRt.pivot     = new Vector2(0.5f, 1);
+            totRt.anchoredPosition = new Vector2(0, -124);
+            totRt.sizeDelta = new Vector2(0, 24);
+
+            // Button row — TEKRAR OYNA (draw-only, hidden) + TAMAM/OK (always visible)
+            var btnRowGo = new GameObject("ButtonRow", typeof(RectTransform));
+            btnRowGo.transform.SetParent(card, false);
+            var btnRowRt = (RectTransform)btnRowGo.transform;
+            btnRowRt.anchorMin = new Vector2(0.5f, 0); btnRowRt.anchorMax = new Vector2(0.5f, 0);
+            btnRowRt.pivot = new Vector2(0.5f, 0);
+            btnRowRt.anchoredPosition = new Vector2(0, 16);
+            btnRowRt.sizeDelta = new Vector2(384, 52);
+            var rowHl = btnRowGo.AddComponent<HorizontalLayoutGroup>();
+            rowHl.childAlignment = TextAnchor.MiddleCenter;
+            rowHl.spacing = 12f;
+            rowHl.childForceExpandWidth = rowHl.childForceExpandHeight = false;
+
+            // "TEKRAR OYNA" — shown only on draw; goes back to setup
+            refs.FinalPopupPlayAgainButton = MakeCasinoBtn(btnRowGo.transform,
+                "PlayAgainBtn", "TEKRAR OYNA", 196, 52,
+                new Color(0.06f, 0.04f, 0.12f, 0.95f), AccentOrange);
+            refs.FinalPopupPlayAgainButton.gameObject.SetActive(false);
+
+            // "TAMAM" / "OK" — always present; just closes the popup
+            refs.FinalPopupOkButton = MakeCasinoBtn(btnRowGo.transform,
+                "OkButton", "TAMAM", 172, 52, AccentPink, AccentPink);
+
+            // CanvasGroup — belt-and-suspenders: blocksRaycasts stays false when hidden
+            // so the overlay can NEVER intercept clicks on panels behind it.
+            var cg = overlay.gameObject.AddComponent<CanvasGroup>();
+            cg.alpha          = 0f;
+            cg.blocksRaycasts = false;
+            cg.interactable   = false;
+            refs.FinalPopupCanvasGroup = cg;
+
+            overlay.gameObject.SetActive(false);
         }
     }
 }

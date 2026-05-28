@@ -60,6 +60,7 @@ namespace ValoCase.Save
         public int version = 1;
         public string playerName = "Agent";
         public int vpBalance;
+        public bool adminVpGrantApplied;   // true after the one-time 500 000 VP grant
         public List<OwnedSkinSaveEntry> inventory = new();
         public PlayerStatisticsSave statistics = new();
         public DailyRewardSave dailyReward = new();

@@ -21,6 +21,72 @@ namespace ValoCase.UI.Screens
         // PUBLIC API — called by CaseBattleScreen.RunBattleRounds()
         // ─────────────────────────────────────────────────────────────────────
 
+        /// <summary>Animates N roulettes simultaneously then highlights every result card.</summary>
+        public IEnumerator AnimateRoulettes(
+            IList<CaseBattlePanelRefs> panels,
+            IList<SkinDefinitionSO>    skins,
+            SkinDefinitionSO[]         pool)
+        {
+            if (panels == null || skins == null) yield break;
+            int n = Mathf.Min(panels.Count, skins.Count);
+            if (n == 0) yield break;
+
+            for (int i = 0; i < n; i++)
+                PopulateRoulette(panels[i], skins[i], pool);
+
+            // Force a layout pass so ReelViewport.rect.height is valid.
+            Canvas.ForceUpdateCanvases();
+
+            // Use the first valid viewport height; fall back to ~2 cards if rect is zero.
+            float viewportH = 0f;
+            for (int i = 0; i < n; i++)
+            {
+                if (panels[i]?.ReelViewport != null)
+                {
+                    float h = panels[i].ReelViewport.rect.height;
+                    if (h > 0f) { viewportH = h; break; }
+                }
+            }
+            if (viewportH <= 0f) viewportH = CardH * 2f;
+
+            // Content has anchor (0.5,1) + pivot (0.5,1) at the top.
+            // Card i top lives at content-local y = -i*CardStride, center at -i*stride - CardH/2.
+            // To put card i CENTER at viewport CENTER:
+            //   anchoredPosition.y = i*CardStride + CardH/2 - viewportH/2
+            float endPos   = ResultCardIndex * CardStride + CardH * 0.5f - viewportH * 0.5f;
+            float startPos = 2f             * CardStride + CardH * 0.5f - viewportH * 0.5f;
+
+            for (int i = 0; i < n; i++)
+            {
+                if (panels[i].ReelContent != null)
+                    panels[i].ReelContent.anchoredPosition = new Vector2(0, startPos);
+                Debug.Log($"[CB_ROULETTE] Start panel={i} resultIndex={ResultCardIndex} contentY={panels[i].ReelContent?.anchoredPosition.y} viewportH={viewportH}");
+            }
+
+            yield return null;
+
+            const float duration = 4.0f;
+            for (float elapsed = 0f; elapsed < duration; elapsed += Time.unscaledDeltaTime)
+            {
+                float eased = EaseOutQuint(Mathf.Clamp01(elapsed / duration));
+                float y     = Mathf.Lerp(startPos, endPos, eased);
+                for (int i = 0; i < n; i++)
+                    if (panels[i].ReelContent != null)
+                        panels[i].ReelContent.anchoredPosition = new Vector2(0, y);
+                yield return null;
+            }
+
+            for (int i = 0; i < n; i++)
+            {
+                if (panels[i].ReelContent != null)
+                    panels[i].ReelContent.anchoredPosition = new Vector2(0, endPos);
+                Debug.Log($"[CB_ROULETTE] End panel={i} finalY={panels[i].ReelContent?.anchoredPosition.y} expectedCenterY={endPos}");
+                HighlightWinningCard(panels[i], ResultCardIndex);
+            }
+
+            yield return new WaitForSecondsRealtime(0.5f);
+        }
+
         /// <summary>Animates both roulettes simultaneously then highlights the result card.</summary>
         public IEnumerator AnimateRoulettePair(
             CaseBattlePanelRefs player,  CaseBattlePanelRefs opponent,
@@ -80,64 +146,107 @@ namespace ValoCase.UI.Screens
             rt.localScale = Vector3.one;
         }
 
-        /// <summary>Appends one result card to the panel's history grid.</summary>
+        /// <summary>Appends one result card to the panel's history grid.
+        /// Card dimensions are read from the panel's GridLayoutGroup so they
+        /// automatically match the column width for the current player count.</summary>
         public void AddHistoryCard(CaseBattlePanelRefs refs, SkinDefinitionSO skin)
         {
             if (skin == null || refs.GridRoot == null) return;
 
+            // Card size driven by GridLayoutGroup (reconfigured per player count).
+            var glg  = refs.GridRoot.GetComponent<GridLayoutGroup>();
+            float hcW = glg != null ? glg.cellSize.x : CardW;
+            float hcH = glg != null ? glg.cellSize.y : CardH;
+            // Proportional scale factor: keeps text/icon sizes readable at any column width.
+            float s   = Mathf.Clamp(hcH / CardH, 0.4f, 1f);
+            Debug.Log($"[CB_HISTORY] cardW={hcW} cardH={hcH} scale={s:F2}");
+
+            // ── Card root ─────────────────────────────────────────────────────
             var card = new GameObject("HistCard",
                 typeof(RectTransform), typeof(Image), typeof(LayoutElement));
             card.transform.SetParent(refs.GridRoot, false);
             var rt = (RectTransform)card.transform;
-            rt.sizeDelta = new Vector2(CardW, CardH);
+            rt.sizeDelta = new Vector2(hcW, hcH);
 
             var le = card.GetComponent<LayoutElement>();
-            le.minWidth  = le.preferredWidth  = CardW;
-            le.minHeight = le.preferredHeight = CardH;
-            card.GetComponent<Image>().color = BgCardDark;
-
-            // Top shine
-            var shine = UIFactory.CreateRectAnchored("Shine", rt,
-                new Vector2(0, 1), new Vector2(1, 1), new Vector2(0.5f, 1), addImage: true);
-            shine.sizeDelta = new Vector2(0, 26f); shine.anchoredPosition = Vector2.zero;
-            shine.GetComponent<Image>().color = new Color(1f, 1f, 1f, 0.022f);
-            shine.GetComponent<Image>().raycastTarget = false;
+            le.minWidth  = le.preferredWidth  = hcW;
+            le.minHeight = le.preferredHeight = hcH;
 
             Color rarityColor = GetRarityColor(skin.Rarity);
+            card.GetComponent<Image>().color = BgCardDark;
 
-            // 4-px rarity strip
+            // ── Rarity colour wash ────────────────────────────────────────────
+            var rarityWash = UIFactory.CreateRectAnchored("RarityWash", rt,
+                Vector2.zero, Vector2.one, new Vector2(0.5f, 0.5f), addImage: true);
+            rarityWash.offsetMin = rarityWash.offsetMax = Vector2.zero;
+            var rwColor = rarityColor; rwColor.a = 0.08f;
+            rarityWash.GetComponent<Image>().color = rwColor;
+            rarityWash.GetComponent<Image>().raycastTarget = false;
+
+            // ── Top shine ─────────────────────────────────────────────────────
+            var shine = UIFactory.CreateRectAnchored("Shine", rt,
+                new Vector2(0, 1), new Vector2(1, 1), new Vector2(0.5f, 1), addImage: true);
+            shine.sizeDelta = new Vector2(0, Mathf.Max(10f, 32f * s));
+            shine.anchoredPosition = Vector2.zero;
+            shine.GetComponent<Image>().color = new Color(1f, 1f, 1f, 0.028f);
+            shine.GetComponent<Image>().raycastTarget = false;
+
+            // ── Rarity strip (top edge) ───────────────────────────────────────
             var strip = UIFactory.CreateRectAnchored("Strip", rt,
-                Vector2.zero, new Vector2(1, 0), new Vector2(0.5f, 0), addImage: true);
-            strip.sizeDelta = new Vector2(0, 4f); strip.anchoredPosition = Vector2.zero;
+                new Vector2(0, 1), new Vector2(1, 1), new Vector2(0.5f, 1), addImage: true);
+            strip.sizeDelta = new Vector2(0, 5f);
+            strip.anchoredPosition = Vector2.zero;
             strip.GetComponent<Image>().color = rarityColor;
+            strip.GetComponent<Image>().raycastTarget = false;
 
-            // Rarity glow
-            var sgColor = rarityColor; sgColor.a = 0.14f;
+            // ── Rarity glow below strip ───────────────────────────────────────
+            var sgColor = rarityColor; sgColor.a = 0.18f;
             var stripGlow = UIFactory.CreateRectAnchored("StripGlow", rt,
-                Vector2.zero, new Vector2(1, 0), new Vector2(0.5f, 0), addImage: true);
-            stripGlow.sizeDelta = new Vector2(0, 20f);
-            stripGlow.anchoredPosition = new Vector2(0, 4f);
+                new Vector2(0, 1), new Vector2(1, 1), new Vector2(0.5f, 1), addImage: true);
+            stripGlow.sizeDelta = new Vector2(0, Mathf.Max(8f, 28f * s));
+            stripGlow.anchoredPosition = new Vector2(0, -5f);
             stripGlow.GetComponent<Image>().color = sgColor;
             stripGlow.GetComponent<Image>().raycastTarget = false;
 
-            // Weapon icon (tilted -25°)
+            // ── Weapon icon (tilted -25°, centre-dominant) ────────────────────
             var iconRt = UIFactory.CreateRectAnchored("Icon", rt,
                 new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
                 new Vector2(0.5f, 0.5f), addImage: true);
-            iconRt.anchoredPosition = new Vector2(0, 10f);
-            iconRt.sizeDelta = new Vector2(CardW - 10f, CardH * 0.58f);
+            iconRt.anchoredPosition = new Vector2(0, 4f * s);
+            iconRt.sizeDelta = new Vector2(hcW - 10f, hcH * 0.52f);
             iconRt.localRotation = Quaternion.Euler(0f, 0f, -25f);
             var iconImg = iconRt.GetComponent<Image>();
-            iconImg.sprite = skin.Icon; iconImg.preserveAspect = true; iconImg.raycastTarget = false;
+            iconImg.sprite = skin.Icon;
+            iconImg.preserveAspect = true;
+            iconImg.raycastTarget  = false;
+            if (iconImg.sprite == null)
+                iconImg.color = new Color(rarityColor.r, rarityColor.g, rarityColor.b, 0.30f);
 
-            // VP label
+            // ── Rarity label (top-left badge) ─────────────────────────────────
+            int rarityFontSz = Mathf.Max(7, Mathf.RoundToInt(9f * s));
+            var rarityTmp = UIFactory.CreateText(rt, "Rarity",
+                skin.Rarity.ToString().ToUpper(), rarityFontSz,
+                TMPro.TextAlignmentOptions.TopLeft, rarityColor, TMPro.FontStyles.Bold);
+            var rrt = rarityTmp.rectTransform;
+            rrt.anchorMin = new Vector2(0, 1); rrt.anchorMax = new Vector2(1, 1);
+            rrt.pivot     = new Vector2(0, 1);
+            rrt.anchoredPosition = new Vector2(4, -5);
+            rrt.sizeDelta = new Vector2(hcW - 8f, Mathf.Max(10f, 16f * s));
+
+            // ── VP label (bottom-left, green) ─────────────────────────────────
+            int vpFontSz = Mathf.Max(7, Mathf.RoundToInt(10f * s));
             var vpTmp = UIFactory.CreateText(rt, "Vp", FormatGp(skin.VpValue),
-                10, TMPro.TextAlignmentOptions.BottomLeft, AccentGreen, TMPro.FontStyles.Bold);
+                vpFontSz, TMPro.TextAlignmentOptions.BottomLeft, AccentGreen, TMPro.FontStyles.Bold);
             var vprt = vpTmp.rectTransform;
-            vprt.anchorMin = Vector2.zero; vprt.anchorMax = Vector2.zero;
-            vprt.pivot = Vector2.zero;
-            vprt.anchoredPosition = new Vector2(6, 8);
-            vprt.sizeDelta = new Vector2(CardW - 12f, 18);
+            vprt.anchorMin = Vector2.zero; vprt.anchorMax = new Vector2(1, 0);
+            vprt.pivot     = Vector2.zero;
+            vprt.anchoredPosition = new Vector2(4, 4);
+            vprt.sizeDelta = new Vector2(hcW - 8f, Mathf.Max(10f, 18f * s));
+
+            // ── Neon border glow ──────────────────────────────────────────────
+            var ol = card.AddComponent<UnityEngine.UI.Outline>();
+            ol.effectColor    = new Color(rarityColor.r, rarityColor.g, rarityColor.b, 0.45f);
+            ol.effectDistance = new Vector2(2f, -2f);
 
             refs.HistoryCards.Add(card);
         }

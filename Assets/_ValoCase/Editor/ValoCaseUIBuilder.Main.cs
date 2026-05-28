@@ -251,6 +251,7 @@ namespace ValoCase.Editor
             var screenHost = CreateRect("Screens", safe, Vector2.zero);
             StretchFull(screenHost);
             DisableRaycast(screenHost);
+            Debug.Log("[BOTTOM_NAV_FIX] reverted unsafe screen offset");
 
             var caseItemView = caseListItemPrefab.GetComponent<CaseListItemView>();
             var dropItemView = dropItemPrefab.GetComponent<DropItemView>();
@@ -259,11 +260,17 @@ namespace ValoCase.Editor
             var inventory = BuildSimpleScreen<InventoryScreen>(screenHost, "InventoryScreen", ScreenType.Inventory, navigator, "INVENTORY");
             var shop = BuildSimpleScreen<ShopScreen>(screenHost, "ShopScreen", ScreenType.Shop, navigator, "SHOP");
             var settings = BuildSimpleScreen<SettingsScreen>(screenHost, "SettingsScreen", ScreenType.Settings, navigator, "SETTINGS");
+            // SettingsScreen has its own built-in "SETTINGS" header inside the panel.
+            // Hide the outer title created by BuildSimpleScreen to avoid the duplicate.
+            var settingsOuterTitle = settings.Find("Title");
+            if (settingsOuterTitle != null) settingsOuterTitle.gameObject.SetActive(false);
             var cases = BuildCaseOpeningScreen(screenHost, navigator, caseItemView, dropItemView);
             var weapons = BuildWeaponsScreen(screenHost, navigator, weaponCardView);
             var upgrade = BuildUpgradeScreen(screenHost, navigator, weaponCardView);
             var battle  = BuildCaseBattleScreen(screenHost, navigator, weaponCardView);
             var earn    = BuildEarnVpScreen(screenHost, navigator);
+            var tools   = BuildToolsScreen(screenHost, navigator);
+            var market  = BuildMarketScreen(screenHost, navigator);
 
             WireInventoryExtras(inventory, skinCardPrefab);
             WireShopExtras(shop, caseItemView);
@@ -274,8 +281,44 @@ namespace ValoCase.Editor
             BuildSkinWinPopup(safe);   // fullscreen win overlay — rendered on top of everything
             Debug.Log("[DEBUG][BUILDER] SkinWinPopup added to canvas prefab");
 
+            // ── TopProfileBar — auto-created, parented to SafeArea, anchored top ─
+            var topBarGo = new GameObject("TopProfileBar", typeof(RectTransform));
+            topBarGo.transform.SetParent(safe, false);
+            var topBarRt = (RectTransform)topBarGo.transform;
+            topBarRt.anchorMin        = new Vector2(0f, 1f);
+            topBarRt.anchorMax        = new Vector2(1f, 1f);
+            topBarRt.pivot            = new Vector2(0.5f, 1f);
+            topBarRt.anchoredPosition = new Vector2(0f, 0f);
+            topBarRt.sizeDelta        = new Vector2(0f, 72f);
+            var topBar   = topBarGo.AddComponent<TopProfileBar>();
+            var topBarSo = new SerializedObject(topBar);
+            var topNavProp = topBarSo.FindProperty("navigator");
+            if (topNavProp != null) topNavProp.objectReferenceValue = navigator;
+            topBarSo.ApplyModifiedPropertiesWithoutUndo();
+            topBarGo.transform.SetAsLastSibling();
+            Debug.Log("[TOP_BAR] Added to PF_UICanvas by builder");
+            // ─────────────────────────────────────────────────────────────────────
+
+            // ── BottomNavBar — auto-created, parented to SafeArea, last sibling ──
+            var navBarGo = new GameObject("BottomNavBar", typeof(RectTransform));
+            navBarGo.transform.SetParent(safe, false);
+            var navBarRt = (RectTransform)navBarGo.transform;
+            navBarRt.anchorMin        = new Vector2(0f, 0f);
+            navBarRt.anchorMax        = new Vector2(1f, 0f);
+            navBarRt.pivot            = new Vector2(0.5f, 0f);
+            navBarRt.anchoredPosition = new Vector2(0f, 0f);   // flush with SafeArea bottom (matches BuildUI runtime)
+            navBarRt.sizeDelta        = new Vector2(0f, 90f);  // 90 px — matches BuildUI NavH
+            var navBar   = navBarGo.AddComponent<BottomNavBar>();
+            var navBarSo = new SerializedObject(navBar);
+            var navProp  = navBarSo.FindProperty("navigator");
+            if (navProp != null) navProp.objectReferenceValue = navigator;
+            navBarSo.ApplyModifiedPropertiesWithoutUndo();
+            navBarGo.transform.SetAsLastSibling();
+            Debug.Log("[BOTTOM_NAV] Added to PF_UICanvas by builder");
+            // ─────────────────────────────────────────────────────────────────────
+
             WireMainMenu(main, navigator, daily);
-            WireNavigator(navigator, main, cases.gameObject, inventory.gameObject, shop.gameObject, settings.gameObject, weapons.gameObject, upgrade.gameObject, battle.gameObject, earn.gameObject);
+            WireNavigator(navigator, main, cases.gameObject, inventory.gameObject, shop.gameObject, settings.gameObject, weapons.gameObject, upgrade.gameObject, battle.gameObject, earn.gameObject, tools.gameObject, market.gameObject);
 
             return SavePrefab(root, UiCanvasPrefabPath);
         }
@@ -577,6 +620,56 @@ namespace ValoCase.Editor
             return screen;
         }
 
+        // ── Tools screen — chrome only; ToolsScreen.BuildOnce() builds the content ──
+        static RectTransform BuildToolsScreen(RectTransform parent, UINavigator navigator)
+        {
+            var screen = CreateScreenPanel(parent, "ToolsScreen", ScreenType.Tools, out var group);
+            var comp   = screen.gameObject.AddComponent<ToolsScreen>();
+
+            // Back button (bottom-centre, above BottomNavBar)
+            var back = CreateMenuButton(screen, "Back", "BACK", Panel, new Vector2(0, -80), new Vector2(200, 72));
+            var backRt = back.GetComponent<RectTransform>();
+            backRt.anchorMin        = new Vector2(0.5f, 0);
+            backRt.anchorMax        = new Vector2(0.5f, 0);
+            backRt.pivot            = new Vector2(0.5f, 0);
+            backRt.anchoredPosition = new Vector2(0, 32);
+
+            var so = new SerializedObject(comp);
+            so.FindProperty("navigator").objectReferenceValue   = navigator;
+            so.FindProperty("backButton").objectReferenceValue  = back;
+            so.FindProperty("canvasGroup").objectReferenceValue = group;
+            so.FindProperty("screenType").enumValueIndex        = (int)ScreenType.Tools;
+            so.ApplyModifiedPropertiesWithoutUndo();
+
+            Debug.Log("[TOOLS] ToolsScreen built by builder");
+            return screen;
+        }
+
+        // ── Market screen — chrome only; MarketScreen.BuildOnce() builds the content ──
+        static RectTransform BuildMarketScreen(RectTransform parent, UINavigator navigator)
+        {
+            var screen = CreateScreenPanel(parent, "MarketScreen", ScreenType.Market, out var group);
+            var comp   = screen.gameObject.AddComponent<MarketScreen>();
+
+            // Back button (bottom-centre, above BottomNavBar)
+            var back = CreateMenuButton(screen, "Back", "BACK", Panel, new Vector2(0, -80), new Vector2(200, 72));
+            var backRt = back.GetComponent<RectTransform>();
+            backRt.anchorMin        = new Vector2(0.5f, 0);
+            backRt.anchorMax        = new Vector2(0.5f, 0);
+            backRt.pivot            = new Vector2(0.5f, 0);
+            backRt.anchoredPosition = new Vector2(0, 32);
+
+            var so = new SerializedObject(comp);
+            so.FindProperty("navigator").objectReferenceValue   = navigator;
+            so.FindProperty("backButton").objectReferenceValue  = back;
+            so.FindProperty("canvasGroup").objectReferenceValue = group;
+            so.FindProperty("screenType").enumValueIndex        = (int)ScreenType.Market;
+            so.ApplyModifiedPropertiesWithoutUndo();
+
+            Debug.Log("[MARKET] MarketScreen built by builder");
+            return screen;
+        }
+
         static void WireMainMenu(GameObject main, UINavigator navigator, DailyRewardPopup daily)
         {
             var menu = main.GetComponent<MainMenuScreen>();
@@ -592,21 +685,43 @@ namespace ValoCase.Editor
             list.arraySize = screens.Length;
             for (var i = 0; i < screens.Length; i++)
                 list.GetArrayElementAtIndex(i).objectReferenceValue = screens[i].GetComponent<UIScreenBase>();
-            so.FindProperty("defaultScreen").enumValueIndex = (int)ScreenType.MainMenu;
+            so.FindProperty("defaultScreen").enumValueIndex = (int)ScreenType.Shop;
+            Debug.Log("[STARTUP] Builder: defaultScreen wired to Shop (CASES tab)");
             so.ApplyModifiedPropertiesWithoutUndo();
         }
 
         static void WireInventoryExtras(RectTransform inventory, GameObject skinCardPrefab)
         {
+            // ── Layout constants ─────────────────────────────────────────────────
+            // BottomNavBar runtime height = 90 px (see BottomNavBar.BuildUI NavH).
+            // Back button: height=72, positioned at y=96 (just above BottomNav top at y=90).
+            //   Back button spans y=96 → y=168 from SafeArea bottom.
+            // Scroll starts at y=180 (8 px gap above back button top at y=168).
+            //   Items are clipped at y=180 — clearly above BottomNav at y=90.
+            const float navH       = 90f;   // must match BottomNavBar.BuildUI NavH
+            const float btnH       = 72f;   // back button height (set in BuildSimpleScreen)
+            const float btnBottom  = navH + 6f;          // 96 — just above BottomNav
+            const float scrollBot  = btnBottom + btnH + 8f; // 180 — above back button top
+            Debug.Log("[BOTTOM_NAV_LAYOUT] reserved bottom padding for screen content: scrollBot=" + scrollBot);
+
             var comp = inventory.GetComponent<InventoryScreen>();
             var grid = CreateVerticalGridScrollContent(
                 "InventoryScroll",
                 inventory,
-                new Vector2(24, 120),
+                new Vector2(24, scrollBot),   // was (24,120) — now 180, above BottomNav+back-btn
                 new Vector2(-24, -240),
                 new Vector2(180, 260),
                 new Vector2(16, 16),
                 new RectOffset(0, 0, 0, 24));
+
+            // ── Move the back button (created by BuildSimpleScreen) above BottomNav ──
+            // Without this it sits at y=32-104 which overlaps the BottomNav zone (y=0-90).
+            var backTf = inventory.Find("Back");
+            if (backTf != null)
+            {
+                var bRt = (RectTransform)backTf;
+                bRt.anchoredPosition = new Vector2(0f, btnBottom); // y=96 — fully above BottomNav
+            }
 
             // Wallet label — top left showing current VP balance
             var walletLabel = CreateTmp("Wallet", inventory, "Wallet: 2,500 VP", 18, TextAlignmentOptions.Left);
@@ -669,29 +784,8 @@ namespace ValoCase.Editor
 
         static void WireSettingsExtras(RectTransform settings)
         {
-            var comp = settings.GetComponent<SettingsScreen>();
-
-            var nameLabel = CreateTmp("PlayerNameLabel", settings, "Player name", 18, TextAlignmentOptions.Left);
-            nameLabel.rectTransform.anchorMin = new Vector2(0.5f, 0.5f);
-            nameLabel.rectTransform.anchorMax = new Vector2(0.5f, 0.5f);
-            nameLabel.rectTransform.anchoredPosition = new Vector2(0, 170);
-            nameLabel.rectTransform.sizeDelta = new Vector2(520, 28);
-
-            var input = CreateInputField(settings, "PlayerNameInput", "Agent", new Vector2(0, 120), new Vector2(520, 58));
-            var sfx = CreateToggle(settings, "SfxToggle", "SFX", new Vector2(0, 40));
-            var music = CreateToggle(settings, "MusicToggle", "Music", new Vector2(0, -20));
-            var haptics = CreateToggle(settings, "HapticsToggle", "Haptics", new Vector2(0, -80));
-            var save = CreateMenuButton(settings, "SaveProfile", "SAVE", AccentRed, new Vector2(-130, -175), new Vector2(240, 64));
-            var reset = CreateMenuButton(settings, "ResetSave", "RESET SAVE", Panel, new Vector2(130, -175), new Vector2(240, 64));
-
-            var so = new SerializedObject(comp);
-            so.FindProperty("sfxToggle").objectReferenceValue = sfx;
-            so.FindProperty("musicToggle").objectReferenceValue = music;
-            so.FindProperty("hapticsToggle").objectReferenceValue = haptics;
-            so.FindProperty("playerNameInput").objectReferenceValue = input;
-            so.FindProperty("saveProfileButton").objectReferenceValue = save;
-            so.FindProperty("resetSaveButton").objectReferenceValue = reset;
-            so.ApplyModifiedPropertiesWithoutUndo();
+            // All Settings UI is built at runtime inside SettingsScreen.BuildProfileSectionOnce().
+            // Serialized refs (sfxToggle, musicToggle, etc.) are assigned there at runtime.
         }
     }
 }
