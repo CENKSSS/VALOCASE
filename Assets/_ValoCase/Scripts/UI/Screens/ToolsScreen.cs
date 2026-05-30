@@ -2,6 +2,7 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
+using ValoCase.Systems;
 
 namespace ValoCase.UI.Screens
 {
@@ -32,6 +33,28 @@ namespace ValoCase.UI.Screens
         GameObject      _backBtnGo;
         GameObject      _comingSoonPanel;
         TextMeshProUGUI _comingSoonTitle;
+        MissionSystem   _missionSystem;
+        MissionsScreen  _missionsPanel;
+
+        public void Inject(MissionSystem system)
+        {
+            _missionSystem = system;
+            if (_built) EnsureMissionsPanel();
+        }
+
+        void EnsureMissionsPanel()
+        {
+            if (_missionsPanel != null || _missionSystem == null) return;
+            var rt    = (RectTransform)transform;
+            var msnGo = new GameObject("MissionsPanel", typeof(RectTransform));
+            msnGo.transform.SetParent(rt, false);
+            var mRt   = (RectTransform)msnGo.transform;
+            mRt.anchorMin = Vector2.zero; mRt.anchorMax = Vector2.one;
+            mRt.offsetMin = mRt.offsetMax = Vector2.zero;
+            _missionsPanel = msnGo.AddComponent<MissionsScreen>();
+            _missionsPanel.Init(_missionSystem);
+            msnGo.SetActive(false);
+        }
 
         // ── Lifecycle ─────────────────────────────────────────────────────────
         void Awake()
@@ -48,19 +71,16 @@ namespace ValoCase.UI.Screens
                                 _prevScreen != ScreenType.EarnVp)
                 ? _prevScreen
                 : ScreenType.CaseOpening;   // fallback → CASES
-            Debug.Log("[TOOLS_BACK] Back clicked returning to=" + targetScreen);
             navigator?.Navigate(targetScreen);
         }
 
         protected override void OnShown()
         {
             _prevScreen = navigator?.PreviousScreen ?? ScreenType.CaseOpening;
-            Debug.Log("[TOOLS_BACK] Tools shown previous=" + _prevScreen);
-
-            Debug.Log("[TOOLS] Opened");
             BuildOnce();
-            // Make sure Coming Soon panel is hidden when re-entering
+            // Make sure overlays are hidden when re-entering
             if (_comingSoonPanel != null) _comingSoonPanel.SetActive(false);
+            _missionsPanel?.Hide();
             // Re-assert back button on top (handles re-entry after ComingSoon was shown)
             EnsureBackButtonOnTop();
         }
@@ -116,24 +136,25 @@ namespace ValoCase.UI.Screens
             // ── Three rows ────────────────────────────────────────────────────
             BuildRow(content.transform, "VP KAZAN", AccentVP, () =>
             {
-                Debug.Log("[TOOLS] VP Kazan clicked");
                 navigator?.Navigate(ScreenType.EarnVp);
             });
 
             BuildRow(content.transform, "CARK", AccentWhl, () =>
             {
-                Debug.Log("[TOOLS] Wheel clicked");
                 ShowComingSoon("CARK");
             });
 
             BuildRow(content.transform, "GOREVLER", AccentMsn, () =>
             {
-                Debug.Log("[TOOLS] Missions clicked");
-                ShowComingSoon("GOREVLER");
+                if (_missionsPanel != null) _missionsPanel.Show();
+                else ShowComingSoon("GOREVLER");
             });
 
             // Coming Soon overlay (hidden until needed)
             BuildComingSoonPanel(rt);
+
+            // Missions overlay panel (full-screen, shown on GOREVLER tap)
+            EnsureMissionsPanel();
 
             // ── BACK button — built last so it renders on top of all content ──
             BuildBackButton(rt);
@@ -205,10 +226,11 @@ namespace ValoCase.UI.Screens
         {
             if (_backBtnGo != null)
             {
-                // Already exists — reuse, don't duplicate
                 EnsureBackButtonOnTop();
                 return;
             }
+            // Serialized back button already covers the behavior — skip procedural one.
+            if (backButton != null) return;
 
             _backBtnGo = new GameObject("BackBtn",
                 typeof(RectTransform), typeof(Image), typeof(Button), typeof(Outline));
@@ -256,9 +278,6 @@ namespace ValoCase.UI.Screens
             bRt.sizeDelta        = new Vector2(96f, 36f);
 
             _backBtnGo.transform.SetAsLastSibling();
-
-            Debug.Log("[TOOLS_BACK] Back button created active=" + _backBtnGo.activeInHierarchy
-                + " sibling=" + _backBtnGo.transform.GetSiblingIndex());
         }
 
         // ── Full-screen Coming Soon overlay ───────────────────────────────────

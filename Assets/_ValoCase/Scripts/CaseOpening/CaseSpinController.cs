@@ -21,10 +21,10 @@ namespace ValoCase.CaseOpening
         [SerializeField] RectTransform centerMarker;
         [SerializeField] UltraRevealEffect ultraRevealEffect;
 
-        [Header("CS:GO Style")]
-        [SerializeField] float preBounceStrength = 40f;
-        [SerializeField] float postBounceStrength = 18f;
-        [SerializeField] float postBounceDuration = 0.35f;
+        [Header("Mobile Focus Style")]
+        [SerializeField] float preBounceStrength = 0f;
+        [SerializeField] float postBounceStrength = 8f;
+        [SerializeField] float postBounceDuration = 0.18f;
         [SerializeField] UnityEngine.UI.Image centerLine;
 
         readonly List<ReelItemView> _activeItems = new();
@@ -52,6 +52,9 @@ namespace ValoCase.CaseOpening
             }
 
             ClearReel();  // release any previous reel state before setting new
+            // Mobile style: hide the old flashing center line — the focus frame
+            // (built by CaseOpeningScreen) and item scaling handle the highlight.
+            if (centerLine != null) centerLine.enabled = false;
             _onComplete = onComplete;
             _predeterminedWinner = predeterminedWinner;
             _isSpinning = true;
@@ -154,34 +157,28 @@ namespace ValoCase.CaseOpening
             OnSpinComplete();
         }
 
+        // Mobile style: scale up whichever reel item is closest to the center
+        // marker, scaling neighbours down — a smooth "focus" feel instead of a
+        // flashing line.
         IEnumerator HighlightCenterItem()
         {
-            var flashInterval = 0.12f;
-            var elapsed = 0f;
-            if (centerLine != null) centerLine.enabled = true;
+            if (centerLine != null) centerLine.enabled = false;
 
             while (_isSpinning)
             {
-                elapsed += Time.unscaledDeltaTime;
-                // Speed up flash as animation progresses — mimics CS:GO ticker
-                var progress = Mathf.Clamp01(elapsed / spinDuration);
-                flashInterval = Mathf.Lerp(0.12f, 0.04f, progress);
+                var markerX = centerMarker != null ? centerMarker.position.x
+                            : (reelContent != null && reelContent.parent is RectTransform vp ? vp.position.x : 0f);
 
-                if (centerLine != null)
+                foreach (var item in _activeItems)
                 {
-                    var alpha = Mathf.PingPong(elapsed / flashInterval, 1f);
-                    var c = centerLine.color;
-                    c.a = Mathf.Clamp01(alpha);
-                    centerLine.color = c;
+                    if (item == null) continue;
+                    var rt = item.RectTransform;
+                    var dist = Mathf.Abs(rt.position.x - markerX);
+                    var norm = Mathf.Clamp01(dist / (itemWidth * 1.2f));
+                    var scale = Mathf.Lerp(1.06f, 0.94f, norm);
+                    rt.localScale = new Vector3(scale, scale, 1f);
                 }
                 yield return null;
-            }
-
-            if (centerLine != null)
-            {
-                var c = centerLine.color;
-                c.a = 1f;
-                centerLine.color = c;
             }
         }
 
@@ -189,6 +186,7 @@ namespace ValoCase.CaseOpening
         {
             _isSpinning = false;
             if (_highlightRoutine != null) { StopCoroutine(_highlightRoutine); _highlightRoutine = null; }
+            if (centerLine != null) centerLine.enabled = false;
 
             // Use stored predetermined winner — same skin that was placed at winnerIndex.
             var winner = _predeterminedWinner;
@@ -214,6 +212,9 @@ namespace ValoCase.CaseOpening
             if (_bounceRoutine != null) { StopCoroutine(_bounceRoutine); _bounceRoutine = null; }
             _isSpinning = false;
             _predeterminedWinner = null;
+            // Reset any focus-scaling applied during the spin before pooling.
+            foreach (var v in _activeItems)
+                if (v != null && v.RectTransform != null) v.RectTransform.localScale = Vector3.one;
             if (PoolManager.Instance != null)
                 PoolManager.Instance.ReleaseAll(_activeItems);
             _activeItems.Clear();

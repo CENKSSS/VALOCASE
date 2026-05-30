@@ -168,10 +168,14 @@ namespace ValoCase.UI
                 typeof(RectTransform), typeof(Image), typeof(RectMask2D));
             cardGo.transform.SetParent(rootGo.transform, false);
             var cardRt = (RectTransform)cardGo.transform;
-            Center(cardRt, Vector2.zero, new Vector2(600f, 540f));
+            Center(cardRt, Vector2.zero, new Vector2(520f, 500f));
             var cardImg = cardGo.GetComponent<Image>();
-            cardImg.color = new Color(0.04f, 0.07f, 0.11f, 1f);
+            cardImg.color = new Color(0.051f, 0.063f, 0.125f, 1f); // #0D1020
             cardImg.raycastTarget = false;
+            // Mobile: red neon border around the win card.
+            var cardOutline = cardGo.AddComponent<Outline>();
+            cardOutline.effectColor    = new Color(1f, 0.275f, 0.333f, 0.9f); // #FF4655
+            cardOutline.effectDistance = new Vector2(2f, -2f);
 
             // ── Rarity wash (full card) ───────────────────────────────────────
             var rarityBgImg = MakeImage("RarityBg", cardRt, stretch: true);
@@ -213,7 +217,7 @@ namespace ValoCase.UI
 
             // ── Skin icon ─────────────────────────────────────────────────────
             var iconImg = MakeImage("SkinIcon", cardRt);
-            Center((RectTransform)iconImg.transform, new Vector2(0f, 20f), new Vector2(280f, 200f));
+            Center((RectTransform)iconImg.transform, new Vector2(0f, 22f), new Vector2(340f, 220f));
             iconImg.color = Color.white;
             iconImg.preserveAspect = true;
             iconImg.raycastTarget = false;
@@ -249,7 +253,7 @@ namespace ValoCase.UI
             colors.pressedColor     = new Color(0.60f, 0.60f, 0.60f);
             confirmBtn.colors = colors;
 
-            var btnTmp = MakeText("Label", btnRt, "KOLEKSIYONA EKLE", 20f, FontStyles.Bold,
+            var btnTmp = MakeText("Label", btnRt, "TAMAM", 20f, FontStyles.Bold,
                                   new Color(0.925f, 0.910f, 0.882f, 1f));
             var btnLblRt = (RectTransform)btnTmp.transform;
             Stretch(btnLblRt);
@@ -335,34 +339,23 @@ namespace ValoCase.UI
             }
         }
 
+        // Mobile: simple, quick fade + subtle scale (0.94 → 1.00). No overshoot.
         IEnumerator PopInAnimation()
         {
             if (card == null) yield break;
 
-            card.localScale = new Vector3(0.60f, 0.60f, 1f);
+            card.localScale = new Vector3(0.94f, 0.94f, 1f);
             SetCG(0f, false);
 
-            const float riseDur   = 0.26f;
-            const float peakScale = 1.08f;
+            const float dur = 0.20f;
             float t = 0f;
-            while (t < riseDur)
+            while (t < dur)
             {
                 t += Time.unscaledDeltaTime;
-                float p = Mathf.Clamp01(t / riseDur);
-                float e = 1f - Mathf.Pow(1f - p, 3f);
-                float s = Mathf.Lerp(0.60f, peakScale, e);
+                float p = Mathf.Clamp01(t / dur);
+                float s = Mathf.Lerp(0.94f, 1f, p);
                 card.localScale = new Vector3(s, s, 1f);
-                if (canvasGroup != null) canvasGroup.alpha = Mathf.Clamp01(p * 3f);
-                yield return null;
-            }
-
-            t = 0f;
-            const float settleDur = 0.12f;
-            while (t < settleDur)
-            {
-                t += Time.unscaledDeltaTime;
-                float s = Mathf.Lerp(peakScale, 1f, Mathf.Clamp01(t / settleDur));
-                card.localScale = new Vector3(s, s, 1f);
+                if (canvasGroup != null) canvasGroup.alpha = p;
                 yield return null;
             }
 

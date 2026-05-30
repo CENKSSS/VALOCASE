@@ -36,7 +36,7 @@ namespace ValoCase.UI
             (ScreenType.Tools,       "TOOLS",     TabIcon.Tools),
             (ScreenType.Inventory,   "INVENTORY", TabIcon.Grid),
             (ScreenType.Upgrade,     "UPGRADE",   TabIcon.Bolt),
-            (ScreenType.CaseBattle,  "BATTLE",    TabIcon.Swords),
+            (ScreenType.CaseBattleLobby, "BATTLE", TabIcon.Swords),  // entry point → Case Battle Lobby flow
             (ScreenType.Market,      "MARKET",    TabIcon.Market),
         };
 
@@ -390,6 +390,8 @@ namespace ValoCase.UI
             _active = Tabs[idx].Screen;
             if (idx == 0)
                 Debug.Log("[BOTTOM_NAV] CASES clicked -> opening SHOP");
+            if (Tabs[idx].Screen == ScreenType.CaseBattleLobby)
+                Debug.Log($"[BottomNavBar] Battle tapped → requesting ScreenType.CaseBattleLobby");
             navigator?.Navigate(_active);
             Repaint();
         }

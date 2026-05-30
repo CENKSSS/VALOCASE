@@ -30,6 +30,9 @@ namespace ValoCase.UI
                 screen.HideImmediate();
             }
 
+            foreach (var kvp in _map)
+                Debug.Log($"[UINavigator] Registered: {kvp.Key} → {kvp.Value?.GetType().Name ?? "null"}");
+
             Debug.Log("[STARTUP] Initial screen set to CASES (defaultScreen=" + defaultScreen + ")");
             Debug.Log("[DAILY_REWARD] Auto open disabled — daily reward only shown on explicit button press");
             Navigate(defaultScreen, instant: true);
@@ -37,7 +40,12 @@ namespace ValoCase.UI
 
         public void Navigate(ScreenType type, bool instant = false)
         {
-            if (!_map.TryGetValue(type, out var next)) return;
+            Debug.Log($"[UINavigator] Navigate → {type} | found: {_map.ContainsKey(type)}");
+            if (!_map.TryGetValue(type, out var next))
+            {
+                Debug.LogWarning($"[UINavigator] Navigate failed: '{type}' not in map. Registered: {string.Join(", ", _map.Keys)}");
+                return;
+            }
             if (_current == next) return;
 
             if (_current != null)

@@ -12,6 +12,7 @@ namespace ValoCase.UI
         CaseBattle,
         EarnVp,
         Tools,
-        Market
+        Market,
+        CaseBattleLobby
     }
 }

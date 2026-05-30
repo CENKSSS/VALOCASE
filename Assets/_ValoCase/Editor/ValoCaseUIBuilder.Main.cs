@@ -180,6 +180,7 @@ namespace ValoCase.Editor
             }
 
             EditorSceneManager.MarkSceneDirty(scene);
+            EditorSceneManager.SaveScene(scene);
         }
 
         static void ClearValoCaseObjects()
@@ -267,7 +268,8 @@ namespace ValoCase.Editor
             var cases = BuildCaseOpeningScreen(screenHost, navigator, caseItemView, dropItemView);
             var weapons = BuildWeaponsScreen(screenHost, navigator, weaponCardView);
             var upgrade = BuildUpgradeScreen(screenHost, navigator, weaponCardView);
-            var battle  = BuildCaseBattleScreen(screenHost, navigator, weaponCardView);
+            // CaseBattleScreen retired — only the new Lobby flow is built.
+            var lobby   = BuildLobbyListScreen(screenHost, navigator);
             var earn    = BuildEarnVpScreen(screenHost, navigator);
             var tools   = BuildToolsScreen(screenHost, navigator);
             var market  = BuildMarketScreen(screenHost, navigator);
@@ -318,7 +320,7 @@ namespace ValoCase.Editor
             // ─────────────────────────────────────────────────────────────────────
 
             WireMainMenu(main, navigator, daily);
-            WireNavigator(navigator, main, cases.gameObject, inventory.gameObject, shop.gameObject, settings.gameObject, weapons.gameObject, upgrade.gameObject, battle.gameObject, earn.gameObject, tools.gameObject, market.gameObject);
+            WireNavigator(navigator, main, cases.gameObject, inventory.gameObject, shop.gameObject, settings.gameObject, weapons.gameObject, upgrade.gameObject, lobby.gameObject, earn.gameObject, tools.gameObject, market.gameObject);
 
             return SavePrefab(root, UiCanvasPrefabPath);
         }
@@ -376,7 +378,7 @@ namespace ValoCase.Editor
             var weaponsBtn = CreateMenuButton(screen, "WeaponsButton", "SİLAHLAR", Panel, new Vector2(140, -150), new Vector2(240, 88));
             // Wide UPGRADE / GAMBLE call-to-action between weapons row and daily.
             var upgradeBtn = CreateMenuButton(screen, "UpgradeButton", "YÜKSELT", NeonPurple, new Vector2(0, -250), new Vector2(520, 76));
-            // Demo Case Battle — Admin bot opponent.
+            // Redirects to the new Lobby flow (CaseBattleScreen retired).
             var battleBtn  = CreateMenuButton(screen, "CaseBattleButton", "KASA SAVAŞI", NeonGreen, new Vector2(0, -332), new Vector2(520, 76));
             var dailyBtn  = CreateMenuButton(screen, "DailyButton",  "DAILY REWARD", Panel,    new Vector2(0, -414), new Vector2(320, 64));
             var earnVpBtn = CreateMenuButton(screen, "EarnVpButton", "◆ VP KAZAN",  NeonGold, new Vector2(0, -494), new Vector2(520, 64));
@@ -520,51 +522,24 @@ namespace ValoCase.Editor
         }
 
         // ─────────────────────────────────────────────────────────────────────
-        // CASE BATTLE SCREEN
-        // The screen builds its own lobby/arena/results panels at runtime
-        // (see CaseBattleScreen.BuildUiOnce). The builder only needs to lay
-        // down the chrome (top bar, back, wallet) and wire references.
+        // CASE BATTLE LOBBY SCREEN
+        // Self-building: LobbyListScreen.BuildOnce() (called from OnShown) creates
+        // its own header/list/footer plus the Create + Waiting sub-panels.
+        // The builder only needs the panel, component, and serialized refs.
         // ─────────────────────────────────────────────────────────────────────
-        static RectTransform BuildCaseBattleScreen(RectTransform parent, UINavigator navigator,
-                                                    WeaponSkinCardView cardPrefab)
+        static RectTransform BuildLobbyListScreen(RectTransform parent, UINavigator navigator)
         {
-            var screen = CreateScreenPanel(parent, "CaseBattleScreen", ScreenType.CaseBattle, out var group);
-            var comp = screen.gameObject.AddComponent<CaseBattleScreen>();
+            var screen = CreateScreenPanel(parent, "LobbyListScreen", ScreenType.CaseBattleLobby, out var group);
+            var comp   = screen.gameObject.AddComponent<LobbyListScreen>();
 
-            const float topBarH = 72f;
-
-            // Top bar — back + wallet (title rendered by the screen itself)
-            var topBar = CreateRect("TopBar", screen, new Vector2(0, topBarH));
-            StretchTop(topBar, 0, topBarH);
-            topBar.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0.35f);
-
-            var back = CreateMenuButton(topBar, "Back", "← GERİ", AccentRed,
-                Vector2.zero, new Vector2(160, 52));
-            var backRt = back.GetComponent<RectTransform>();
-            backRt.anchorMin = new Vector2(0, 0.5f);
-            backRt.anchorMax = new Vector2(0, 0.5f);
-            backRt.pivot     = new Vector2(0, 0.5f);
-            backRt.anchoredPosition = new Vector2(12, 0);
-
-            var wallet = CreateTmp("Wallet", topBar, "0 VP", 20, TextAlignmentOptions.Right);
-            wallet.rectTransform.anchorMin = new Vector2(1, 0.5f);
-            wallet.rectTransform.anchorMax = new Vector2(1, 0.5f);
-            wallet.rectTransform.pivot     = new Vector2(1, 0.5f);
-            wallet.rectTransform.anchoredPosition = new Vector2(-16, 0);
-            wallet.rectTransform.sizeDelta = new Vector2(220, 36);
-            wallet.color = new Color(0.6f, 1f, 0.6f);
-
-            // Wire refs — null-safe: field may not exist if screen was refactored
             var so = new SerializedObject(comp);
             SetObjRef(so, "navigator",   navigator);
-            SetObjRef(so, "backButton",  back);
-            SetObjRef(so, "walletLabel", wallet);       // compat field, may be absent
-            SetObjRef(so, "cardPrefab",  cardPrefab);   // compat field, may be absent
             SetObjRef(so, "canvasGroup", group);
             var stProp = so.FindProperty("screenType");
-            if (stProp != null) stProp.enumValueIndex = (int)ScreenType.CaseBattle;
+            if (stProp != null) stProp.enumValueIndex = (int)ScreenType.CaseBattleLobby;
             so.ApplyModifiedPropertiesWithoutUndo();
 
+            Debug.Log("[LOBBY] LobbyListScreen built by builder");
             return screen;
         }
 

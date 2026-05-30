@@ -55,6 +55,21 @@ namespace ValoCase.Save
     }
 
     [Serializable]
+    public class MissionProgressEntry
+    {
+        public int  missionIndex;
+        public int  currentAmount;
+        public bool claimed;
+        public int  claimOrder;
+    }
+
+    [Serializable]
+    public class WeeklyMissionsSave
+    {
+        public List<MissionProgressEntry> missions = new();
+    }
+
+    [Serializable]
     public class SaveDataRoot
     {
         public int version = 1;
@@ -66,6 +81,7 @@ namespace ValoCase.Save
         public DailyRewardSave dailyReward = new();
         public ShopSave shop = new();
         public CaseProgressSave caseProgress = new();
+        public WeeklyMissionsSave weeklyMissions = new();
         public long createdUnix;
         public long lastSaveUnix;
     }

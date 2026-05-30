@@ -24,15 +24,31 @@ namespace ValoCase.UI
             Skin = skin;
             if (skin == null) return;
 
+            // ── Skin icon — always white tint, always on top of glow/background ──
             if (icon != null)
             {
-                icon.sprite = skin.Icon;
-                icon.enabled = skin.Icon != null;
+                Debug.Log("[REEL_ICON] skin=" + skin.SkinName);
+                Debug.Log("[REEL_ICON] icon null=" + (skin.Icon == null));
+
+                icon.sprite        = skin.Icon;
+                icon.color         = Color.white;      // never inherit rarity tint or dark pool state
+                icon.enabled       = skin.Icon != null;
                 icon.preserveAspect = true;
+                icon.material      = null;             // default Unity UI material — no custom shaders
+                icon.raycastTarget = false;
+
+                // Push icon above rarityFrame and glow so neither overlays it.
+                icon.transform.SetAsLastSibling();
+
+                Debug.Log("[REEL_ICON] image color=" + icon.color);
+                Debug.Log("[REEL_ICON] material=" + icon.material);
+                Debug.Log("[REEL_ICON] enabled=" + icon.enabled);
+                Debug.Log("[REEL_ICON_FIX] applied white tint for " + skin.SkinName);
+                Debug.Log("[REEL_ICON_FIX] icon sibling=" + icon.transform.GetSiblingIndex());
             }
 
             if (weaponLabel != null) weaponLabel.text = skin.WeaponName;
-            if (skinLabel != null) skinLabel.text = skin.SkinName;
+            if (skinLabel   != null) skinLabel.text   = skin.SkinName;
 
             if (visuals != null && visuals.TryGet(skin.Rarity, out var entry))
             {
@@ -40,13 +56,13 @@ namespace ValoCase.UI
                 if (rarityFrame != null)
                     rarityFrame.color = entry.cardBgColor;
 
-                // Glow overlay: soft neon tint over the background.
-                // Show for all rarities (subtle for lower tiers, vivid for high).
+                // Glow overlay: soft neon tint behind the skin icon (NOT on top).
                 if (glow != null)
                 {
                     var alpha = skin.Rarity >= SkinRarity.Premium ? 0.28f : 0.14f;
                     glow.color = new Color(entry.primaryColor.r, entry.primaryColor.g, entry.primaryColor.b, alpha);
                     glow.gameObject.SetActive(true);
+                    // Keep glow below icon — icon's SetAsLastSibling above already handles this.
                 }
 
                 // Border glow matches rarity accent.
@@ -57,6 +73,12 @@ namespace ValoCase.UI
         }
 
         public void OnSpawned() { }
-        public void OnDespawned() => Skin = null;
+
+        public void OnDespawned()
+        {
+            Skin = null;
+            // Reset icon to a clean white state so the next Bind starts fresh.
+            if (icon != null) { icon.sprite = null; icon.color = Color.white; icon.enabled = false; }
+        }
     }
 }

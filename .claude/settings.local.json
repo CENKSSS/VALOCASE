@@ -10,7 +10,15 @@
       "Bash(python -c \"import sys; print\\(sys.executable\\)\")",
       "Bash(Select-String -Pattern \"error CS|Error|error:\")",
       "Bash(Select-Object -Last 60)",
-      "Bash(python3 -c ' *)"
+      "Bash(python3 -c ' *)",
+      "PowerShell($roots = @\\(\"C:\\\\Program Files\\\\Unity\\\\Hub\\\\Editor\",\"C:\\\\Program Files\\\\Unity\\\\Editor\"\\); foreach \\($r in $roots\\){ if\\(Test-Path $r\\){ Get-ChildItem $r -Recurse -Filter Unity.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName } })",
+      "PowerShell($unity = \"C:\\\\Program Files\\\\Unity\\\\Hub\\\\Editor\\\\6000.4.7f1\\\\Editor\\\\Unity.exe\"; $proj = \"C:\\\\Users\\\\cenk_\\\\ValoCase\"; $log = \"C:\\\\Users\\\\cenk_\\\\ValoCase\\\\compile_check.log\"; & $unity -batchmode -quit -nographics -projectPath $proj -logFile $log -ignoreCompilerErrors:$false 2>$null; \"ExitCode: $LASTEXITCODE\")",
+      "PowerShell($log = \"C:\\\\Users\\\\cenk_\\\\ValoCase\\\\compile_check.log\"; if\\(Test-Path $log\\){ Select-String -Path $log -Pattern \"error CS|Compilation failed|: error|Compilation succeeded|All compiler errors\" | Select-Object -First 60 | ForEach-Object { $_.Line } } else { \"NO LOG YET\" })",
+      "PowerShell(Get-Process *)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\cenk_\\\\ValoCase\\\\Assets\" -Recurse -File | Where-Object { $_.LastWriteTime -gt \\(Get-Date\\).AddMinutes\\(-60\\) } | Select-Object FullName, LastWriteTime)",
+      "Bash(Get-Content \"C:\\\\Users\\\\cenk_\\\\ValoCase\\\\Assets\\\\Scenes\\\\engunceli.unity\")",
+      "Bash(Select-String -Pattern \"UINavigator|BottomNavBar|LobbyListScreen|m_SourcePrefab|PF_UICanvas\")",
+      "Bash(Select-Object -First 60)"
     ]
   }
 }

@@ -1,0 +1,534 @@
+using TMPro;
+using UnityEngine;
+using UnityEngine.UI;
+using ValoCase.Core;
+using ValoCase.Systems;
+
+namespace ValoCase.UI.Screens
+{
+    public sealed class MissionsScreen : MonoBehaviour
+    {
+        // ── Palette ───────────────────────────────────────────────────────────
+        static readonly Color BgDeep     = new Color(0.031f, 0.043f, 0.078f, 1f);
+        static readonly Color CardBg     = new Color(0.067f, 0.094f, 0.153f, 1f);
+        static readonly Color NeonRed    = new Color(1f, 0.176f, 0.333f, 1f);
+        static readonly Color BorderRed  = new Color(1f, 0.275f, 0.333f, 0.35f);
+        static readonly Color RingTrackC = new Color(0.09f, 0.12f, 0.20f, 1f);
+        static readonly Color TextBright = new Color(0.961f, 0.961f, 0.961f, 1f);
+        static readonly Color TextDim    = new Color(0.541f, 0.569f, 0.651f, 1f);
+        static readonly Color GoldColor  = new Color(0.902f, 0.816f, 0.435f, 1f);
+        static readonly Color MutedBtn   = new Color(0.10f, 0.13f, 0.20f, 1f);
+        static readonly Color DimBtn     = new Color(0.08f, 0.10f, 0.14f, 1f);
+        static readonly Color GreenFull  = new Color(0.13f, 0.82f, 0.37f, 1f);
+        static readonly Color GreenDim   = new Color(0.13f, 0.82f, 0.37f, 0.38f);
+
+        // ── Circle sprite cache ───────────────────────────────────────────────
+        static Sprite s_circle;
+
+        // ── Card refs (per mission) ───────────────────────────────────────────
+        struct CardRefs
+        {
+            public RectTransform    CardRt;
+            public Image            RingFill;
+            public TextMeshProUGUI  PctText;
+            public TextMeshProUGUI  ProgressText;
+            public TextMeshProUGUI  RemainingText;
+            public Image            BtnImage;
+            public Button           Btn;
+            public TextMeshProUGUI  BtnText;
+            public Outline          CardOutline;
+        }
+
+        MissionSystem _system;
+        bool          _built;
+        CardRefs[]    _cards;
+        RectTransform _contentRt;
+        float         _cellW;
+        float         _cellH;
+
+        // ── Public API ────────────────────────────────────────────────────────
+        public void Init(MissionSystem system)
+        {
+            if (_system != null) _system.OnChanged -= Refresh;
+            _system            = system;
+            _system.OnChanged += Refresh;
+        }
+
+        void OnDestroy()
+        {
+            if (_system != null) _system.OnChanged -= Refresh;
+        }
+
+        public void Show()
+        {
+            gameObject.SetActive(true);
+            BuildOnce();
+            SortCards();
+            Refresh();
+        }
+
+        public void Hide() => gameObject.SetActive(false);
+
+        // ── Build (once) ──────────────────────────────────────────────────────
+        void BuildOnce()
+        {
+            if (_built) return;
+            _built = true;
+
+            Canvas.ForceUpdateCanvases();
+            var rt       = (RectTransform)transform;
+            float panelW = rt.rect.width;
+            if (panelW <= 0f)
+            {
+                var cRt = GetComponentInParent<Canvas>()?.GetComponent<RectTransform>();
+                panelW = (cRt != null && cRt.rect.width > 0f) ? cRt.rect.width : 390f;
+            }
+
+            var circle = GetCircleSprite();
+
+            const float topPad  = 110f;
+            const float botPad  = 110f;
+            const float sidePad =  12f;
+            const float colGap  =   8f;
+            const float rowGap  =  16f;
+            float usableW = panelW - 2f * sidePad;
+            float cellW   = (usableW - 2f * colGap) / 3f;
+            float cellH   = Mathf.Round(cellW * 1.75f);
+            _cellW = cellW; _cellH = cellH;
+
+            // Full background
+            var bg = NewGo("Bg", rt, typeof(Image));
+            Stretch(bg);
+            bg.GetComponent<Image>().color = BgDeep;
+
+            // ── Header ────────────────────────────────────────────────────────
+            var hdrGo = NewGo("Header", rt, typeof(Image));
+            var hRt   = (RectTransform)hdrGo.transform;
+            hRt.anchorMin        = new Vector2(0f, 1f);
+            hRt.anchorMax        = new Vector2(1f, 1f);
+            hRt.pivot            = new Vector2(0.5f, 1f);
+            hRt.anchoredPosition = Vector2.zero;
+            hRt.sizeDelta        = new Vector2(0f, topPad);
+            hdrGo.GetComponent<Image>().color = new Color(0.04f, 0.06f, 0.10f, 0.97f);
+
+            var hLine = NewGo("HLine", hdrGo.transform, typeof(Image));
+            var hlRt  = (RectTransform)hLine.transform;
+            hlRt.anchorMin        = Vector2.zero;
+            hlRt.anchorMax        = new Vector2(1f, 0f);
+            hlRt.pivot            = new Vector2(0.5f, 0f);
+            hlRt.anchoredPosition = Vector2.zero;
+            hlRt.sizeDelta        = new Vector2(0f, 1.5f);
+            hLine.GetComponent<Image>().color       = new Color(1f, 0.176f, 0.333f, 0.40f);
+            hLine.GetComponent<Image>().raycastTarget = false;
+
+            var titleTmp = MakeTmp(hdrGo.transform, "Title", "WEEKLY MISSIONS",
+                17f, FontStyles.Bold, TextBright);
+            titleTmp.characterSpacing = 4f;
+            titleTmp.alignment        = TextAlignmentOptions.Center;
+            titleTmp.raycastTarget    = false;
+            var tRt = titleTmp.rectTransform;
+            tRt.anchorMin = Vector2.zero; tRt.anchorMax = Vector2.one;
+            tRt.offsetMin = new Vector2(0f, 22f); tRt.offsetMax = Vector2.zero;
+
+
+            // ── Back button ───────────────────────────────────────────────────
+            var backGo = NewGo("Back", rt, typeof(Image), typeof(Button), typeof(Outline));
+            var bRt    = (RectTransform)backGo.transform;
+            bRt.anchorMin        = new Vector2(0f, 1f);
+            bRt.anchorMax        = new Vector2(0f, 1f);
+            bRt.pivot            = new Vector2(0f, 1f);
+            bRt.anchoredPosition = new Vector2(18f, -72f);
+            bRt.sizeDelta        = new Vector2(80f, 32f);
+            backGo.GetComponent<Image>().color = new Color(0.031f, 0.055f, 0.102f, 0.97f);
+            var bol = backGo.GetComponent<Outline>();
+            bol.effectColor    = new Color(1f, 0.122f, 0.224f, 0.80f);
+            bol.effectDistance = new Vector2(1.5f, -1.5f);
+            var backLbl = MakeTmp(backGo.transform, "Lbl", "BACK", 11f, FontStyles.Bold, Color.white);
+            backLbl.alignment     = TextAlignmentOptions.Center;
+            backLbl.raycastTarget = false;
+            var blRt = backLbl.rectTransform;
+            blRt.anchorMin = Vector2.zero; blRt.anchorMax = Vector2.one;
+            blRt.offsetMin = blRt.offsetMax = Vector2.zero;
+            var backBtn = backGo.GetComponent<Button>();
+            backBtn.transition = Selectable.Transition.None;
+            backBtn.onClick.AddListener(Hide);
+
+            // ── ScrollRect + RectMask2D viewport ──────────────────────────────
+            var scrollGo = NewGo("Scroll", rt, typeof(ScrollRect), typeof(Image));
+            var scrollRt = (RectTransform)scrollGo.transform;
+            scrollRt.anchorMin = Vector2.zero; scrollRt.anchorMax = Vector2.one;
+            scrollRt.offsetMin = new Vector2(sidePad, botPad);
+            scrollRt.offsetMax = new Vector2(-sidePad, -topPad);
+            scrollGo.GetComponent<Image>().color = Color.clear;
+
+            var viewportGo = NewGo("Viewport", scrollGo.transform, typeof(RectMask2D));
+            Stretch(viewportGo);
+
+            int   count  = MissionSystem.MissionCount;
+            int   rows   = Mathf.CeilToInt(count / 3f);
+            float totalH = 8f + rows * cellH + (rows - 1) * rowGap + 16f;
+
+            var contentGo = NewGo("Content", viewportGo.transform);
+            _contentRt = (RectTransform)contentGo.transform;
+            _contentRt.anchorMin        = new Vector2(0f, 1f);
+            _contentRt.anchorMax        = new Vector2(1f, 1f);
+            _contentRt.pivot            = new Vector2(0.5f, 1f);
+            _contentRt.anchoredPosition = Vector2.zero;
+            _contentRt.sizeDelta        = new Vector2(0f, totalH);
+
+            var sr = scrollGo.GetComponent<ScrollRect>();
+            sr.content           = _contentRt;
+            sr.viewport          = (RectTransform)viewportGo.transform;
+            sr.horizontal        = false;
+            sr.vertical          = true;
+            sr.scrollSensitivity = 30f;
+            sr.movementType      = ScrollRect.MovementType.Elastic;
+
+            // ── Build 8 cards in 3-column grid ────────────────────────────────
+            _cards = new CardRefs[count];
+            for (int i = 0; i < count; i++)
+            {
+                int   col  = i % 3;
+                int   row  = i / 3;
+                float xPos = col * (cellW + colGap);
+                float yPos = 8f + row * (cellH + rowGap);
+                BuildCard(i, _contentRt, xPos, yPos, cellW, cellH, circle);
+            }
+
+            backGo.transform.SetAsLastSibling();
+        }
+
+        void BuildCard(int index, RectTransform parent,
+                       float xPos, float yPos, float cardW, float cardH, Sprite circle)
+        {
+            var def = _system.GetDef(index);
+
+            // Card root
+            var card   = NewGo("Card_" + index, parent, typeof(Image), typeof(Outline));
+            var cardRt = (RectTransform)card.transform;
+            cardRt.anchorMin        = new Vector2(0f, 1f);
+            cardRt.anchorMax        = new Vector2(0f, 1f);
+            cardRt.pivot            = new Vector2(0f, 1f);
+            cardRt.anchoredPosition = new Vector2(xPos, -yPos);
+            cardRt.sizeDelta        = new Vector2(cardW, cardH);
+            card.GetComponent<Image>().color = CardBg;
+            var ol = card.GetComponent<Outline>();
+            ol.effectColor    = BorderRed;
+            ol.effectDistance = new Vector2(1.5f, -1.5f);
+
+            // Top accent bar
+            var topBar = NewGo("TopBar", card.transform, typeof(Image));
+            var tbRt   = (RectTransform)topBar.transform;
+            tbRt.anchorMin        = new Vector2(0f, 1f);
+            tbRt.anchorMax        = new Vector2(1f, 1f);
+            tbRt.pivot            = new Vector2(0.5f, 1f);
+            tbRt.anchoredPosition = Vector2.zero;
+            tbRt.sizeDelta        = new Vector2(0f, 2f);
+            topBar.GetComponent<Image>().color       = new Color(NeonRed.r, NeonRed.g, NeonRed.b, 0.6f);
+            topBar.GetComponent<Image>().raycastTarget = false;
+
+            // Mission title
+            float titleH = Mathf.Round(cardH * 0.175f);
+            var titleTmp = MakeTmp(card.transform, "Title", def.Title,
+                11f, FontStyles.Bold, TextBright);
+            titleTmp.enableWordWrapping = true;
+            titleTmp.alignment          = TextAlignmentOptions.Center;
+            titleTmp.raycastTarget      = false;
+            var titRt = titleTmp.rectTransform;
+            titRt.anchorMin        = new Vector2(0f, 1f);
+            titRt.anchorMax        = new Vector2(1f, 1f);
+            titRt.pivot            = new Vector2(0.5f, 1f);
+            titRt.anchoredPosition = new Vector2(0f, -5f);
+            titRt.sizeDelta        = new Vector2(-8f, titleH);
+
+            // ── Circular donut progress ring ──────────────────────────────────
+            // Ring: pivot=(0.5,1) top-center. Hole: pivot=(0.5,0.5) centered on ring.
+            float ringSize    = Mathf.Round(cardW * 0.67f);
+            float ringTopY    = Mathf.Round(5f + titleH + cardH * 0.04f);
+            float ringCenterY = ringTopY + ringSize * 0.5f;
+            float holeSize    = Mathf.Round(ringSize * 0.54f);
+
+            // Track: dark full circle (fill=1)
+            var rTrack = MakeRingImg("RingTrack", card.transform, circle,
+                RingTrackC, 1f, new Vector2(0f, -ringTopY), ringSize);
+            rTrack.raycastTarget = false;
+
+            // Fill: green arc (fill=progress%)
+            var rFill = MakeRingImg("RingFill", card.transform, circle,
+                GreenDim, 0f, new Vector2(0f, -ringTopY), ringSize);
+            rFill.fillOrigin    = (int)Image.Origin360.Top;
+            rFill.raycastTarget = false;
+
+            // Hole: inner circle, same color as card bg — creates donut cutout
+            var hole  = NewGo("RingHole", card.transform, typeof(Image));
+            var hoRt  = (RectTransform)hole.transform;
+            hoRt.anchorMin        = new Vector2(0.5f, 1f);
+            hoRt.anchorMax        = new Vector2(0.5f, 1f);
+            hoRt.pivot            = new Vector2(0.5f, 0.5f);
+            hoRt.anchoredPosition = new Vector2(0f, -ringCenterY);
+            hoRt.sizeDelta        = new Vector2(holeSize, holeSize);
+            var hoImg = hole.GetComponent<Image>();
+            if (circle != null) hoImg.sprite = circle;
+            hoImg.color        = CardBg;
+            hoImg.raycastTarget = false;
+
+            // ── Texts centered inside the donut hole ──────────────────────────
+            float textW = holeSize - 4f;
+
+            var pctTmp = MakeTmp(card.transform, "Pct", "0%",
+                13f, FontStyles.Bold, TextBright);
+            pctTmp.alignment     = TextAlignmentOptions.Center;
+            pctTmp.raycastTarget = false;
+            SetCenterRT(pctTmp.rectTransform, 0f, -(ringCenterY - 9f), textW, 18f);
+
+            var progTmp = MakeTmp(card.transform, "Prog", "0/1",
+                7f, FontStyles.Normal, TextDim);
+            progTmp.alignment     = TextAlignmentOptions.Center;
+            progTmp.raycastTarget = false;
+            SetCenterRT(progTmp.rectTransform, 0f, -(ringCenterY + 10f), textW, 13f);
+
+            var remTmp = MakeTmp(card.transform, "Rem", "",
+                6.5f, FontStyles.Normal, TextDim);
+            remTmp.alignment     = TextAlignmentOptions.Center;
+            remTmp.raycastTarget = false;
+            SetCenterRT(remTmp.rectTransform, 0f, -(ringCenterY + 21f), textW, 13f);
+
+            // ── Reward row ────────────────────────────────────────────────────
+            float rewardY = ringTopY + ringSize + Mathf.Round(cardH * 0.05f);
+            var rewTmp = MakeTmp(card.transform, "Reward", $"+{def.RewardVp} VP",
+                10f, FontStyles.Bold, GoldColor);
+            rewTmp.alignment     = TextAlignmentOptions.Center;
+            rewTmp.raycastTarget = false;
+            var rwRt = rewTmp.rectTransform;
+            rwRt.anchorMin        = new Vector2(0f, 1f);
+            rwRt.anchorMax        = new Vector2(1f, 1f);
+            rwRt.pivot            = new Vector2(0.5f, 1f);
+            rwRt.anchoredPosition = new Vector2(0f, -rewardY);
+            rwRt.sizeDelta        = new Vector2(-8f, 20f);
+
+            // ── Claim button ──────────────────────────────────────────────────
+            float btnH = Mathf.Round(cardH * 0.155f);
+            float btnY = rewardY + 20f + 6f;
+            var btnGo = NewGo("ClaimBtn", card.transform, typeof(Image), typeof(Button));
+            var btnRt = (RectTransform)btnGo.transform;
+            btnRt.anchorMin        = new Vector2(0f, 1f);
+            btnRt.anchorMax        = new Vector2(1f, 1f);
+            btnRt.pivot            = new Vector2(0.5f, 1f);
+            btnRt.anchoredPosition = new Vector2(0f, -btnY);
+            btnRt.sizeDelta        = new Vector2(-8f, btnH);
+            var btnImg = btnGo.GetComponent<Image>();
+            var btn    = btnGo.GetComponent<Button>();
+            btn.transition = Selectable.Transition.None;
+
+            var btnLbl = MakeTmp(btnGo.transform, "Lbl", "", 9f, FontStyles.Bold, Color.white);
+            btnLbl.alignment     = TextAlignmentOptions.Center;
+            btnLbl.raycastTarget = false;
+            var bllRt = btnLbl.rectTransform;
+            bllRt.anchorMin = Vector2.zero; bllRt.anchorMax = Vector2.one;
+            bllRt.offsetMin = bllRt.offsetMax = Vector2.zero;
+
+            int cap = index;
+            btn.onClick.AddListener(() => OnClaimClicked(cap));
+
+            _cards[index] = new CardRefs
+            {
+                CardRt        = cardRt,
+                RingFill      = rFill,
+                PctText       = pctTmp,
+                ProgressText  = progTmp,
+                RemainingText = remTmp,
+                BtnImage      = btnImg,
+                Btn           = btn,
+                BtnText       = btnLbl,
+                CardOutline   = ol,
+            };
+        }
+
+        // ── Sort cards on each Show() — claimed sink to bottom by claimOrder ──
+        void SortCards()
+        {
+            if (!_built || _cards == null) return;
+            int count = MissionSystem.MissionCount;
+            var order = new int[count];
+            for (int i = 0; i < count; i++) order[i] = i;
+            System.Array.Sort(order, (a, b) =>
+            {
+                var ea = _system.GetEntry(a);
+                var eb = _system.GetEntry(b);
+                if (ea.claimed != eb.claimed) return ea.claimed ? 1 : -1;
+                if (ea.claimed)              return eb.claimOrder.CompareTo(ea.claimOrder);
+                return a.CompareTo(b);
+            });
+            const float colGap = 8f;
+            const float rowGap = 16f;
+            for (int slot = 0; slot < count; slot++)
+            {
+                int   mi   = order[slot];
+                int   col  = slot % 3;
+                int   row  = slot / 3;
+                float xPos = col * (_cellW + colGap);
+                float yPos = 8f + row * (_cellH + rowGap);
+                _cards[mi].CardRt.anchoredPosition = new Vector2(xPos, -yPos);
+            }
+        }
+
+        // ── Refresh (data → UI) ───────────────────────────────────────────────
+        void Refresh()
+        {
+            if (!_built || _cards == null) return;
+            for (int i = 0; i < MissionSystem.MissionCount; i++)
+                RefreshCard(i);
+        }
+
+        void RefreshCard(int i)
+        {
+            var def   = _system.GetDef(i);
+            var entry = _system.GetEntry(i);
+            bool  done    = entry.currentAmount >= def.TargetAmount;
+            bool  claimed = entry.claimed;
+            int   remain  = Mathf.Max(0, def.TargetAmount - entry.currentAmount);
+            float pct     = def.TargetAmount > 0
+                ? Mathf.Clamp01((float)entry.currentAmount / def.TargetAmount)
+                : 0f;
+
+            ref var c = ref _cards[i];
+
+            // Ring fill: green-dim for partial, green-full for done
+            c.RingFill.fillAmount = pct;
+            c.RingFill.color      = done ? GreenFull : (pct > 0f ? GreenDim : GreenDim);
+
+            c.PctText.text       = Mathf.RoundToInt(pct * 100f) + "%";
+            c.ProgressText.text  = $"{entry.currentAmount}/{def.TargetAmount}";
+            c.RemainingText.text = claimed ? "DONE"
+                                 : remain > 0 ? $"{remain} left"
+                                 : "READY!";
+
+            // Outline: green when ready to claim, red dim otherwise
+            c.CardOutline.effectColor = (done && !claimed)
+                ? new Color(0.13f, 0.82f, 0.37f, 0.65f)
+                : BorderRed;
+
+            if (claimed)
+            {
+                c.BtnImage.color   = DimBtn;
+                c.BtnText.text     = "CLAIMED";
+                c.BtnText.color    = new Color(1f, 1f, 1f, 0.35f);
+                c.Btn.interactable = false;
+            }
+            else if (done)
+            {
+                c.BtnImage.color   = NeonRed;
+                c.BtnText.text     = "CLAIM REWARD";
+                c.BtnText.color    = Color.white;
+                c.Btn.interactable = true;
+            }
+            else
+            {
+                c.BtnImage.color   = MutedBtn;
+                c.BtnText.text     = "IN PROGRESS";
+                c.BtnText.color    = new Color(1f, 1f, 1f, 0.35f);
+                c.Btn.interactable = false;
+            }
+        }
+
+        // ── Claim ─────────────────────────────────────────────────────────────
+        void OnClaimClicked(int index)
+        {
+            var ctx = GameContext.Instance;
+            if (ctx?.Vp == null)
+            {
+                Debug.LogError("[MissionsScreen] GameContext or VP service unavailable.");
+                return;
+            }
+            if (!_system.TryClaim(index, out int reward)) return;
+            ctx.Vp.Add(reward);
+            GameEvents.RaiseToast($"+{reward} VP reward claimed!");
+        }
+
+        // ── Circle sprite: built-in Knob or procedural fallback ───────────────
+        static Sprite GetCircleSprite()
+        {
+            if (s_circle != null) return s_circle;
+            s_circle = Resources.GetBuiltinResource<Sprite>("UI/Skin/Knob.psd");
+            if (s_circle != null) return s_circle;
+            // Procedural anti-aliased white circle
+            const int sz = 64;
+            var tex = new Texture2D(sz, sz, TextureFormat.RGBA32, false);
+            tex.filterMode = FilterMode.Bilinear;
+            float ctr = sz * 0.5f, rad = ctr - 1f;
+            var px = new Color32[sz * sz];
+            for (int y = 0; y < sz; y++)
+            for (int x = 0; x < sz; x++)
+            {
+                float d = Mathf.Sqrt((x - ctr) * (x - ctr) + (y - ctr) * (y - ctr));
+                byte  a = (byte)(Mathf.Clamp01(rad - d + 1f) * 255f);
+                px[y * sz + x] = new Color32(255, 255, 255, a);
+            }
+            tex.SetPixels32(px);
+            tex.Apply();
+            s_circle = Sprite.Create(tex, new Rect(0, 0, sz, sz), new Vector2(0.5f, 0.5f));
+            return s_circle;
+        }
+
+        // ── Ring image: pivot top-center, Radial360 fill ──────────────────────
+        static Image MakeRingImg(string name, Transform parent, Sprite sprite, Color color,
+                                 float fillAmount, Vector2 anchoredPos, float size)
+        {
+            var go = NewGo(name, parent, typeof(Image));
+            var rt = (RectTransform)go.transform;
+            rt.anchorMin        = new Vector2(0.5f, 1f);
+            rt.anchorMax        = new Vector2(0.5f, 1f);
+            rt.pivot            = new Vector2(0.5f, 1f);
+            rt.anchoredPosition = anchoredPos;
+            rt.sizeDelta        = new Vector2(size, size);
+            var img = go.GetComponent<Image>();
+            if (sprite != null) img.sprite = sprite;
+            img.color      = color;
+            img.type       = Image.Type.Filled;
+            img.fillMethod = Image.FillMethod.Radial360;
+            img.fillAmount = fillAmount;
+            return img;
+        }
+
+        // pivot=(0.5,0.5), anchor=(0.5,1) — center-point positioning from card top
+        static void SetCenterRT(RectTransform rt, float x, float y, float w, float h)
+        {
+            rt.anchorMin        = new Vector2(0.5f, 1f);
+            rt.anchorMax        = new Vector2(0.5f, 1f);
+            rt.pivot            = new Vector2(0.5f, 0.5f);
+            rt.anchoredPosition = new Vector2(x, y);
+            rt.sizeDelta        = new Vector2(w, h);
+        }
+
+        // ── Helpers ───────────────────────────────────────────────────────────
+        static GameObject NewGo(string name, Transform parent, params System.Type[] comps)
+        {
+            var go = new GameObject(name, typeof(RectTransform));
+            go.transform.SetParent(parent, false);
+            foreach (var c in comps) go.AddComponent(c);
+            return go;
+        }
+
+        static void Stretch(GameObject go)
+        {
+            var rt = (RectTransform)go.transform;
+            rt.anchorMin = Vector2.zero; rt.anchorMax = Vector2.one;
+            rt.offsetMin = rt.offsetMax = Vector2.zero;
+        }
+
+        static TextMeshProUGUI MakeTmp(Transform parent, string name, string text,
+            float size, FontStyles style, Color color)
+        {
+            var go = new GameObject(name, typeof(RectTransform));
+            go.transform.SetParent(parent, false);
+            var tmp = go.AddComponent<TextMeshProUGUI>();
+            tmp.text               = text;
+            tmp.fontSize           = size;
+            tmp.fontStyle          = style;
+            tmp.color              = color;
+            tmp.enableWordWrapping = false;
+            tmp.overflowMode       = TextOverflowModes.Ellipsis;
+            return tmp;
+        }
+    }
+}

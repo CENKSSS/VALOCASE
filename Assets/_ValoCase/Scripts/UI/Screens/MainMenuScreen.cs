@@ -37,7 +37,9 @@ namespace ValoCase.UI.Screens
             if (settingsButton != null) settingsButton.onClick.AddListener(() => navigator?.Navigate(ScreenType.Settings));
             if (weaponsButton != null) weaponsButton.onClick.AddListener(() => navigator?.Navigate(ScreenType.Weapons));
             if (upgradeButton != null) upgradeButton.onClick.AddListener(() => navigator?.Navigate(ScreenType.Upgrade));
-            if (caseBattleButton != null) caseBattleButton.onClick.AddListener(() => navigator?.Navigate(ScreenType.CaseBattle));
+            // ScreenType.CaseBattle legacy screen is retired. The button now goes
+            // directly to the new Lobby flow (same destination as the BATTLE tab).
+            if (caseBattleButton != null) caseBattleButton.onClick.AddListener(() => navigator?.Navigate(ScreenType.CaseBattleLobby));
             if (earnVpButton     != null) earnVpButton.onClick.AddListener(() => navigator?.Navigate(ScreenType.EarnVp));
             if (dailyRewardButton != null) dailyRewardButton.onClick.AddListener(() => dailyRewardPopup?.TryShow());
         }

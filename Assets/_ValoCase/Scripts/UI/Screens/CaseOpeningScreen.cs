@@ -49,16 +49,36 @@ namespace ValoCase.UI.Screens
         bool _backBtnCreated;
         GameObject _runtimeBackBtn;
 
+        // ── Mobile UI redesign (revertible) ──────────────────────────────────
+        bool _caseOpeningUiStyled;
+        bool _heroMovedUp;
+        GameObject _spinFocusFrame;
+
         // ── Visual-only neon pulse / burst (no gameplay logic) ───────────────
         Image      _spinOverlayBg;
         Coroutine  _spinPulseCoroutine;
+
+        // ── Premium dark decoration protection list ──────────────────────────────
+        readonly List<Image> _decorImages = new();
+        bool _decorBuilt;
 
         // ── Lifecycle ────────────────────────────────────────────────────────
 
         void Awake()
         {
+            Debug.Log("[OPEN_BTN_DEBUG] Awake");
+            Debug.Log("[OPEN_BTN_DEBUG] openButton null=" + (openButton == null));
+            Debug.Log("[OPEN_BTN_DEBUG] flow null=" + (flow == null));
+            Debug.Log("[OPEN_BTN_DEBUG] navigator null=" + (navigator == null));
+
             if (backButton != null) backButton.onClick.AddListener(OnBack);
-            if (openButton != null) openButton.onClick.AddListener(OpenSelected);
+            if (openButton != null)
+            {
+                openButton.onClick.AddListener(OpenSelected);
+                Debug.Log("[OPEN_BTN_DEBUG] listener added to openButton");
+                // Separate RAW listener — proves whether the click reaches the button at all.
+                openButton.onClick.AddListener(() => Debug.Log("[OPEN_BTN_DEBUG] RAW BUTTON CLICK RECEIVED"));
+            }
             GameEvents.OnCaseOpened += OnCaseOpened;
             EnsureBackButton();
         }
@@ -74,15 +94,33 @@ namespace ValoCase.UI.Screens
             HideSkipButton();
             // Reset panel scale in case a reveal animation was interrupted on previous visit.
             if (caseDisplayPanel != null) caseDisplayPanel.transform.localScale = Vector3.one;
+            ApplyDarkBackground();
+            BuildNeonDecorations();
+            ApplyPremiumDarkTheme();
             AlignOpenButtonAndPrice();
+            ApplyCaseOpeningMobileLayout();
+            EnsureOpenButtonClickable();
             BuildCaseList();
             RefreshWallet();
             ShowSpinOverlay(false);
             GameEvents.OnVpChanged += OnVpChanged;
 
+            // Hide the CaseTabs selector strip — case is already chosen from Shop.
+            HideCaseTabsSelector();
+
+            // Hierarchy dump + stray-image scan (debug only, no side-effects).
+            DebugCaseOpeningHierarchy();
+            HideTopStraySkinImages();
+
             // Re-assert top sibling every time the screen is shown so no panel can cover the button.
             if (_runtimeBackBtn != null)
                 _runtimeBackBtn.transform.SetAsLastSibling();
+
+            Debug.Log("[OPEN_BTN_DEBUG] OnShown");
+            Debug.Log("[OPEN_BTN_DEBUG] selected=" + (_selected != null ? _selected.DisplayName : "NULL"));
+            Debug.Log("[OPEN_BTN_DEBUG] openButton active=" + (openButton != null && openButton.gameObject.activeInHierarchy));
+            Debug.Log("[OPEN_BTN_DEBUG] openButton interactable=" + (openButton != null && openButton.interactable));
+            DebugOpenButtonRaycast();
         }
 
         // Centers the OPEN CASE button under the case icon and parks the price
@@ -97,24 +135,44 @@ namespace ValoCase.UI.Screens
             var btnRt = openButton.GetComponent<RectTransform>();
             if (btnRt == null) return;
 
-            // Center the button under the icon.
+            // Mobile: a single large, thumb-friendly action button near the bottom.
             btnRt.anchorMin = new Vector2(0.5f, 1f);
             btnRt.anchorMax = new Vector2(0.5f, 1f);
             btnRt.pivot     = new Vector2(0.5f, 1f);
-            btnRt.anchoredPosition = new Vector2(0f, -370f);
+            btnRt.sizeDelta = new Vector2(360f, 58f);
+            btnRt.anchoredPosition = new Vector2(0f, -390f);
 
-            // Place the price label centered, just below the button.
+            // Dark-red fill + red neon outline to match the rest of the theme.
+            var btnImg = openButton.GetComponent<Image>();
+            if (btnImg != null) btnImg.color = new Color(0.10f, 0.03f, 0.06f, 1f);
+            if (openButton.GetComponent<Outline>() == null)
+            {
+                var btnOutline = openButton.gameObject.AddComponent<Outline>();
+                btnOutline.effectColor    = new Color(1f, 0.275f, 0.333f, 0.9f);
+                btnOutline.effectDistance = new Vector2(1.5f, -1.5f);
+            }
+
+            var btnLabel = openButton.GetComponentInChildren<TextMeshProUGUI>(true);
+            if (btnLabel != null)
+            {
+                btnLabel.text     = "KASAYI AÇ";
+                btnLabel.fontStyle = FontStyles.Bold;
+                btnLabel.color     = new Color(0.961f, 0.961f, 0.961f, 1f);
+            }
+
+            // Price label sits fully ABOVE the button (no overlap) and must never
+            // intercept clicks meant for the button.
             var priceRt = priceLabel.rectTransform;
             priceRt.anchorMin = new Vector2(0.5f, 1f);
             priceRt.anchorMax = new Vector2(0.5f, 1f);
             priceRt.pivot     = new Vector2(0.5f, 1f);
-            var btnHeight = btnRt.sizeDelta.y;
-            var gap = 8f;
-            priceRt.anchoredPosition = new Vector2(0f, btnRt.anchoredPosition.y - btnHeight - gap);
             priceRt.sizeDelta = new Vector2(320f, 40f);
+            // Button top edge is at y=-390 (top pivot). Park the price a clear gap above it.
+            priceRt.anchoredPosition = new Vector2(0f, -344f);
             priceLabel.alignment = TMPro.TextAlignmentOptions.Center;
             priceLabel.fontStyle = TMPro.FontStyles.Bold;
             priceLabel.color = new Color(0.7f, 1f, 0.7f);
+            priceLabel.raycastTarget = false;
 
             _openButtonAligned = true;
         }
@@ -126,6 +184,13 @@ namespace ValoCase.UI.Screens
             flow?.Skip();
             HideSkipButton();
             if (caseDisplayPanel != null) caseDisplayPanel.transform.localScale = Vector3.one;
+            // Mobile UI: tear down focus frame + reset any fade left from the reveal.
+            if (_spinFocusFrame != null) _spinFocusFrame.SetActive(false);
+            if (caseDisplayPanel != null)
+            {
+                var cg = caseDisplayPanel.GetComponent<CanvasGroup>();
+                if (cg != null) cg.alpha = 1f;
+            }
             GameEvents.OnVpChanged -= OnVpChanged;
         }
 
@@ -305,6 +370,9 @@ namespace ValoCase.UI.Screens
                 first = ctx.Content.Cases.FirstOrDefault(c => c.CaseId == pending);
             if (first == null) first = _selected ?? ctx.Content.Cases.FirstOrDefault();
             SelectCase(first);
+            // After SelectCase sets _selected, refresh the selector layout
+            // so it fits all non-selected cases in a single row.
+            RefreshCaseSelectorLayout();
         }
 
         void SelectCase(CaseDefinitionSO caseDef)
@@ -312,6 +380,9 @@ namespace ValoCase.UI.Screens
             _selected = caseDef;
             foreach (var item in _caseItems)
                 item.SetSelected(item.Case == caseDef);
+
+            // Show only non-selected cases in the top selector strip.
+            RefreshCaseSelectorLayout();
 
             if (caseDef == null) return;
 
@@ -332,7 +403,10 @@ namespace ValoCase.UI.Screens
             }
 
             if (selectedCaseLabel != null)
-                selectedCaseLabel.text = caseDef.DisplayName.ToUpperInvariant();
+            {
+                var dn = !string.IsNullOrEmpty(caseDef.DisplayName) ? caseDef.DisplayName : caseDef.CaseId ?? "";
+                selectedCaseLabel.text = dn.ToUpperInvariant();
+            }
 
             var price = ctx?.Shop?.GetDiscountedPrice(caseDef) ?? caseDef.VpPrice;
             if (priceLabel != null) priceLabel.text = $"{price:N0} VP";
@@ -344,40 +418,485 @@ namespace ValoCase.UI.Screens
         void RefreshOpenButton()
         {
             if (openButton == null) return;
-            openButton.interactable =
-                _selected != null &&
-                (flow == null || !flow.SessionActive) &&
-                GameContext.Instance?.CaseOpening?.CanOpen(_selected) == true;
+
+            {
+                var ctx     = GameContext.Instance;
+                var price   = _selected != null ? (ctx?.Shop?.GetDiscountedPrice(_selected) ?? _selected.VpPrice) : -1;
+                var balance = ctx?.Vp?.Balance ?? -1;
+                var canOpenDbg = _selected != null && (flow == null || !flow.SessionActive) && ctx?.CaseOpening?.CanOpen(_selected) == true;
+
+                Debug.Log("[OPEN_BTN_DEBUG] RefreshOpenButton");
+                Debug.Log("[OPEN_BTN_DEBUG] selected null=" + (_selected == null));
+                Debug.Log("[OPEN_BTN_DEBUG] selected id=" + (_selected != null ? _selected.CaseId : "NULL"));
+                Debug.Log("[OPEN_BTN_DEBUG] selected name=" + (_selected != null ? _selected.DisplayName : "NULL"));
+                Debug.Log("[OPEN_BTN_DEBUG] flow active=" + (flow != null && flow.SessionActive));
+                Debug.Log("[OPEN_BTN_DEBUG] balance=" + balance);
+                Debug.Log("[OPEN_BTN_DEBUG] price=" + price);
+                Debug.Log("[OPEN_BTN_DEBUG] canOpen=" + canOpenDbg);
+                Debug.Log("[OPEN_BTN_DEBUG] button active=" + openButton.gameObject.activeInHierarchy);
+                Debug.Log("[OPEN_BTN_DEBUG] button interactable before=" + openButton.interactable);
+            }
+
+            bool sessionBusy = flow != null && flow.SessionActive;
+            bool canOpen      = GameContext.Instance?.CaseOpening?.CanOpen(_selected) == true;
+            bool insufficient = _selected != null && !sessionBusy && !canOpen;
+
+            openButton.interactable = _selected != null && !sessionBusy && canOpen;
+
+            var btnLabel = openButton.GetComponentInChildren<TextMeshProUGUI>(true);
+            if (btnLabel != null)
+                btnLabel.text = insufficient ? "YETERSİZ VP" : "KASAYI AÇ";
+
+            Debug.Log($"[CASE_OPEN_BTN] selected={(_selected != null ? _selected.CaseId : "NULL")} " +
+                      $"sessionBusy={sessionBusy} canOpen={canOpen} interactable={openButton.interactable}");
         }
 
         // ── Drop List ─────────────────────────────────────────────────────────
 
         void BuildDropList(CaseDefinitionSO caseDef)
         {
+            // Clear previously instantiated skin items.
             foreach (var d in _dropItems)
                 if (d != null) Destroy(d.gameObject);
             _dropItems.Clear();
 
-            if (caseDef?.DropTable == null || dropListRoot == null || dropItemPrefab == null) return;
+            if (caseDef == null)           { Debug.LogWarning("[DROP_GRID] caseDef NULL"); return; }
+            if (caseDef.DropTable == null) { Debug.LogWarning("[DROP_GRID] DropTable NULL for " + caseDef.DisplayName); return; }
+            if (dropListRoot == null)      { Debug.LogWarning("[DROP_GRID] dropListRoot NULL"); return; }
 
-            var ctx      = GameContext.Instance;
-            var visuals  = ctx?.RarityVisuals;
-            var sellMult = ctx?.Config?.SellMultiplier ?? 1f;
-            var table    = caseDef.DropTable;
+            // Disable root layout groups so they don't fight with the table container.
+            var rootGo = dropListRoot.gameObject;
+            var vlg = rootGo.GetComponent<VerticalLayoutGroup>();   if (vlg != null) vlg.enabled = false;
+            var hlg = rootGo.GetComponent<HorizontalLayoutGroup>(); if (hlg != null) hlg.enabled = false;
+            var glg = rootGo.GetComponent<GridLayoutGroup>();       if (glg != null) glg.enabled = false;
+            var csf = rootGo.GetComponent<ContentSizeFitter>();     if (csf != null) csf.enabled = false;
 
-            var drops = table.PossibleDrops
-                .Where(d => d.skin != null)
-                .OrderByDescending(d => (int)d.skin.Rarity)
-                .ThenBy(d => d.skin.SkinName)
-                .ToList();
+            HideTopStraySkinImages();
+            BuildRateTable(caseDef);
+        }
 
-            foreach (var drop in drops)
+        // ── CaseTabs selector hide ───────────────────────────────────────────
+        // The case is already selected from the Shop screen, so the top
+        // CaseTabs strip (Viewport → Content → case items with Icon PNGs) must
+        // not be visible inside CaseOpeningScreen. We walk up from caseListRoot
+        // to find the "CaseTabs" ancestor and disable it; if not found we fall
+        // back to hiding caseListRoot itself. Safe to call on every OnShown.
+        void HideCaseTabsSelector()
+        {
+            Debug.Log("[CASE_TABS] caseListRoot=" + (caseListRoot != null ? caseListRoot.name : "NULL"));
+
+            if (caseListRoot == null)
             {
-                var chance = CalculateDropChance(table, drop);
-                var item   = Instantiate(dropItemPrefab, dropListRoot);
-                item.Bind(drop.skin, chance, visuals, sellMult);
-                _dropItems.Add(item);
+                Debug.LogWarning("[CASE_TABS] caseListRoot is null — nothing to hide");
+                return;
             }
+
+            // Walk up the parent chain looking for an ancestor named "CaseTabs".
+            Transform found  = null;
+            var       cursor = caseListRoot.parent;
+            while (cursor != null)
+            {
+                if (cursor.name == "CaseTabs")
+                {
+                    found = cursor;
+                    break;
+                }
+                cursor = cursor.parent;
+            }
+
+            if (found != null)
+            {
+                Debug.Log("[CASE_TABS] found CaseTabs=" + found.name);
+                if (found.gameObject.activeSelf) found.gameObject.SetActive(false);
+                Debug.Log("[CASE_TABS] CaseTabs hidden");
+            }
+            else
+            {
+                Debug.Log("[CASE_TABS] CaseTabs not found in parent chain — fallback: caseListRoot hidden");
+                if (caseListRoot.gameObject.activeSelf) caseListRoot.gameObject.SetActive(false);
+            }
+        }
+
+        // ── Runtime hierarchy dump ───────────────────────────────────────────
+        // Call once in OnShown — reveals every object so we can track stray images.
+        void DebugCaseOpeningHierarchy()
+        {
+            Debug.Log("[CASE_DEBUG] caseListRoot="    + (caseListRoot    != null ? caseListRoot.name    : "NULL"));
+            Debug.Log("[CASE_DEBUG] dropListRoot="    + (dropListRoot    != null ? dropListRoot.name    : "NULL"));
+            Debug.Log("[CASE_DEBUG] caseDisplayPanel="+ (caseDisplayPanel!= null ? caseDisplayPanel.name: "NULL"));
+            Debug.Log("[CASE_DEBUG] spinOverlay="     + (spinOverlay     != null ? spinOverlay.name     : "NULL"));
+
+            DumpTransform(transform, "CaseOpening");
+        }
+
+        static void DumpTransform(Transform t, string path)
+        {
+            if (t == null) return;
+
+            var rt  = t as RectTransform;
+            var img = t.GetComponent<Image>();
+            var tmp = t.GetComponent<TextMeshProUGUI>();
+
+            var sb = new System.Text.StringBuilder();
+            sb.Append("[CASE_HIERARCHY] path=").Append(path);
+            sb.Append(" active=").Append(t.gameObject.activeSelf);
+            sb.Append(" activeH=").Append(t.gameObject.activeInHierarchy);
+            sb.Append(" sibling=").Append(t.GetSiblingIndex());
+            if (rt != null)
+            {
+                sb.Append(" pos=(").Append(rt.anchoredPosition.x.ToString("F0")).Append(",").Append(rt.anchoredPosition.y.ToString("F0")).Append(")");
+                sb.Append(" size=(").Append(rt.sizeDelta.x.ToString("F0")).Append(",").Append(rt.sizeDelta.y.ToString("F0")).Append(")");
+                sb.Append(" ancMin=(").Append(rt.anchorMin.x.ToString("F2")).Append(",").Append(rt.anchorMin.y.ToString("F2")).Append(")");
+                sb.Append(" ancMax=(").Append(rt.anchorMax.x.ToString("F2")).Append(",").Append(rt.anchorMax.y.ToString("F2")).Append(")");
+            }
+            if (img != null)
+            {
+                sb.Append(" image=true");
+                sb.Append(" sprite=").Append(img.sprite != null ? img.sprite.name : "null");
+                sb.Append(" imgEnabled=").Append(img.enabled);
+                sb.Append(" imgColor=(").Append(img.color.r.ToString("F2")).Append(",").Append(img.color.g.ToString("F2")).Append(",").Append(img.color.b.ToString("F2")).Append(",").Append(img.color.a.ToString("F2")).Append(")");
+                sb.Append(" raycast=").Append(img.raycastTarget);
+            }
+            if (tmp != null)
+            {
+                sb.Append(" tmp=true text=").Append(tmp.text.Length > 30 ? tmp.text.Substring(0, 30) : tmp.text);
+            }
+            Debug.Log(sb.ToString());
+
+            for (int i = 0; i < t.childCount; i++)
+                DumpTransform(t.GetChild(i), path + "/" + t.GetChild(i).name);
+        }
+
+        // ── Stray skin-preview hide ──────────────────────────────────────────
+        // Logs every Image candidate that might be a stray skin preview,
+        // then hides the confirmed ones. Safe to call repeatedly.
+        void HideTopStraySkinImages()
+        {
+            int hidden = 0;
+
+            // Protected roots — Images inside these are intentional.
+            bool IsProtected(Transform t)
+            {
+                if (caseIconDisplay != null      && (t == caseIconDisplay.transform      || t.IsChildOf(caseIconDisplay.transform)))      return true;
+                if (caseThemeBg     != null      && (t == caseThemeBg.transform          || t.IsChildOf(caseThemeBg.transform)))           return true;
+                if (openButton      != null      && t.IsChildOf(openButton.transform))                                                      return true;
+                if (skipButton      != null      && t.IsChildOf(skipButton.transform))                                                      return true;
+                if (_runtimeBackBtn != null      && t.IsChildOf(_runtimeBackBtn.transform))                                                 return true;
+                if (_spinFocusFrame != null      && t.IsChildOf(_spinFocusFrame.transform))                                                 return true;
+                if (spinOverlay     != null      && t.IsChildOf(spinOverlay.transform))                                                     return true;
+                // Case list item icons are intentional (they show the case image).
+                if (t.GetComponent<CaseListItemView>() != null) return true;
+                if (t.GetComponentInParent<CaseListItemView>() != null) return true;
+                // SkinWinPopup
+                var swp = GetComponentInChildren<SkinWinPopup>(true);
+                if (swp != null && t.IsChildOf(swp.transform)) return true;
+                return false;
+            }
+
+            foreach (var img in GetComponentsInChildren<Image>(true))
+            {
+                if (img == null) continue;
+                if (IsProtected(img.transform)) continue;
+
+                var imgTf = img.transform;
+                var rt = imgTf as RectTransform ?? imgTf.GetComponent<RectTransform>();
+                var pos  = rt != null ? rt.anchoredPosition : Vector2.zero;
+                var size = rt != null ? rt.sizeDelta        : Vector2.zero;
+
+                // Log every Image with a sprite as a candidate.
+                if (img.sprite != null)
+                {
+                    Debug.Log("[CASE_PREVIEW_CANDIDATE] path=" + GetPath(imgTf) +
+                              " sprite=" + img.sprite.name +
+                              " pos=(" + pos.x.ToString("F0") + "," + pos.y.ToString("F0") + ")" +
+                              " size=(" + size.x.ToString("F0") + "," + size.y.ToString("F0") + ")" +
+                              " active=" + img.gameObject.activeInHierarchy);
+                }
+
+                // Auto-hide confirmed stray skin cards: DropItemView or ReelItemView parent.
+                bool isDropItem = imgTf.GetComponentInParent<DropItemView>()  != null;
+                bool isReelItem = imgTf.GetComponentInParent<ReelItemView>()  != null;
+                if ((isDropItem || isReelItem) && img.gameObject.activeSelf)
+                {
+                    var root = isDropItem
+                        ? (Transform)imgTf.GetComponentInParent<DropItemView>().transform
+                        : (Transform)imgTf.GetComponentInParent<ReelItemView>().transform;
+                    root.gameObject.SetActive(false);
+                    Debug.Log("[CASE_PREVIEW_HIDE] hidden path=" + GetPath(root) +
+                              " sprite=" + (img.sprite != null ? img.sprite.name : "null"));
+                    hidden++;
+                }
+            }
+
+            if (hidden > 0) Debug.Log("[CASE_UI_FIX] top stray previews hidden count=" + hidden);
+            else             Debug.Log("[CASE_PREVIEW] no confirmed stray skin previews found (count=0). Check CANDIDATE logs above.");
+        }
+
+        static string GetPath(Transform t)
+        {
+            if (t == null) return "null";
+            var parts = new System.Collections.Generic.List<string>();
+            var cur = t;
+            while (cur != null) { parts.Add(cur.name); cur = cur.parent; }
+            parts.Reverse();
+            return string.Join("/", parts);
+        }
+
+        // ── KASA İÇERİR rarity table ────────────────────────────────────────
+        // Built directly inside caseDisplayPanel (NOT inside DropScroll) so the
+        // table is never clipped by the ScrollRect viewport.
+        // Destroys and recreates all children on every call — guarantees exactly
+        // 5 rarity rows regardless of which case was shown before.
+        void BuildRateTable(CaseDefinitionSO caseDef)
+        {
+            if (caseDef?.DropTable == null) return;
+
+            // ── Read rates ────────────────────────────────────────────────────
+            float selectRate    = GetRarityRate(caseDef, SkinRarity.Select);
+            float deluxeRate    = GetRarityRate(caseDef, SkinRarity.Deluxe);
+            float premiumRate   = GetRarityRate(caseDef, SkinRarity.Premium);
+            float exclusiveRate = GetRarityRate(caseDef, SkinRarity.Exclusive);
+            float ultraRate     = GetRarityRate(caseDef, SkinRarity.Ultra);
+
+            Debug.Log("[CASE_RARITY_TABLE] rebuilding for=" + caseDef.DisplayName);
+            Debug.Log("[CASE_RARITY_TABLE] SELECT="    + selectRate);
+            Debug.Log("[CASE_RARITY_TABLE] DELUXE="    + deluxeRate);
+            Debug.Log("[CASE_RARITY_TABLE] PREMIUM="   + premiumRate);
+            Debug.Log("[CASE_RARITY_TABLE] EXCLUSIVE=" + exclusiveRate);
+            Debug.Log("[CASE_RARITY_TABLE] ULTRA="     + ultraRate);
+
+            // ── Choose parent — caseDisplayPanel avoids DropScroll clipping ──
+            var tableParent = caseDisplayPanel != null
+                ? caseDisplayPanel.transform
+                : dropListRoot;
+            if (tableParent == null) { Debug.LogWarning("[CASE_RARITY_TABLE] no valid parent"); return; }
+
+            // Hide the prefab-baked header and DropScroll — our table replaces them.
+            var nativeHeader = tableParent.Find("ContainsHeader");
+            if (nativeHeader != null && nativeHeader.gameObject.activeSelf)
+                nativeHeader.gameObject.SetActive(false);
+            var nativeDropScroll = tableParent.Find("DropScroll");
+            if (nativeDropScroll != null && nativeDropScroll.gameObject.activeSelf)
+                nativeDropScroll.gameObject.SetActive(false);
+
+            // Destroy any stale RateTable that was previously built inside dropListRoot.
+            if (dropListRoot != null)
+            {
+                var oldInRoot = dropListRoot.Find("RateTable");
+                if (oldInRoot != null) Destroy(oldInRoot.gameObject);
+            }
+
+            // ── Find or create the table container ────────────────────────────
+            const string containerName = "RateTable";
+            var containerTf = tableParent.Find(containerName);
+            int oldChildCount = containerTf != null ? containerTf.childCount : 0;
+            Debug.Log("[CASE_RARITY_TABLE] rows before=" + oldChildCount);
+
+            if (containerTf == null)
+            {
+                var cGo = new GameObject(containerName, typeof(RectTransform), typeof(Image));
+                cGo.transform.SetParent(tableParent, false);
+                var cRt = (RectTransform)cGo.transform;
+                // Anchored to top edge of caseDisplayPanel; positioned below the open button.
+                cRt.anchorMin        = new Vector2(0.04f, 1f);
+                cRt.anchorMax        = new Vector2(0.96f, 1f);
+                cRt.pivot            = new Vector2(0.5f, 1f);
+                cRt.anchoredPosition = new Vector2(0f, -458f);
+                // title 26 + 5 rows×22 + padding(10+10) + spacing(4×5) = 176
+                cRt.sizeDelta        = new Vector2(0f, 176f);
+                var bg = cGo.GetComponent<Image>();
+                bg.color         = PanelDark;
+                bg.raycastTarget = false;
+                var tblOutline = cGo.AddComponent<Outline>();
+                tblOutline.effectColor    = new Color(1f, 0.275f, 0.333f, 0.5f);
+                tblOutline.effectDistance = new Vector2(1f, -1f);
+                var vlg = cGo.AddComponent<VerticalLayoutGroup>();
+                vlg.childControlWidth      = true;
+                vlg.childForceExpandWidth  = true;
+                vlg.childControlHeight     = false;
+                vlg.childForceExpandHeight = false;
+                vlg.spacing = 4f;
+                vlg.padding = new RectOffset(10, 10, 10, 10);
+                containerTf = cGo.transform;
+            }
+            else
+            {
+                // Destroy all stale rows so we always rebuild exactly 5.
+                for (int k = containerTf.childCount - 1; k >= 0; k--)
+                {
+                    var ch = containerTf.GetChild(k);
+                    if (ch != null) Destroy(ch.gameObject);
+                }
+            }
+
+            // ── Title ─────────────────────────────────────────────────────────
+            MakeRateTableRow(containerTf, "Title", "KASA İÇERİR", "",
+                             Color.white, Color.white, isTitle: true, height: 26f);
+
+            // ── 5 Rarity rows (always created, never skipped) ─────────────────
+            float[] rates = { selectRate, deluxeRate, premiumRate, exclusiveRate, ultraRate };
+            for (int i = 0; i < k_RarityOrder.Length; i++)
+                MakeRateTableRow(containerTf, "Row_" + i,
+                                 k_RarityNames[i], "%" + rates[i].ToString("F0"),
+                                 k_RarityColors[i], new Color(0.82f, 0.86f, 0.92f, 1f),
+                                 isTitle: false, height: 22f);
+
+            int newChildCount = containerTf.childCount;
+            Debug.Log("[CASE_RARITY_TABLE] rows after=" + newChildCount);
+            Debug.Log("[CASE_RARITY_TABLE] selected case=" + caseDef.DisplayName);
+            Debug.Log("[CASE_UI_FIX] rarity table fixed with 5 rows");
+        }
+
+        // Returns the weight% for a rarity from the drop table (0 when missing).
+        static float GetRarityRate(CaseDefinitionSO caseDef, SkinRarity rarity) =>
+            caseDef.DropTable?.RarityWeights?
+                .FirstOrDefault(w => w.rarity == rarity)?.weightPercent ?? 0f;
+
+        // Creates one row inside the rate table container.
+        // isTitle = true  → single centred label spanning full width.
+        // isTitle = false → left rarity-name label + right pct label side by side.
+        static void MakeRateTableRow(Transform parent, string rowName,
+                                     string leftText, string rightText,
+                                     Color leftColor, Color rightColor,
+                                     bool isTitle, float height)
+        {
+            var row = new GameObject(rowName, typeof(RectTransform));
+            row.transform.SetParent(parent, false);
+            ((RectTransform)row.transform).sizeDelta = new Vector2(0f, height);
+            var rle = row.AddComponent<LayoutElement>();
+            rle.preferredHeight = height;
+            rle.minHeight       = height;
+
+            if (isTitle)
+            {
+                var lbl = new GameObject("Label", typeof(RectTransform));
+                lbl.transform.SetParent(row.transform, false);
+                var lrt = (RectTransform)lbl.transform;
+                lrt.anchorMin = Vector2.zero;
+                lrt.anchorMax = Vector2.one;
+                lrt.offsetMin = Vector2.zero;
+                lrt.offsetMax = Vector2.zero;
+                var t = lbl.AddComponent<TextMeshProUGUI>();
+                t.text              = leftText;
+                t.fontSize          = 13f;
+                t.fontStyle         = FontStyles.Bold;
+                t.color             = leftColor;
+                t.alignment         = TextAlignmentOptions.Center;
+                t.raycastTarget     = false;
+                t.enableWordWrapping = false;
+            }
+            else
+            {
+                var hlg = row.AddComponent<HorizontalLayoutGroup>();
+                hlg.childControlWidth      = true;
+                hlg.childForceExpandWidth  = true;
+                hlg.childControlHeight     = false;
+                hlg.padding = new RectOffset(2, 2, 0, 0);
+
+                // Left — rarity name in its rarity colour
+                var nGo = new GameObject("Name", typeof(RectTransform));
+                nGo.transform.SetParent(row.transform, false);
+                ((RectTransform)nGo.transform).sizeDelta = new Vector2(0f, height);
+                nGo.AddComponent<LayoutElement>().flexibleWidth = 2f;
+                var nTmp = nGo.AddComponent<TextMeshProUGUI>();
+                nTmp.text              = leftText;
+                nTmp.fontSize          = 11f;
+                nTmp.color             = leftColor;
+                nTmp.alignment         = TextAlignmentOptions.Left;
+                nTmp.raycastTarget     = false;
+                nTmp.enableWordWrapping = false;
+
+                // Right — percentage in light/neutral colour, bold
+                var pGo = new GameObject("Pct", typeof(RectTransform));
+                pGo.transform.SetParent(row.transform, false);
+                ((RectTransform)pGo.transform).sizeDelta = new Vector2(0f, height);
+                pGo.AddComponent<LayoutElement>().flexibleWidth = 1f;
+                var pTmp = pGo.AddComponent<TextMeshProUGUI>();
+                pTmp.text              = rightText;
+                pTmp.fontSize          = 11f;
+                pTmp.fontStyle         = FontStyles.Bold;
+                pTmp.color             = rightColor;
+                pTmp.alignment         = TextAlignmentOptions.Right;
+                pTmp.raycastTarget     = false;
+                pTmp.enableWordWrapping = false;
+            }
+        }
+
+        // Hides the currently selected case in the top strip (it's shown in the
+        // hero panel) and makes the remaining cases fill the strip evenly.
+        void RefreshCaseSelectorLayout()
+        {
+            if (caseListRoot == null || _caseItems.Count == 0) return;
+
+            // Show all non-selected cases; hide the selected one.
+            int visibleCount = 0;
+            foreach (var item in _caseItems)
+            {
+                if (item == null) continue;
+                bool isSelected = item.Case == _selected;
+                item.gameObject.SetActive(!isSelected);
+                if (!isSelected) visibleCount++;
+            }
+            Debug.Log("[CASE_SELECTOR] visible other cases=" + visibleCount);
+            if (visibleCount == 0) return;
+
+            // Ensure a single HorizontalLayoutGroup that distributes items equally.
+            var rootGo = caseListRoot.gameObject;
+            var existVlg = rootGo.GetComponent<VerticalLayoutGroup>(); if (existVlg != null) existVlg.enabled = false;
+            var existGlg = rootGo.GetComponent<GridLayoutGroup>();     if (existGlg != null) existGlg.enabled = false;
+            var selectorHlg = rootGo.GetComponent<HorizontalLayoutGroup>();
+            if (selectorHlg == null) selectorHlg = rootGo.AddComponent<HorizontalLayoutGroup>();
+            selectorHlg.childControlWidth     = true;
+            selectorHlg.childForceExpandWidth  = true;
+            selectorHlg.childControlHeight    = false;
+            selectorHlg.childForceExpandHeight = false;
+            selectorHlg.spacing = 3f;
+            selectorHlg.padding = new RectOffset(4, 4, 2, 2);
+
+            // Shrink labels so they fit in narrow columns.
+            foreach (var item in _caseItems)
+            {
+                if (item == null || !item.gameObject.activeSelf) continue;
+                foreach (var tmp in item.GetComponentsInChildren<TextMeshProUGUI>(true))
+                {
+                    tmp.enableAutoSizing   = false;
+                    tmp.fontSize           = 9f;
+                    tmp.enableWordWrapping = true;
+                    tmp.overflowMode       = TextOverflowModes.Truncate;
+                }
+            }
+
+            Canvas.ForceUpdateCanvases();
+            var rootRt = caseListRoot as RectTransform;
+            float containerWidth = (rootRt != null && rootRt.rect.width > 0f) ? rootRt.rect.width : Screen.width;
+            float itemWidth      = (containerWidth - selectorHlg.padding.horizontal - selectorHlg.spacing * (visibleCount - 1)) / visibleCount;
+            Debug.Log("[CASE_SELECTOR] item width=" + itemWidth);
+        }
+
+        // Builds "Select %65 | Deluxe %15 | ..." from the drop table's rarity weights.
+        // Reads live data — no hardcoded values, so every case shows its own rates.
+        static string BuildRateText(CaseDropTableSO table)
+        {
+            if (table?.RarityWeights == null || table.RarityWeights.Count == 0) return "—";
+
+            var order = new[] { SkinRarity.Select, SkinRarity.Deluxe, SkinRarity.Premium, SkinRarity.Exclusive, SkinRarity.Ultra };
+            var parts = new System.Text.StringBuilder();
+            bool first = true;
+            foreach (var rarity in order)
+            {
+                var entry = table.RarityWeights.FirstOrDefault(r => r.rarity == rarity);
+                if (entry == null || entry.weightPercent <= 0f) continue;
+                if (!first) parts.Append(" | ");
+                first = false;
+                var name = rarity == SkinRarity.Select    ? "Select"
+                         : rarity == SkinRarity.Deluxe    ? "Deluxe"
+                         : rarity == SkinRarity.Premium   ? "Premium"
+                         : rarity == SkinRarity.Exclusive ? "Exclusive"
+                         : rarity == SkinRarity.Ultra     ? "Ultra"
+                         : rarity.ToString();
+                parts.Append(name).Append(" %").Append(entry.weightPercent.ToString("F0"));
+            }
+            return parts.Length > 0 ? parts.ToString() : "—";
         }
 
         static float CalculateDropChance(CaseDropTableSO table, SkinDropEntry entry)
@@ -400,13 +919,24 @@ namespace ValoCase.UI.Screens
 
         void OpenSelected()
         {
-            if (_selected == null || flow == null || flow.SessionActive) return;
-            Debug.Log("[CASE] New open clicked — clearing previous result and starting fresh spin");
+            Debug.Log("[CASE_OPEN_CLICK] OpenSelected CALLED");
+            Debug.Log("[CASE_OPEN_CLICK] selected=" + (_selected != null ? _selected.DisplayName : "NULL"));
+            Debug.Log("[CASE_OPEN_CLICK] flow null=" + (flow == null));
+            Debug.Log("[CASE_OPEN_CLICK] flow active=" + (flow != null && flow.SessionActive));
+            Debug.Log("[CASE_OPEN_CLICK] canOpen=" + GameContext.Instance?.CaseOpening?.CanOpen(_selected));
 
-            // Önceki result state'ini temizle — panel'i tekrar kasa bilgisiyle doldur
+            // Safe guards — never proceed (or crash) on a bad state.
+            if (_selected == null) return;
+            if (flow == null) return;
+            if (flow.SessionActive) return;
+            if (GameContext.Instance?.CaseOpening?.CanOpen(_selected) != true) { RefreshOpenButton(); return; }
+
+            Debug.Log("[CASE_OPEN_CLICK] starting spin");
+
+            // The case is already selected and its drop list is already built —
+            // do NOT rebuild here (that re-ran EnsureDropGridLayout and crashed).
+            // Just kick off the spin.
             _showingResult = false;
-            SelectCase(_selected);   // icon, label, fiyat ve drop list sıfırlanır
-
             if (openButton != null) openButton.interactable = false;
             HideSkipButton();
             ShowSpinOverlay(true);
@@ -535,42 +1065,36 @@ namespace ValoCase.UI.Screens
             if (openButton != null) openButton.gameObject.SetActive(false);
         }
 
-        // Scale pop: 0.55 → 1.10 (ease-out) → 1.00 (settle).
+        // Mobile reveal: gentle fade + subtle scale (0.94 → 1.00). No overshoot.
         IEnumerator PanelPopAnimation()
         {
             if (caseDisplayPanel == null) yield break;
             var rt = caseDisplayPanel.transform as RectTransform;
             if (rt == null) yield break;
 
-            const float startScale = 0.55f;
-            const float peakScale  = 1.10f;
-            const float riseDur    = 0.22f;
-            const float settleDur  = 0.14f;
+            var cg = caseDisplayPanel.GetComponent<CanvasGroup>();
+            if (cg == null) cg = caseDisplayPanel.AddComponent<CanvasGroup>();
+
+            const float startScale = 0.94f;
+            const float dur        = 0.22f;
 
             rt.localScale = new Vector3(startScale, startScale, 1f);
+            cg.alpha = 0f;
 
             var t = 0f;
-            while (t < riseDur)
+            while (t < dur)
             {
                 t += Time.unscaledDeltaTime;
-                var p = Mathf.Clamp01(t / riseDur);
+                var p = Mathf.Clamp01(t / dur);
                 var eased = 1f - Mathf.Pow(1f - p, 3f);  // ease-out cubic
-                var s = Mathf.Lerp(startScale, peakScale, eased);
+                var s = Mathf.Lerp(startScale, 1f, eased);
                 rt.localScale = new Vector3(s, s, 1f);
-                yield return null;
-            }
-
-            t = 0f;
-            while (t < settleDur)
-            {
-                t += Time.unscaledDeltaTime;
-                var p = Mathf.Clamp01(t / settleDur);
-                var s = Mathf.Lerp(peakScale, 1f, p);
-                rt.localScale = new Vector3(s, s, 1f);
+                cg.alpha = p;
                 yield return null;
             }
 
             rt.localScale = Vector3.one;
+            cg.alpha = 1f;
         }
 
         void ShowSpinOverlay(bool show)
@@ -580,39 +1104,48 @@ namespace ValoCase.UI.Screens
             if (!show && openButton != null && !_showingResult)
                 openButton.gameObject.SetActive(true);
 
-            // Purely visual: pulse the spin overlay background during spin.
-            if (show) StartSpinPulse();
-            else      StopSpinPulse();
+            if (show)
+            {
+                EnsureSpinFocusFrame();
+                if (_spinFocusFrame != null)
+                {
+                    _spinFocusFrame.SetActive(true);
+                    _spinFocusFrame.transform.SetAsLastSibling();
+                }
+                HideOldSpinIndicators();
+                StartSpinPulse();
+            }
+            else
+            {
+                if (_spinFocusFrame != null) _spinFocusFrame.SetActive(false);
+                StopSpinPulse();
+            }
         }
 
         // ── Neon spin-phase pulse ────────────────────────────────────────────
 
         void StartSpinPulse()
         {
+            // Pulse/glow disabled — pin the spin overlay to the static background color.
             _spinOverlayBg = spinOverlay != null ? spinOverlay.GetComponent<Image>() : null;
-            if (_spinOverlayBg == null) return;
-            if (_spinPulseCoroutine != null) StopCoroutine(_spinPulseCoroutine);
-            _spinPulseCoroutine = StartCoroutine(SpinPulse());
+            if (_spinOverlayBg != null) _spinOverlayBg.color = BgStatic;
+            // _spinPulseCoroutine intentionally not started.
         }
 
         void StopSpinPulse()
         {
-            if (_spinPulseCoroutine != null)
-            {
-                StopCoroutine(_spinPulseCoroutine);
-                _spinPulseCoroutine = null;
-            }
-            // Restore the overlay's base color exactly as set in the builder.
-            if (_spinOverlayBg != null)
-                _spinOverlayBg.color = new Color(0.04f, 0.07f, 0.1f, 0.97f);
+            // Stop any coroutine that might still be running from a previous session.
+            if (_spinPulseCoroutine != null) { StopCoroutine(_spinPulseCoroutine); _spinPulseCoroutine = null; }
+            // Always restore to the exact static color — no animated remnants.
+            if (_spinOverlayBg != null) _spinOverlayBg.color = BgStatic;
         }
 
         // Breathes the spin overlay between near-black and a dim cyan tint.
         // Period ~1.4 s — subtle enough not to distract from the reel.
         IEnumerator SpinPulse()
         {
-            var baseColor = new Color(0.04f, 0.07f, 0.10f, 0.97f);
-            var peakColor = new Color(0.04f, 0.13f, 0.20f, 0.97f);  // slight cyan shift
+            var baseColor = new Color(0.05f, 0.02f, 0.03f, 0.97f);   // dark red-black
+            var peakColor = new Color(0.16f, 0.03f, 0.05f, 0.97f);   // deep red glow
             const float halfPeriod = 0.70f;
             var t = 0f;
             while (true)
@@ -668,6 +1201,413 @@ namespace ValoCase.UI.Screens
 
             if (!flow.SessionActive)
                 RefreshOpenButton();
+        }
+
+        // ── OPEN button click diagnostics (debug only) ──────────────────────
+        void DebugOpenButtonRaycast()
+        {
+            if (openButton == null) { Debug.Log("[OPEN_BTN_DEBUG] openButton NULL in raycast debug"); return; }
+
+            var rt = openButton.GetComponent<RectTransform>();
+            if (rt != null)
+            {
+                var corners = new Vector3[4];
+                rt.GetWorldCorners(corners);
+                Debug.Log("[OPEN_BTN_DEBUG] world corners BL=" + corners[0] + " TL=" + corners[1] +
+                          " TR=" + corners[2] + " BR=" + corners[3]);
+            }
+
+            var img = openButton.GetComponent<Image>();
+            if (img != null) Debug.Log("[OPEN_BTN_DEBUG] image raycastTarget=" + img.raycastTarget);
+
+            foreach (var tmp in openButton.GetComponentsInChildren<TextMeshProUGUI>(true))
+                Debug.Log("[OPEN_BTN_DEBUG] child tmp=" + tmp.name + " raycastTarget=" + tmp.raycastTarget);
+
+            // Walk the parent chain logging every CanvasGroup that could gate input.
+            var t = openButton.transform;
+            while (t != null)
+            {
+                var cg = t.GetComponent<CanvasGroup>();
+                if (cg != null)
+                    Debug.Log("[OPEN_BTN_DEBUG] parent canvasGroup=" + cg.name +
+                              " interactable=" + cg.interactable +
+                              " blocksRaycasts=" + cg.blocksRaycasts +
+                              " alpha=" + cg.alpha);
+                t = t.parent;
+            }
+
+            var raycaster = GetComponentInParent<GraphicRaycaster>();
+            Debug.Log("[OPEN_BTN_DEBUG] graphicRaycaster=" + (raycaster != null ? raycaster.name : "NULL"));
+
+            // Dump every Graphic under this screen so we can spot a raycastTarget=true
+            // panel/image sitting on top of the button.
+            foreach (var g in GetComponentsInChildren<Graphic>(true))
+                Debug.Log("[OPEN_BTN_RAYCAST] graphic=" + g.name +
+                          " raycast=" + g.raycastTarget +
+                          " active=" + g.gameObject.activeInHierarchy);
+        }
+
+        // ── Mobile UI redesign helpers (revertible block) ────────────────────
+
+        // Guarantees the OPEN button receives clicks: rebinds the listener,
+        // turns on its own raycast target, turns OFF raycast on every child
+        // text/label so nothing on top of the button swallows the tap, and
+        // lifts the button to the top of its parent.
+        void EnsureOpenButtonClickable()
+        {
+            if (openButton == null) return;
+
+            openButton.onClick.RemoveListener(OpenSelected);
+            openButton.onClick.AddListener(OpenSelected);
+
+            var img = openButton.GetComponent<Image>();
+            if (img != null) img.raycastTarget = true;
+
+            foreach (var t in openButton.GetComponentsInChildren<TextMeshProUGUI>(true))
+                if (t != null) t.raycastTarget = false;
+            if (priceLabel != null) priceLabel.raycastTarget = false;
+
+            var cg = openButton.GetComponent<CanvasGroup>();
+            if (cg != null) { cg.interactable = true; cg.blocksRaycasts = true; }
+
+            openButton.transform.SetAsLastSibling();
+
+            Debug.Log("[CASE_OPEN_BTN] openButton interactable=" + openButton.interactable);
+            Debug.Log("[CASE_OPEN_BTN] listener fixed");
+            Debug.Log("[CASE_OPEN_BTN] raycast blockers disabled");
+        }
+
+        // Pins every background surface in CaseOpening to the same flat color as
+        // the CASES/Shop screen. No gradients, no pulse — just static navy/black.
+        // Runs every OnShown so Unity can never reset it.
+        static readonly Color BgStatic  = new Color(0.031f, 0.055f, 0.102f, 1f); // #080E1A
+        static readonly Color BgPremium = new Color(0.031f, 0.043f, 0.078f, 1f); // #080B14
+        static readonly Color PanelDark = new Color(0.067f, 0.094f, 0.153f, 1f); // #111827
+        static readonly Color NeonRed   = new Color(1.000f, 0.275f, 0.333f, 1f); // #FF4655
+
+        // Rarity display data for the rate table (Select → Ultra)
+        static readonly SkinRarity[] k_RarityOrder  = { SkinRarity.Select, SkinRarity.Deluxe, SkinRarity.Premium, SkinRarity.Exclusive, SkinRarity.Ultra };
+        static readonly string[]     k_RarityNames  = { "SELECT", "DELUXE", "PREMIUM", "EXCLUSIVE", "ULTRA" };
+        static readonly Color[]      k_RarityColors =
+        {
+            new Color(0.56f, 0.63f, 0.78f, 1f), // Select   — blue-gray
+            new Color(0.07f, 0.58f, 1.00f, 1f), // Deluxe   — blue
+            new Color(0.65f, 0.13f, 0.98f, 1f), // Premium  — purple
+            new Color(0.86f, 0.16f, 0.26f, 1f), // Exclusive— red
+            new Color(1.00f, 0.63f, 0.00f, 1f), // Ultra    — gold
+        };
+
+        void ApplyDarkBackground()
+        {
+            // Root full-screen background.
+            var rootImg = GetComponent<Image>();
+            if (rootImg != null)
+            {
+                rootImg.color         = BgStatic;
+                rootImg.raycastTarget = false;
+                Debug.Log("[CASE_BG] Static background applied: 0.031, 0.055, 0.102");
+            }
+
+            // Hero / case-display panel.
+            if (caseDisplayPanel != null)
+            {
+                var pImg = caseDisplayPanel.GetComponent<Image>();
+                if (pImg != null) { pImg.color = BgStatic; pImg.raycastTarget = false; Debug.Log("[CASE_BG] changed image=" + pImg.name); }
+            }
+
+            // SpinOverlay background — must stay flat even during a spin.
+            if (spinOverlay != null)
+            {
+                var soImg = spinOverlay.GetComponent<Image>();
+                if (soImg != null) { soImg.color = BgStatic; soImg.raycastTarget = false; Debug.Log("[CASE_BG] changed image=" + soImg.name); }
+            }
+
+            // Broad scan: any other light/opaque Image that is not a protected element.
+            foreach (var img in GetComponentsInChildren<Image>(true))
+            {
+                if (img == null) continue;
+                if (img == caseIconDisplay) continue;                     // case/skin icon
+                if (img == caseThemeBg) continue;                        // rarity wash overlay
+                if (openButton      != null && img.transform.IsChildOf(openButton.transform))      continue;
+                if (_runtimeBackBtn != null && img.transform.IsChildOf(_runtimeBackBtn.transform)) continue;
+                if (_spinFocusFrame != null && img.transform.IsChildOf(_spinFocusFrame.transform)) continue;
+                if (skipButton      != null && img.transform.IsChildOf(skipButton.transform))      continue;
+                if (_decorImages.Contains(img)) continue;
+
+                // Recolour any image that is still noticeably light (avg > 0.35, alpha > 0.5).
+                var c = img.color;
+                if ((c.r + c.g + c.b) / 3f <= 0.35f || c.a <= 0.5f) continue;
+
+                img.color         = BgStatic;
+                img.raycastTarget = false;
+                Debug.Log("[CASE_BG] changed image=" + img.gameObject.name);
+            }
+
+            Debug.Log("[CASE_BG] Disabled background pulse/glow animations");
+        }
+
+        void BuildNeonDecorations()
+        {
+            if (_decorBuilt) return;
+            _decorBuilt = true;
+
+            var parent = caseDisplayPanel != null ? caseDisplayPanel.transform : transform;
+
+            var topLine = CreateDecorImage("NeonLine_TopBorder", parent);
+            var topRt   = topLine.GetComponent<RectTransform>();
+            topRt.anchorMin        = new Vector2(0f, 1f);
+            topRt.anchorMax        = new Vector2(1f, 1f);
+            topRt.pivot            = new Vector2(0.5f, 1f);
+            topRt.anchoredPosition = Vector2.zero;
+            topRt.sizeDelta        = new Vector2(0f, 2f);
+            topLine.color          = new Color(NeonRed.r, NeonRed.g, NeonRed.b, 0.85f);
+
+            var btmLine = CreateDecorImage("NeonLine_BottomBorder", parent);
+            var btmRt   = btmLine.GetComponent<RectTransform>();
+            btmRt.anchorMin        = new Vector2(0f, 0f);
+            btmRt.anchorMax        = new Vector2(1f, 0f);
+            btmRt.pivot            = new Vector2(0.5f, 0f);
+            btmRt.anchoredPosition = Vector2.zero;
+            btmRt.sizeDelta        = new Vector2(0f, 2f);
+            btmLine.color          = new Color(NeonRed.r, NeonRed.g, NeonRed.b, 0.85f);
+
+            var leftBand = CreateDecorImage("GlowBand_Left", parent);
+            var leftRt   = leftBand.GetComponent<RectTransform>();
+            leftRt.anchorMin        = new Vector2(0f, 0f);
+            leftRt.anchorMax        = new Vector2(0f, 1f);
+            leftRt.pivot            = new Vector2(0f, 0.5f);
+            leftRt.anchoredPosition = Vector2.zero;
+            leftRt.sizeDelta        = new Vector2(3f, 0f);
+            leftBand.color          = new Color(NeonRed.r, NeonRed.g, NeonRed.b, 0.50f);
+
+            var rightBand = CreateDecorImage("GlowBand_Right", parent);
+            var rightRt   = rightBand.GetComponent<RectTransform>();
+            rightRt.anchorMin        = new Vector2(1f, 0f);
+            rightRt.anchorMax        = new Vector2(1f, 1f);
+            rightRt.pivot            = new Vector2(1f, 0.5f);
+            rightRt.anchoredPosition = Vector2.zero;
+            rightRt.sizeDelta        = new Vector2(3f, 0f);
+            rightBand.color          = new Color(NeonRed.r, NeonRed.g, NeonRed.b, 0.50f);
+        }
+
+        Image CreateDecorImage(string goName, Transform parent)
+        {
+            var go = new GameObject(goName, typeof(RectTransform), typeof(Image));
+            go.transform.SetParent(parent, false);
+            var img = go.GetComponent<Image>();
+            img.raycastTarget = false;
+            _decorImages.Add(img);
+            return img;
+        }
+
+        void ApplyPremiumDarkTheme()
+        {
+            var rootImg = GetComponent<Image>();
+            if (rootImg != null) rootImg.color = BgPremium;
+
+            if (caseDisplayPanel != null)
+            {
+                var pImg = caseDisplayPanel.GetComponent<Image>();
+                if (pImg != null) pImg.color = PanelDark;
+            }
+
+            if (selectedCaseLabel != null)
+            {
+                selectedCaseLabel.color     = new Color(0.961f, 0.961f, 0.961f, 1f);
+                selectedCaseLabel.fontStyle = FontStyles.Bold;
+            }
+
+            if (walletLabel != null)
+                walletLabel.color = new Color(0.541f, 0.569f, 0.651f, 1f);
+        }
+
+        // One-time style pass for the mobile layout. Idempotent.
+        void ApplyCaseOpeningMobileLayout()
+        {
+            if (_caseOpeningUiStyled) return;
+            _caseOpeningUiStyled = true;
+            AlignOpenButtonAndPrice();   // sets priceLabel y=-344, openButton y=-390
+            ResizeCaseIcon();            // scales + nudges icon
+            MoveHeroSectionUp();         // shifts everything up ~50 px to fill gap
+            EnsureSpinFocusFrame();
+        }
+
+        // Shifts the entire hero block (icon, name, price, button) upward so the
+        // screen does not leave empty space where the old top preview strip was.
+        void MoveHeroSectionUp()
+        {
+            if (_heroMovedUp) return;
+            _heroMovedUp = true;
+
+            const float shift = 80f;
+
+            if (caseIconDisplay != null)
+            {
+                var rt = caseIconDisplay.GetComponent<RectTransform>();
+                if (rt != null) rt.anchoredPosition += new Vector2(0f, shift);
+            }
+
+            if (selectedCaseLabel != null)
+                selectedCaseLabel.rectTransform.anchoredPosition += new Vector2(0f, shift);
+
+            if (priceLabel != null)
+                priceLabel.rectTransform.anchoredPosition += new Vector2(0f, shift);
+
+            if (openButton != null)
+            {
+                var rt = openButton.GetComponent<RectTransform>();
+                if (rt != null) rt.anchoredPosition += new Vector2(0f, shift);
+            }
+
+            // Also shift the RateTable container if it already exists.
+            if (caseDisplayPanel != null)
+            {
+                var rateTf = caseDisplayPanel.transform.Find("RateTable");
+                if (rateTf != null)
+                {
+                    var rt = rateTf as RectTransform;
+                    if (rt != null) rt.anchoredPosition += new Vector2(0f, shift);
+                }
+            }
+
+            Debug.Log("[CASE_HERO_LAYOUT] moved hero block upward by " + shift + " px");
+            Debug.Log("[CASE_UI_FIX] hero layout moved up");
+        }
+
+        // Scale the case hero icon 1.8× from its prefab size and nudge it downward.
+        bool _iconResized;
+        void ResizeCaseIcon()
+        {
+            if (_iconResized || caseIconDisplay == null) return;
+            _iconResized = true;
+
+            var iconRt = caseIconDisplay.GetComponent<RectTransform>();
+            if (iconRt == null) return;
+
+            var cur = iconRt.sizeDelta;
+            if (cur.x < 10f) cur = new Vector2(120f, 100f); // prefab fallback
+            iconRt.sizeDelta        = new Vector2(cur.x * 1.8f, cur.y * 1.8f);
+            var pos = iconRt.anchoredPosition;
+            iconRt.anchoredPosition = new Vector2(pos.x, pos.y - 20f);
+
+            Debug.Log("[CASE_HERO] case icon resized to " + iconRt.sizeDelta);
+        }
+
+        // Converts the drop list container into a 2-column grid for mobile.
+        // Fully null-safe: never throws, never crashes the open flow.
+        void EnsureDropGridLayout()
+        {
+            Debug.Log("[DROP_GRID] EnsureDropGridLayout called");
+
+            if (dropListRoot == null) { Debug.LogWarning("[DROP_GRID] dropListRoot NULL — skip"); return; }
+
+            var rootGo = dropListRoot.gameObject;
+            var rt     = dropListRoot as RectTransform;
+            if (rootGo == null) { Debug.LogWarning("[DROP_GRID] root GameObject NULL — skip"); return; }
+            if (rt == null)     { Debug.LogWarning("[DROP_GRID] root is not a RectTransform — skip"); return; }
+
+            Debug.Log("[DROP_GRID] root=" + dropListRoot.name);
+
+            // Already converted — nothing to do.
+            if (rootGo.GetComponent<GridLayoutGroup>() != null)
+            {
+                Debug.Log("[DROP_GRID] grid already present");
+                return;
+            }
+
+            // Disable (do NOT destroy) any conflicting layout groups.
+            var vlg = rootGo.GetComponent<VerticalLayoutGroup>();
+            if (vlg != null) vlg.enabled = false;
+            var hlg = rootGo.GetComponent<HorizontalLayoutGroup>();
+            if (hlg != null) hlg.enabled = false;
+
+            // AddComponent can return null if another LayoutGroup still blocks it
+            // (Unity disallows two LayoutGroups). Guard against that.
+            var grid = rootGo.AddComponent<GridLayoutGroup>();
+            if (grid == null)
+            {
+                Debug.LogWarning("[DROP_GRID] could not add GridLayoutGroup (another LayoutGroup blocks it) — skip");
+                return;
+            }
+
+            grid.cellSize        = new Vector2(150f, 64f);
+            grid.spacing         = new Vector2(8f, 8f);
+            grid.padding         = new RectOffset(8, 8, 8, 8);
+            grid.childAlignment  = TextAnchor.UpperCenter;
+            grid.constraint      = GridLayoutGroup.Constraint.FixedColumnCount;
+            grid.constraintCount = 2;
+
+            if (rootGo.GetComponent<ContentSizeFitter>() == null)
+            {
+                var fitter = rootGo.AddComponent<ContentSizeFitter>();
+                if (fitter != null)
+                    fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+            }
+
+            Debug.Log("[DROP_GRID] Layout applied successfully");
+        }
+
+        // Red neon focus frame that flanks the center reel item during a spin.
+        void EnsureSpinFocusFrame()
+        {
+            if (_spinFocusFrame != null) return;
+            if (spinOverlay == null) return;
+
+            var go = new GameObject("SpinFocusFrame", typeof(RectTransform));
+            go.transform.SetParent(spinOverlay.transform, false);
+            var rt = go.GetComponent<RectTransform>();
+            rt.anchorMin        = new Vector2(0.5f, 0.5f);
+            rt.anchorMax        = new Vector2(0.5f, 0.5f);
+            rt.pivot            = new Vector2(0.5f, 0.5f);
+            rt.anchoredPosition = Vector2.zero;
+            rt.sizeDelta        = new Vector2(190f, 250f);
+
+            BuildFocusLine(rt, -95f);
+            BuildFocusLine(rt,  95f);
+
+            _spinFocusFrame = go;
+            go.SetActive(false);
+        }
+
+        void BuildFocusLine(RectTransform parent, float x)
+        {
+            var go = new GameObject("FocusLine", typeof(RectTransform), typeof(Image));
+            go.transform.SetParent(parent, false);
+            var rt = go.GetComponent<RectTransform>();
+            rt.anchorMin        = new Vector2(0.5f, 0.5f);
+            rt.anchorMax        = new Vector2(0.5f, 0.5f);
+            rt.pivot            = new Vector2(0.5f, 0.5f);
+            rt.anchoredPosition = new Vector2(x, 0f);
+            rt.sizeDelta        = new Vector2(4f, 250f);
+            var img = go.GetComponent<Image>();
+            img.color         = new Color(1f, 0.122f, 0.224f, 0.9f);
+            img.raycastTarget = false;
+        }
+
+        // Hides legacy center-line/marker graphics so only the new frame shows.
+        void HideOldSpinIndicators()
+        {
+            if (spinOverlay == null) return;
+            foreach (var img in spinOverlay.GetComponentsInChildren<Image>(true))
+            {
+                if (img == null) continue;
+                if (_spinFocusFrame != null && img.transform.IsChildOf(_spinFocusFrame.transform)) continue;
+
+                var n = img.gameObject.name.ToLowerInvariant();
+
+                // Never touch skin/icon/rarity images — only needle/pointer-style indicators.
+                bool isSkinImage = n.Contains("icon")   || n.Contains("skin")   ||
+                                   n.Contains("weapon")  || n.Contains("rarity") ||
+                                   n.Contains("frame")   || n.Contains("glow")   ||
+                                   n.Contains("reel")    || n.Contains("item");
+                if (isSkinImage) continue;
+
+                // Only disable legacy needle/pointer/center-line elements.
+                bool isIndicator = n.Contains("centerline") || n.Contains("center_line") ||
+                                   n.Contains("marker")     || n.Contains("indicator")   ||
+                                   n.Contains("needle")     || n.Contains("pointer");
+                if (isIndicator) img.enabled = false;
+            }
         }
     }
 }

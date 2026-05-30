@@ -1,6 +1,5 @@
 using UnityEngine;
 using ValoCase.Systems;
-using ValoCase.UI.Animation;
 using ValoCase.UI.Screens;
 
 namespace ValoCase.Core
@@ -16,11 +15,11 @@ namespace ValoCase.Core
     /// </summary>
     public sealed class CompositionRoot : MonoBehaviour
     {
-        [Header("Case Battle")]
-        [SerializeField] CaseBattleScreen           caseBattleScreen;
-        [SerializeField] CaseBattleAnimation        caseBattleAnimation;
-        [SerializeField] RouletteAnimationController playerRoulette;
-        [SerializeField] RouletteAnimationController opponentRoulette;
+        [Header("Missions")]
+        [SerializeField] ToolsScreen toolsScreen;
+
+        [Header("Case Battle Lobby")]
+        [SerializeField] LobbyListScreen lobbyListScreen;
 
         void Start()
         {
@@ -31,7 +30,8 @@ namespace ValoCase.Core
                 return;
             }
 
-            WireCaseBattle(ctx);
+            var battle = WireCaseBattle(ctx);
+            WireMissions(ctx, battle);
 
             // ── Yeni özellikler buraya eklenir ────────────────────────────────
             // WireUpgrade(ctx);
@@ -43,33 +43,31 @@ namespace ValoCase.Core
         // CASE BATTLE
         // ─────────────────────────────────────────────────────────────────────
 
-        void WireCaseBattle(GameContext ctx)
+        // Creates CaseBattleSystem for mission event hooks (PlayBattle / WinBattle).
+        // CaseBattleScreen is retired; the system is kept only so MissionSystem
+        // can subscribe to OnBattleStarted / OnBattleSettled when a battle runs.
+        CaseBattleSystem WireCaseBattle(GameContext ctx)
         {
-            // Inspector'da atanmamışsa sahnede ara (builder runtime'da oluşturur)
-            if (caseBattleScreen == null)
-                caseBattleScreen = FindObjectOfType<CaseBattleScreen>(includeInactive: true);
-
-            // CaseBattleSystem bağımlılıklarını doğrudan alır — ICaseBattleService yok
-            var system = new CaseBattleSystem(
+            return new CaseBattleSystem(
                 ctx.Vp,
                 ctx.Inventory,
                 ctx.CaseOpening,
                 ctx.Save
             );
+        }
 
-            // Screen → sistem bağlantısı (VP kesme + settle)
-            caseBattleScreen?.Inject(system);
+        void WireMissions(GameContext ctx, CaseBattleSystem battle)
+        {
+            var missions = new MissionSystem(ctx.Save);
+            missions.Initialize(battle);
 
-            // Animasyon → roulette controller'larını bağla
-            caseBattleAnimation?.BindRoulettes(playerRoulette, opponentRoulette);
+            var injected = new System.Collections.Generic.HashSet<ToolsScreen>();
+            if (toolsScreen != null) { toolsScreen.Inject(missions); injected.Add(toolsScreen); }
 
-            // Cross-layer: system eventi → animasyon tepkisi
-            // (Screen bu event'leri dinleyemez çünkü animation ayrı katman)
-            if (caseBattleAnimation != null)
+            var all = FindObjectsOfType<ToolsScreen>(includeInactive: true);
+            foreach (var ts in all)
             {
-                system.OnBattleSettled += _ => caseBattleAnimation.StartWinnerPulse();
-                system.OnBattleStarted += _ => caseBattleAnimation.StopWinnerPulse();
-                system.OnBattleFailed  += _ => caseBattleAnimation.StopRound();
+                if (injected.Add(ts)) ts.Inject(missions);
             }
         }
 
