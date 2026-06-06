@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using ValoCase.Battle;
 using ValoCase.Data;
 using ValoCase.Save;
 
@@ -89,6 +90,7 @@ namespace ValoCase.Services
         void RecordCaseOpened(CaseDefinitionSO caseDef, SkinDefinitionSO skin, int vpSpent);
         void RecordVpEarned(int amount);
         void RecalculateInventoryStats(IInventoryService inventory, ContentDatabaseSO database, bool notify = true);
+        void RecordBattleResult(BattleOutcome outcome, int earningsVp);
     }
 
     public interface ICaseProgressionService

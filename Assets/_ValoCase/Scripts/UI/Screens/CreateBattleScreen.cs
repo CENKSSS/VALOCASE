@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
+using ValoCase.Core;
 using ValoCase.Data;
 using ValoCase.UI;
 using static ValoCase.UI.UIBuild;
@@ -10,99 +11,129 @@ using static ValoCase.UI.UIBuild;
 namespace ValoCase.UI.Screens
 {
     /// <summary>
-    /// Screen 2 — Create Battle. Full-screen overlay panel hosted by LobbyListScreen.
-    /// Lets the player pick a case, player count, rounds and mode, then start a battle.
-    /// Emits OnConfirm(BattleLobbyData) when START BATTLE is pressed; OnBack on cancel.
+    /// Create Battle — full-screen modal overlay hosted by LobbyListScreen.
+    ///
+    /// Full-screen (rather than a partial bottom-sheet) because the persistent bottom
+    /// nav renders above every screen; a partial sheet would sit under it. The sheet
+    /// identity is kept via a top drag handle, red accent line and slide-up entrance.
+    ///
+    /// Flow: pick a case (grid, 3 per row), battle type (1v1 / 1v1v1) and rounds, then
+    /// CREATE BATTLE → emits OnConfirm(BattleLobbyData) into the existing battle flow.
+    /// Cost = case price × rounds, shown live on the CTA. Logic systems are untouched.
     /// </summary>
     public sealed class CreateBattleScreen : MonoBehaviour
     {
-        const float HeaderH = 88f;
-        const float FooterH = 112f;
-        const float SidePad = 16f;
-        const float CutCard = 8f;
-
         public event Action OnBack;
         public event Action<BattleLobbyData> OnConfirm;
 
-        static readonly string[] CaseNames =
-            { "Vandal Vault", "Operator Elite", "Sheriff Prime", "Spectre Mix", "Phantom Kit" };
-        static readonly int[]    CaseCosts  = { 1200, 1900, 800, 600, 1500 };
-        static readonly SkinRarity[] CaseRarity =
-            { SkinRarity.Ultra, SkinRarity.Exclusive, SkinRarity.Premium, SkinRarity.Deluxe, SkinRarity.Exclusive };
+        const float SidePad    = 16f;
+        const float HeaderH    = 60f;
+        const float CtaH       = 54f;
+        const float NavReserve = 98f;
+        const int   MinRounds  = 1;
+        const int   MaxRounds  = 5;
+
+        readonly struct CaseOption
+        {
+            public readonly string Name;
+            public readonly int    Price;
+            public readonly Sprite Icon;
+            public CaseOption(string name, int price, Sprite icon) { Name = name; Price = price; Icon = icon; }
+        }
 
         bool _built;
-        int  _selectedCase = -1;
+
+        readonly List<CaseOption> _cases = new();
+        readonly List<(AngledCutImage bg, Outline border)> _caseCards = new();
+        readonly List<(Image bg, TextMeshProUGUI lbl)>      _typeBtns  = new();
+
+        int               _selected   = 0;
         BattlePlayerCount _playerCount = BattlePlayerCount.OneVOne;
-        int  _rounds = 1;
-        BattleMode _mode = BattleMode.Normal;
+        int               _rounds      = 1;
 
-        TextMeshProUGUI _totalChip;
-        TextMeshProUGUI _footerCost;
-        AngledCutImage  _confirmBg;
-        TextMeshProUGUI _confirmLabel;
-        Button          _confirmButton;
+        TextMeshProUGUI _roundsLbl;
+        AngledCutImage  _ctaBg;
+        TextMeshProUGUI _ctaLbl;
 
-        readonly List<(AngledCutImage bg, Outline border, Shadow glow)> _caseCards = new();
-        readonly List<(Image bg, TextMeshProUGUI lbl)> _playerBtns = new();
-        readonly List<(Image bg, TextMeshProUGUI lbl)> _roundBtns  = new();
-        readonly List<(Image bg, TextMeshProUGUI lbl, Outline border)> _modeBtns = new();
-
+        // ── Lifecycle ────────────────────────────────────────────────────────────
         public void Show()
         {
             gameObject.SetActive(true);
             BuildOnce();
-            // Reset to defaults each open.
-            _selectedCase = -1;
-            _playerCount  = BattlePlayerCount.OneVOne;
-            _rounds       = 1;
-            _mode         = BattleMode.Normal;
+
+            _playerCount = BattlePlayerCount.OneVOne;
+            _rounds      = 1;
             RefreshAll();
+
+            StartCoroutine(UIAnimator.SlideFromBottom((RectTransform)transform, 0.24f));
         }
 
-        public void Hide() => gameObject.SetActive(false);
+        public void Hide()
+        {
+            StopAllCoroutines();
+            gameObject.SetActive(false);
+        }
 
+        void OnDisable() => StopAllCoroutines();
+
+        // ── Build ──────────────────────────────────────────────────────────────
         void BuildOnce()
         {
             if (_built) return;
             _built = true;
 
+            LoadCases();
+
             var rt = (RectTransform)transform;
 
-            var bg = MakeImage("Bg", rt, ColorPalette.BgDeep, raycast: true);
-            Stretch(bg.rectTransform);
+            // Scrim — near-opaque so the modal reads as a focused surface.
+            var scrim = MakeImage("Scrim", rt, ColorPalette.WithAlpha(ColorPalette.BgDeep, 0.97f), raycast: true);
+            Stretch(scrim.rectTransform);
 
             BuildHeader(rt);
             BuildScrollContent(rt);
-            BuildFooter(rt);
+            BuildCta(rt);
         }
 
         void BuildHeader(RectTransform rt)
         {
-            var hdr = MakeImage("Header", rt, ColorPalette.Surface, raycast: true);
+            var hdr = MakeImage("Header", rt, ColorPalette.CardBg, raycast: true);
             TopStrip(hdr.rectTransform, HeaderH);
 
-            var back = NewGo("Back", hdr.transform, typeof(Image), typeof(Button));
-            back.GetComponent<Image>().color = ColorPalette.CardBg;
-            var backRt = (RectTransform)back.transform;
-            SetRect(backRt, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(0f, 0.5f),
-                new Vector2(16f, -6f), new Vector2(44f, 44f));
-            var backLbl = MakeTmp(back.transform, "Lbl", "<", 22f, FontStyles.Bold, ColorPalette.TextBright);
-            backLbl.alignment = TextAlignmentOptions.Center;
-            Stretch(backLbl.rectTransform);
-            var backBtn = back.GetComponent<Button>();
-            backBtn.transition = Selectable.Transition.None;
-            backBtn.onClick.AddListener(() => OnBack?.Invoke());
+            // Red accent line (top) + drag handle — sheet identity.
+            var accent = MakeImage("TopAccent", hdr.transform, ColorPalette.ActiveRed);
+            accent.raycastTarget = false;
+            TopStrip(accent.rectTransform, 2f);
 
-            var title = MakeTmp(hdr.transform, "Title", "CREATE BATTLE", 20f, FontStyles.Bold, ColorPalette.TextBright);
+            var handle = MakeImage("Handle", hdr.transform, ColorPalette.WithAlpha(ColorPalette.TextDim, 0.6f));
+            handle.raycastTarget = false;
+            SetRect(handle.rectTransform, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0.5f, 1f),
+                new Vector2(0f, -8f), new Vector2(40f, 4f));
+
+            // Bottom border.
+            var border = MakeImage("BottomBorder", hdr.transform, ColorPalette.Border);
+            border.raycastTarget = false;
+            BottomStrip(border.rectTransform, 1f);
+
+            var title = MakeTmp(hdr.transform, "Title", "CREATE BATTLE", 18f, FontStyles.Bold, ColorPalette.TextBright);
             title.characterSpacing = 3f;
             title.alignment = TextAlignmentOptions.Center;
-            SetRect(title.rectTransform, new Vector2(0f, 0.5f), new Vector2(1f, 0.5f), new Vector2(0.5f, 0.5f),
-                new Vector2(0f, -6f), new Vector2(0f, 28f));
+            SetRect(title.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 1f), new Vector2(0.5f, 0.5f),
+                new Vector2(0f, -4f), new Vector2(-120f, 0f));
 
-            _totalChip = MakeTmp(hdr.transform, "TotalChip", "0 VP", 14f, FontStyles.Bold, ColorPalette.GoldAccent);
-            _totalChip.alignment = TextAlignmentOptions.MidlineRight;
-            SetRect(_totalChip.rectTransform, new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(1f, 0.5f),
-                new Vector2(-16f, -6f), new Vector2(110f, 24f));
+            // Close (×).
+            var close = NewGo("Close", hdr.transform, typeof(Image), typeof(Button));
+            close.GetComponent<Image>().color = ColorPalette.Surface;
+            var closeBorder = close.AddComponent<Outline>();
+            closeBorder.effectColor = ColorPalette.Border; closeBorder.effectDistance = new Vector2(1f, -1f);
+            SetRect((RectTransform)close.transform, new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(1f, 0.5f),
+                new Vector2(-SidePad, -2f), new Vector2(36f, 36f));
+            var closeLbl = MakeTmp(close.transform, "Lbl", "×", 24f, FontStyles.Bold, ColorPalette.TextBright);
+            closeLbl.alignment = TextAlignmentOptions.Center;
+            Stretch(closeLbl.rectTransform);
+            var closeBtn = close.GetComponent<Button>();
+            closeBtn.transition = Selectable.Transition.None;
+            closeBtn.onClick.AddListener(() => OnBack?.Invoke());
         }
 
         void BuildScrollContent(RectTransform rt)
@@ -110,8 +141,9 @@ namespace ValoCase.UI.Screens
             var scrollGo = NewGo("Scroll", rt, typeof(ScrollRect), typeof(Image));
             scrollGo.GetComponent<Image>().color = Color.clear;
             var scrollRt = (RectTransform)scrollGo.transform;
-            scrollRt.anchorMin = Vector2.zero; scrollRt.anchorMax = Vector2.one;
-            scrollRt.offsetMin = new Vector2(0f, FooterH);
+            scrollRt.anchorMin = Vector2.zero;
+            scrollRt.anchorMax = Vector2.one;
+            scrollRt.offsetMin = new Vector2(0f, NavReserve + CtaH + 12f);
             scrollRt.offsetMax = new Vector2(0f, -HeaderH);
 
             var viewport = NewGo("Viewport", scrollGo.transform, typeof(RectMask2D), typeof(Image));
@@ -120,31 +152,34 @@ namespace ValoCase.UI.Screens
 
             var content = NewGo("Content", viewport.transform, typeof(VerticalLayoutGroup), typeof(ContentSizeFitter));
             var cRt = (RectTransform)content.transform;
-            cRt.anchorMin = new Vector2(0f, 1f); cRt.anchorMax = new Vector2(1f, 1f);
-            cRt.pivot = new Vector2(0.5f, 1f); cRt.anchoredPosition = Vector2.zero;
+            cRt.anchorMin = new Vector2(0f, 1f);
+            cRt.anchorMax = new Vector2(1f, 1f);
+            cRt.pivot     = new Vector2(0.5f, 1f);
+            cRt.anchoredPosition = Vector2.zero;
             var vlg = content.GetComponent<VerticalLayoutGroup>();
-            vlg.padding = new RectOffset((int)SidePad, (int)SidePad, 14, 24);
-            vlg.spacing = 18f;
+            vlg.padding               = new RectOffset((int)SidePad, (int)SidePad, 16, 24);
+            vlg.spacing               = 14f;
             vlg.childForceExpandWidth  = true;
             vlg.childForceExpandHeight = false;
-            vlg.childControlWidth  = true;
-            vlg.childControlHeight = true;
-            var fitter = content.GetComponent<ContentSizeFitter>();
-            fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+            vlg.childControlWidth      = true;
+            vlg.childControlHeight     = true;
+            content.GetComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
 
             var sr = scrollGo.GetComponent<ScrollRect>();
-            sr.content = cRt; sr.viewport = (RectTransform)viewport.transform;
-            sr.horizontal = false; sr.vertical = true; sr.scrollSensitivity = 30f;
+            sr.content          = cRt;
+            sr.viewport         = (RectTransform)viewport.transform;
+            sr.horizontal       = false;
+            sr.vertical         = true;
+            sr.scrollSensitivity = 30f;
 
             BuildCaseSection(content.transform);
-            BuildPlayerCountSection(content.transform);
+            BuildTypeSection(content.transform);
             BuildRoundsSection(content.transform);
-            BuildModeSection(content.transform);
         }
 
         void SectionLabel(Transform parent, string text)
         {
-            var lbl = MakeTmp(parent, "SectionLabel", text, 11f, FontStyles.Bold, ColorPalette.ActiveRed);
+            var lbl = MakeTmp(parent, "Section", text, 11f, FontStyles.Bold, ColorPalette.ActiveRed);
             lbl.characterSpacing = 4f;
             lbl.alignment = TextAlignmentOptions.MidlineLeft;
             lbl.gameObject.AddComponent<LayoutElement>().minHeight = 16f;
@@ -154,176 +189,184 @@ namespace ValoCase.UI.Screens
         {
             SectionLabel(parent, "SELECT CASE");
 
-            var rowGo = NewGo("CaseGrid", parent, typeof(ScrollRect), typeof(Image), typeof(LayoutElement));
-            rowGo.GetComponent<Image>().color = Color.clear;
-            rowGo.GetComponent<LayoutElement>().minHeight = 130f;
+            var gridGo = NewGo("CaseGrid", parent, typeof(GridLayoutGroup), typeof(LayoutElement));
+            const float cellH = 126f, gapY = 8f;
+            var grid = gridGo.GetComponent<GridLayoutGroup>();
+            grid.cellSize        = new Vector2(108f, cellH);
+            grid.spacing         = new Vector2(8f, gapY);
+            grid.constraint      = GridLayoutGroup.Constraint.FixedColumnCount;
+            grid.constraintCount = 3;
+            grid.childAlignment  = TextAnchor.UpperCenter;
 
-            var vp = NewGo("VP", rowGo.transform, typeof(RectMask2D), typeof(Image));
-            vp.GetComponent<Image>().color = Color.clear;
-            Stretch(vp);
+            // Deterministic height so the parent VLG sizes the grid without a
+            // ContentSizeFitter conflict (child is layout-controlled by the VLG).
+            int rows = Mathf.Max(1, Mathf.CeilToInt(_cases.Count / 3f));
+            gridGo.GetComponent<LayoutElement>().preferredHeight = rows * cellH + (rows - 1) * gapY;
 
-            var inner = NewGo("Inner", vp.transform, typeof(HorizontalLayoutGroup), typeof(ContentSizeFitter));
-            var iRt = (RectTransform)inner.transform;
-            iRt.anchorMin = new Vector2(0f, 0.5f); iRt.anchorMax = new Vector2(0f, 0.5f);
-            iRt.pivot = new Vector2(0f, 0.5f);
-            var hlg = inner.GetComponent<HorizontalLayoutGroup>();
-            hlg.spacing = 10f;
-            hlg.childForceExpandWidth = false; hlg.childForceExpandHeight = false;
-            hlg.childControlWidth = true; hlg.childControlHeight = true;
-            inner.GetComponent<ContentSizeFitter>().horizontalFit = ContentSizeFitter.FitMode.PreferredSize;
-
-            var sr = rowGo.GetComponent<ScrollRect>();
-            sr.content = iRt; sr.viewport = (RectTransform)vp.transform;
-            sr.horizontal = true; sr.vertical = false;
-
-            for (int i = 0; i < CaseNames.Length; i++)
-                BuildCaseCard(inner.transform, i);
+            for (int i = 0; i < _cases.Count; i++)
+                BuildCaseCard(gridGo.transform, i);
         }
 
         void BuildCaseCard(Transform parent, int index)
         {
-            var cardGo = NewGo("Case_" + index, parent, typeof(LayoutElement), typeof(Button));
-            var le = cardGo.GetComponent<LayoutElement>();
-            le.minWidth = 90f; le.preferredWidth = 90f; le.minHeight = 110f; le.preferredHeight = 110f;
+            var opt = _cases[index];
 
-            var bg = MakeAngled("Bg", cardGo.transform, ColorPalette.CardBg, CutCard, raycast: true);
+            var cardGo = NewGo("Case_" + index, parent, typeof(Button));
+            var bg = MakeAngled("Bg", cardGo.transform, ColorPalette.CardBg, 8f, raycast: true);
             Stretch(bg.rectTransform);
             var border = bg.gameObject.AddComponent<Outline>();
-            border.effectColor = ColorPalette.Border;
+            border.effectColor    = ColorPalette.Border;
             border.effectDistance = new Vector2(1f, -1f);
-            var glow = bg.gameObject.AddComponent<Shadow>();
-            glow.effectColor = Color.clear;
-            glow.effectDistance = new Vector2(0f, 0f);
 
-            var thumb = MakeImage("Thumb", cardGo.transform, ColorPalette.Surface);
-            SetRect(thumb.rectTransform, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0.5f, 1f),
-                new Vector2(0f, -12f), new Vector2(60f, 60f));
-            var tb = thumb.gameObject.AddComponent<Outline>();
-            tb.effectColor = ColorPalette.WithAlpha(ColorPalette.ForRarity(CaseRarity[index]), 0.5f);
-            tb.effectDistance = new Vector2(1f, -1f);
+            // Thumbnail.
+            var tile = MakeImage("ThumbBg", cardGo.transform, ColorPalette.Surface);
+            SetRect(tile.rectTransform, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0.5f, 1f),
+                new Vector2(0f, -12f), new Vector2(52f, 52f));
+            if (opt.Icon != null)
+            {
+                var icon = MakeImage("Thumb", tile.transform, Color.white);
+                icon.sprite = opt.Icon;
+                icon.preserveAspect = true;
+                var iRt = icon.rectTransform;
+                iRt.anchorMin = new Vector2(0.5f, 0.5f);
+                iRt.anchorMax = new Vector2(0.5f, 0.5f);
+                iRt.pivot     = new Vector2(0.5f, 0.5f);
+                iRt.sizeDelta = new Vector2(46f, 46f);
+            }
 
-            var name = MakeTmp(cardGo.transform, "Name", CaseNames[index], 10f, FontStyles.Bold, ColorPalette.TextBright);
+            // Name (wraps to 2 lines).
+            var name = MakeTmp(cardGo.transform, "Name", opt.Name, 9.5f, FontStyles.Bold, ColorPalette.TextBright);
             name.alignment = TextAlignmentOptions.Top;
             name.enableWordWrapping = true;
             SetRect(name.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(0.5f, 0f),
-                new Vector2(0f, 8f), new Vector2(-8f, 32f));
+                new Vector2(0f, 28f), new Vector2(-10f, 30f));
 
-            int cap = index;
+            // Price.
+            var price = MakeTmp(cardGo.transform, "Price", opt.Price.ToString("N0") + " VP", 10f, FontStyles.Bold, ColorPalette.GoldAccent);
+            price.alignment = TextAlignmentOptions.Center;
+            SetRect(price.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(0.5f, 0f),
+                new Vector2(0f, 8f), new Vector2(-8f, 16f));
+
+            int captured = index;
             var btn = cardGo.GetComponent<Button>();
             btn.transition = Selectable.Transition.None;
-            btn.onClick.AddListener(() => { _selectedCase = cap; RefreshAll(); });
+            btn.onClick.AddListener(() => { _selected = captured; RefreshAll(); });
 
-            _caseCards.Add((bg, border, glow));
+            _caseCards.Add((bg, border));
         }
 
-        (Image bg, TextMeshProUGUI lbl) BuildPill(Transform parent, string text, Action onClick)
+        void BuildTypeSection(Transform parent)
         {
-            var go = NewGo("Pill_" + text, parent, typeof(Image), typeof(Button), typeof(LayoutElement));
-            var le = go.GetComponent<LayoutElement>();
-            le.minHeight = 48f; le.flexibleWidth = 1f;
-            var img = go.GetComponent<Image>();
-            img.color = ColorPalette.Border;
-            var lbl = MakeTmp(go.transform, "Lbl", text, 14f, FontStyles.Bold, ColorPalette.TextBright);
-            lbl.alignment = TextAlignmentOptions.Center;
-            Stretch(lbl.rectTransform);
-            var btn = go.GetComponent<Button>();
-            btn.transition = Selectable.Transition.None;
-            btn.onClick.AddListener(() => onClick());
-            return (img, lbl);
-        }
+            SectionLabel(parent, "BATTLE TYPE");
 
-        GameObject BuildButtonRow(Transform parent)
-        {
-            var row = NewGo("Row", parent, typeof(HorizontalLayoutGroup), typeof(LayoutElement));
+            var row = NewGo("TypeRow", parent, typeof(HorizontalLayoutGroup), typeof(LayoutElement));
             row.GetComponent<LayoutElement>().minHeight = 48f;
             var hlg = row.GetComponent<HorizontalLayoutGroup>();
-            hlg.spacing = 10f;
-            hlg.childForceExpandWidth = true; hlg.childForceExpandHeight = true;
-            hlg.childControlWidth = true; hlg.childControlHeight = true;
-            return row;
+            hlg.spacing               = 10f;
+            hlg.childForceExpandWidth  = true;
+            hlg.childForceExpandHeight = true;
+            hlg.childControlWidth      = true;
+            hlg.childControlHeight     = true;
+
+            _typeBtns.Add(BuildTypePill(row.transform, "1V1",   BattlePlayerCount.OneVOne));
+            _typeBtns.Add(BuildTypePill(row.transform, "1V1V1", BattlePlayerCount.ThreePlayer));
         }
 
-        void BuildPlayerCountSection(Transform parent)
+        (Image bg, TextMeshProUGUI lbl) BuildTypePill(Transform parent, string text, BattlePlayerCount pc)
         {
-            SectionLabel(parent, "PLAYERS");
-            var row = BuildButtonRow(parent);
-            var defs = new (string, BattlePlayerCount)[]
-            { ("1v1", BattlePlayerCount.OneVOne), ("1v1v1", BattlePlayerCount.ThreePlayer), ("1v1v1v1", BattlePlayerCount.FourPlayer) };
-            foreach (var d in defs)
-            {
-                var pc = d.Item2;
-                _playerBtns.Add(BuildPill(row.transform, d.Item1, () => { _playerCount = pc; RefreshAll(); }));
-            }
+            var go = NewGo("Type_" + text, parent, typeof(Image), typeof(Button), typeof(LayoutElement));
+            go.GetComponent<LayoutElement>().minHeight = 48f;
+            var img = go.GetComponent<Image>();
+            img.color = ColorPalette.Surface;
+            var bdr = go.AddComponent<Outline>();
+            bdr.effectColor = ColorPalette.Border; bdr.effectDistance = new Vector2(1f, -1f);
+
+            var lbl = MakeTmp(go.transform, "Lbl", text, 15f, FontStyles.Bold, ColorPalette.TextBright);
+            lbl.alignment = TextAlignmentOptions.Center;
+            lbl.characterSpacing = 2f;
+            Stretch(lbl.rectTransform);
+
+            var btn = go.GetComponent<Button>();
+            btn.transition = Selectable.Transition.None;
+            btn.onClick.AddListener(() => { _playerCount = pc; RefreshAll(); });
+            return (img, lbl);
         }
 
         void BuildRoundsSection(Transform parent)
         {
             SectionLabel(parent, "ROUNDS");
-            var row = BuildButtonRow(parent);
-            for (int i = 1; i <= 3; i++)
-            {
-                int r = i;
-                _roundBtns.Add(BuildPill(row.transform, "x" + i, () => { _rounds = r; RefreshAll(); }));
-            }
+
+            var row = NewGo("RoundsRow", parent, typeof(HorizontalLayoutGroup), typeof(LayoutElement));
+            row.GetComponent<LayoutElement>().minHeight = 52f;
+            var hlg = row.GetComponent<HorizontalLayoutGroup>();
+            hlg.spacing               = 14f;
+            hlg.childForceExpandWidth  = false;
+            hlg.childForceExpandHeight = false;
+            hlg.childControlWidth      = false;
+            hlg.childControlHeight     = false;
+            hlg.childAlignment         = TextAnchor.MiddleCenter;
+
+            BuildStepButton(row.transform, "-", () => ChangeRounds(-1));
+
+            var box = NewGo("Count", row.transform, typeof(Image), typeof(LayoutElement));
+            box.GetComponent<Image>().color = ColorPalette.CardBg;
+            var boxBorder = box.AddComponent<Outline>();
+            boxBorder.effectColor = ColorPalette.Border; boxBorder.effectDistance = new Vector2(1f, -1f);
+            var boxLe = box.GetComponent<LayoutElement>();
+            boxLe.minWidth = 84f; boxLe.minHeight = 48f;
+            ((RectTransform)box.transform).sizeDelta = new Vector2(84f, 48f);
+            _roundsLbl = MakeTmp(box.transform, "Lbl", "1", 24f, FontStyles.Bold, ColorPalette.TextBright);
+            _roundsLbl.alignment = TextAlignmentOptions.Center;
+            Stretch(_roundsLbl.rectTransform);
+
+            BuildStepButton(row.transform, "+", () => ChangeRounds(+1));
         }
 
-        void BuildModeSection(Transform parent)
+        void BuildStepButton(Transform parent, string glyph, Action onClick)
         {
-            SectionLabel(parent, "MODE");
-            var row = BuildButtonRow(parent);
-            var normal = BuildPill(row.transform, "NORMAL", () => { _mode = BattleMode.Normal; RefreshAll(); });
-            var crazy  = BuildPill(row.transform, "CRAZY",  () => { _mode = BattleMode.Crazy;  RefreshAll(); });
+            var go = NewGo("Step_" + glyph, parent, typeof(Image), typeof(Button), typeof(LayoutElement));
+            go.GetComponent<Image>().color = ColorPalette.Surface;
+            var bdr = go.AddComponent<Outline>();
+            bdr.effectColor = ColorPalette.WithAlpha(ColorPalette.ActiveRed, 0.6f);
+            bdr.effectDistance = new Vector2(1f, -1f);
+            var le = go.GetComponent<LayoutElement>();
+            le.minWidth = 48f; le.minHeight = 48f;
+            ((RectTransform)go.transform).sizeDelta = new Vector2(48f, 48f);
 
-            var nBorder = normal.bg.gameObject.AddComponent<Outline>();
-            nBorder.effectColor = Color.clear; nBorder.effectDistance = new Vector2(1f, -1f);
-            var cBorder = crazy.bg.gameObject.AddComponent<Outline>();
-            cBorder.effectColor = ColorPalette.GoldAccent; cBorder.effectDistance = new Vector2(1f, -1f);
+            var lbl = MakeTmp(go.transform, "Lbl", glyph, 26f, FontStyles.Bold, ColorPalette.ActiveRed);
+            lbl.alignment = TextAlignmentOptions.Center;
+            Stretch(lbl.rectTransform);
 
-            // HOT badge on crazy.
-            var hot = MakeTmp(crazy.bg.transform, "Hot", "HOT", 8f, FontStyles.Bold, ColorPalette.BgDeep);
-            var hotBg = MakeImage("HotBg", crazy.bg.transform, ColorPalette.GoldAccent);
-            SetRect(hotBg.rectTransform, new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(1f, 1f),
-                new Vector2(-2f, -2f), new Vector2(28f, 14f));
-            hot.transform.SetParent(hotBg.transform, false);
-            hot.alignment = TextAlignmentOptions.Center;
-            Stretch(hot.rectTransform);
-
-            _modeBtns.Add((normal.bg, normal.lbl, nBorder));
-            _modeBtns.Add((crazy.bg, crazy.lbl, cBorder));
+            var btn = go.GetComponent<Button>();
+            btn.transition = Selectable.Transition.None;
+            btn.onClick.AddListener(() => onClick());
         }
 
-        void BuildFooter(RectTransform rt)
+        void BuildCta(RectTransform rt)
         {
-            var footer = MakeImage("Footer", rt, ColorPalette.Surface, raycast: true);
-            BottomStrip(footer.rectTransform, FooterH);
+            _ctaBg = MakeAngled("Cta", rt, ColorPalette.ActiveRed, 10f, raycast: true);
+            var cRt = _ctaBg.rectTransform;
+            cRt.anchorMin = new Vector2(0f, 0f);
+            cRt.anchorMax = new Vector2(1f, 0f);
+            cRt.pivot     = new Vector2(0.5f, 0f);
+            cRt.offsetMin = new Vector2(SidePad, NavReserve);
+            cRt.offsetMax = new Vector2(-SidePad, NavReserve + CtaH);
 
-            var costLbl = MakeTmp(footer.transform, "CostLbl", "TOTAL COST", 11f, FontStyles.Bold, ColorPalette.TextDim);
-            costLbl.characterSpacing = 2f;
-            costLbl.alignment = TextAlignmentOptions.MidlineLeft;
-            SetRect(costLbl.rectTransform, new Vector2(0f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, 1f),
-                new Vector2(SidePad, -12f), new Vector2(0f, 18f));
+            var btn = _ctaBg.gameObject.AddComponent<Button>();
+            btn.transition = Selectable.Transition.None;
+            btn.onClick.AddListener(OnConfirmPressed);
 
-            _footerCost = MakeTmp(footer.transform, "Cost", "0 VP", 16f, FontStyles.Bold, ColorPalette.GoldAccent);
-            _footerCost.alignment = TextAlignmentOptions.MidlineRight;
-            SetRect(_footerCost.rectTransform, new Vector2(0.5f, 1f), new Vector2(1f, 1f), new Vector2(1f, 1f),
-                new Vector2(-SidePad, -12f), new Vector2(0f, 20f));
-
-            _confirmBg = MakeAngled("Confirm", footer.transform, ColorPalette.Border, 10f, raycast: true);
-            SetRect(_confirmBg.rectTransform, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0.5f, 0f),
-                new Vector2(0f, 20f), new Vector2(358f, 52f));
-            _confirmButton = _confirmBg.gameObject.AddComponent<Button>();
-            _confirmButton.transition = Selectable.Transition.None;
-            _confirmButton.onClick.AddListener(OnConfirmPressed);
-
-            _confirmLabel = MakeTmp(_confirmBg.transform, "Lbl", "START BATTLE", 16f, FontStyles.Bold, ColorPalette.TextDim);
-            _confirmLabel.alignment = TextAlignmentOptions.Center;
-            Stretch(_confirmLabel.rectTransform);
+            _ctaLbl = MakeTmp(_ctaBg.transform, "Lbl", "CREATE BATTLE", 15f, FontStyles.Bold, Color.white);
+            _ctaLbl.characterSpacing = 1f;
+            _ctaLbl.alignment = TextAlignmentOptions.Center;
+            Stretch(_ctaLbl.rectTransform);
         }
 
-        int ComputeCost()
+        // ── State / refresh ──────────────────────────────────────────────────────
+        void ChangeRounds(int delta)
         {
-            if (_selectedCase < 0) return 0;
-            return CaseCosts[_selectedCase] * _rounds * (_mode == BattleMode.Crazy ? 2 : 1);
+            _rounds = Mathf.Clamp(_rounds + delta, MinRounds, MaxRounds);
+            RefreshAll();
         }
 
         void RefreshAll()
@@ -331,73 +374,79 @@ namespace ValoCase.UI.Screens
             // Case selection visuals.
             for (int i = 0; i < _caseCards.Count; i++)
             {
-                bool sel = i == _selectedCase;
-                var (bg, border, glow) = _caseCards[i];
-                border.effectColor = sel ? ColorPalette.ActiveRed : ColorPalette.Border;
+                bool sel = i == _selected;
+                var (bg, border) = _caseCards[i];
+                border.effectColor    = sel ? ColorPalette.ActiveRed : ColorPalette.Border;
                 border.effectDistance = sel ? new Vector2(2f, -2f) : new Vector2(1f, -1f);
-                if (glow != null) glow.effectColor = sel ? ColorPalette.RedDim : Color.clear;
+                bg.color              = sel ? ColorPalette.WithAlpha(ColorPalette.ActiveRed, 0.16f) : ColorPalette.CardBg;
             }
 
-            ApplyToggle(_playerBtns, PlayerIndex());
-            ApplyToggle(_roundBtns, _rounds - 1);
-
-            // Mode (normal keeps no border; crazy keeps gold border always).
-            for (int i = 0; i < _modeBtns.Count; i++)
+            // Battle type visuals.
+            for (int i = 0; i < _typeBtns.Count; i++)
             {
-                bool active = (i == 0 && _mode == BattleMode.Normal) || (i == 1 && _mode == BattleMode.Crazy);
-                _modeBtns[i].bg.color  = active ? ColorPalette.ActiveRed : ColorPalette.Border;
-                _modeBtns[i].lbl.color = active ? Color.white : ColorPalette.TextBright;
+                bool active = (i == 0 && _playerCount == BattlePlayerCount.OneVOne)
+                           || (i == 1 && _playerCount == BattlePlayerCount.ThreePlayer);
+                _typeBtns[i].bg.color  = active ? ColorPalette.ActiveRed : ColorPalette.Surface;
+                _typeBtns[i].lbl.color = active ? Color.white : ColorPalette.TextBright;
+                var ol = _typeBtns[i].bg.GetComponent<Outline>();
+                if (ol != null) ol.effectColor = active ? ColorPalette.ActiveRed : ColorPalette.Border;
             }
 
-            int cost = ComputeCost();
-            _totalChip.text  = cost.ToString("N0") + " VP";
-            _footerCost.text = cost.ToString("N0") + " VP";
+            if (_roundsLbl != null) _roundsLbl.text = _rounds.ToString();
 
-            bool enabled = _selectedCase >= 0;
-            _confirmBg.color         = enabled ? ColorPalette.ActiveRed : ColorPalette.Border;
-            _confirmLabel.color      = enabled ? ColorPalette.TextBright : ColorPalette.TextDim;
-            _confirmButton.interactable = enabled;
+            int cost = CurrentCost();
+            if (_ctaLbl != null) _ctaLbl.text = "CREATE BATTLE  -  " + cost.ToString("N0") + " VP";
         }
 
-        int PlayerIndex()
+        int CurrentCost()
         {
-            switch (_playerCount)
-            {
-                case BattlePlayerCount.ThreePlayer: return 1;
-                case BattlePlayerCount.FourPlayer:  return 2;
-                default: return 0;
-            }
+            if (_selected < 0 || _selected >= _cases.Count) return 0;
+            return _cases[_selected].Price * _rounds;   // case price × round count
         }
 
-        static void ApplyToggle(List<(Image bg, TextMeshProUGUI lbl)> btns, int activeIndex)
-        {
-            for (int i = 0; i < btns.Count; i++)
-            {
-                bool active = i == activeIndex;
-                btns[i].bg.color  = active ? ColorPalette.ActiveRed : ColorPalette.Border;
-                btns[i].lbl.color = active ? Color.white : ColorPalette.TextBright;
-            }
-        }
-
+        // ── Confirm ──────────────────────────────────────────────────────────────
         void OnConfirmPressed()
         {
-            if (_selectedCase < 0) return;
-            StartCoroutine(UIAnimator.ScalePress(_confirmBg.transform, 0.97f, 0.12f));
+            if (_cases.Count == 0) return;
+            StartCoroutine(UIAnimator.ScalePress(_ctaBg.transform, 0.97f, 0.12f));
 
+            var opt = _cases[_selected];
             var data = new BattleLobbyData
             {
                 LobbyId        = GenId(),
                 HostName       = "YOU",
-                CaseName       = CaseNames[_selectedCase],
+                CaseName       = opt.Name,
                 Rounds         = _rounds,
-                Mode           = _mode,
+                Mode           = BattleMode.Normal,
                 PlayerCount    = _playerCount,
                 CurrentPlayers = 1,
                 Status         = LobbyStatus.Waiting,
-                Rarity         = CaseRarity[_selectedCase],
-                WagerVP        = ComputeCost()
+                Rarity         = SkinRarity.Select,
+                WagerVP        = CurrentCost(),
             };
             OnConfirm?.Invoke(data);
+        }
+
+        // ── Case loading (from existing content database) ────────────────────────
+        void LoadCases()
+        {
+            _cases.Clear();
+            var cases = GameContext.Instance?.Content?.Cases;
+            if (cases != null)
+            {
+                foreach (var c in cases)
+                    if (c != null)
+                        _cases.Add(new CaseOption(c.DisplayName, c.VpPrice, c.CaseIcon));
+            }
+
+            // Guarantee Basic Vandal Case is present even if content is unavailable.
+            if (_cases.Count == 0)
+                _cases.Add(new CaseOption("Basic Vandal Case", 500, null));
+
+            // Default selection → Basic Vandal Case when present.
+            _selected = 0;
+            for (int i = 0; i < _cases.Count; i++)
+                if (_cases[i].Name.IndexOf("Basic", StringComparison.OrdinalIgnoreCase) >= 0) { _selected = i; break; }
         }
 
         static string GenId()
@@ -407,7 +456,5 @@ namespace ValoCase.UI.Screens
             for (int i = 0; i < 4; i++) arr[i] = chars[UnityEngine.Random.Range(0, chars.Length)];
             return new string(arr);
         }
-
-        void OnDisable() => StopAllCoroutines();
     }
 }

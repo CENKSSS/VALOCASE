@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -8,429 +9,275 @@ using static ValoCase.UI.UIBuild;
 namespace ValoCase.UI
 {
     /// <summary>
-    /// Premium lobby card — redesigned to match reference layout.
-    ///
-    /// Layout:
-    ///   [3px rarity accent] | [Content zone — 3 rows] | [JOIN column — full height]
-    ///
-    ///   Row 1:  [Mode badge]  [#ID]   ───spacer───  [Wager $$$]
-    ///   Row 2:  [CaseChip][CaseChip] ×N  ─spacer─  [P1][P2][○][○]
-    ///   Row 3:  [● LIVE / WAITING indicator]  [X/X OPS]
+    /// Premium bot-lobby card.
     /// </summary>
     public sealed class LobbyCard : MonoBehaviour
     {
-        // ── Sizing constants ─────────────────────────────────────────────────
-        public const float Height    = 108f;
-        const float JoinColumnW      = 80f;
-        const float AccentW          = 3f;
-        const float PadH             = 12f;   // horizontal inner padding
-        const float PadVTop          = 11f;   // top padding inside content zone
-        const float RowGap           = 6f;    // gap between rows
-        const float Row1H            = 22f;
-        const float Row2H            = 28f;
-        const float Row3H            = 16f;
-        const float ChipSize         = 28f;
-        const float CircleSize       = 24f;
-        const float BadgeH           = 22f;
+        public const float Height = 180f;
 
-        static readonly Color32[] PlayerColors =
-        {
-            new Color32(220,  45,  70, 255),   // P1 – red
-            new Color32( 45, 110, 220, 255),   // P2 – blue
-            new Color32( 45, 200,  95, 255),   // P3 – green
-            new Color32(220, 145,  45, 255),   // P4 – amber
-        };
+        const float Pad          = 54f;
+        const float AccentW      = 4f;
+        const float ThumbSz      = 64f;
+        const float TextLeft     = AccentW + Pad + ThumbSz + 12f;
+        const float TextWidthD   = -(TextLeft + Pad);
+        const float FooterH      = 58f;
+        const float JoinW        = 104f;
+        const float JoinH        = 42f;
+        const float ThumbTopInset = (Height - FooterH - ThumbSz) * 0.5f;
+
+        static readonly Color RefCard       = HexColor("#07090F");
+        static readonly Color RefSecondary  = HexColor("#181922");
+        static readonly Color RefBorder     = HexColor("#7A1020");
+        static readonly Color RefPrimary    = HexColor("#FF003C");
+        static readonly Color RefForeground = HexColor("#FAFAFA");
+        static readonly Color RefMuted      = HexColor("#999999");
+        static readonly Color RefGold       = HexColor("#FFAA88");
+        static readonly Color RefWhite      = HexColor("#FFFFFF");
 
         BattleLobbyData         _data;
         Action<BattleLobbyData> _onJoin;
+        AngledCutImage          _joinBg;
 
-        AngledCutImage  _joinBg;
-        TextMeshProUGUI _joinLabel;
-        Image           _liveDot;
-        Button          _joinButton;
-        Outline         _joinBorder;
-        Coroutine       _livePulse;
-
-        // ── Factory ───────────────────────────────────────────────────────────
         public static LobbyCard Create(Transform parent, BattleLobbyData data,
-            Action<BattleLobbyData> onJoin)
+            Sprite caseIcon, Action<BattleLobbyData> onJoin)
         {
             var go   = NewGo("LobbyCard_" + data.LobbyId, parent);
             var card = go.AddComponent<LobbyCard>();
-            var le   = go.AddComponent<LayoutElement>();
+
+            var le = go.AddComponent<LayoutElement>();
             le.minHeight       = Height;
             le.preferredHeight = Height;
-            card.Build(data, onJoin);
+
+            card.Build(data, caseIcon, onJoin);
             return card;
         }
 
-        // ── Build ─────────────────────────────────────────────────────────────
-        void Build(BattleLobbyData data, Action<BattleLobbyData> onJoin)
+        void Build(BattleLobbyData data, Sprite caseIcon, Action<BattleLobbyData> onJoin)
         {
             _data   = data;
             _onJoin = onJoin;
 
-            // Card background — slightly elevated surface
-            var bg = MakeImage("Bg", transform, ColorPalette.CardBg, raycast: true);
+            var bg = MakeImage("Bg", transform, RefCard, raycast: true);
             Stretch(bg.rectTransform);
-            // Subtle outer border
+
             var border = bg.gameObject.AddComponent<Outline>();
-            border.effectColor    = ColorPalette.Border;
+            border.effectColor    = RefBorder;
             border.effectDistance = new Vector2(1f, -1f);
 
-            // Rarity top-edge tint — 1px strip across top in rarity colour
-            var topTint = MakeImage("TopTint", transform, ColorPalette.WithAlpha(ColorPalette.ForRarity(data.Rarity), 0.35f), raycast: false);
-            var ttRt = topTint.rectTransform;
-            ttRt.anchorMin        = new Vector2(0f, 1f);
-            ttRt.anchorMax        = new Vector2(1f, 1f);
-            ttRt.pivot            = new Vector2(0.5f, 1f);
-            ttRt.anchoredPosition = Vector2.zero;
-            ttRt.sizeDelta        = new Vector2(0f, 2f);
+            var glow = bg.gameObject.AddComponent<Shadow>();
+            glow.effectColor = WithAlpha(RefPrimary, 0.60f);
+            glow.effectDistance = new Vector2(0f, -4f);
 
-            // 3px left rarity accent strip
-            var accent = MakeImage("RarityAccent", transform, ColorPalette.ForRarity(data.Rarity), raycast: false);
+            var cardBtn = bg.gameObject.AddComponent<Button>();
+            cardBtn.transition = Selectable.Transition.None;
+            cardBtn.onClick.AddListener(OnJoinPressed);
+
+            var accent = MakeImage("Accent", transform, RefPrimary);
             var aRt = accent.rectTransform;
             aRt.anchorMin        = new Vector2(0f, 0f);
             aRt.anchorMax        = new Vector2(0f, 1f);
             aRt.pivot            = new Vector2(0f, 0.5f);
-            aRt.anchoredPosition = Vector2.zero;
             aRt.sizeDelta        = new Vector2(AccentW, 0f);
+            aRt.anchoredPosition = Vector2.zero;
 
-            BuildJoinColumn();
-            BuildContentZone(data);
-            ApplyStatusVisuals();
+            BuildThumb(caseIcon);
+            BuildTextContent(data);
+            BuildDivider();
+            BuildMetaRow(data);
+            BuildJoinButton();
         }
 
-        // ── JOIN column — full card height, 80dp wide ─────────────────────────
-        void BuildJoinColumn()
+        void BuildThumb(Sprite caseIcon)
         {
-            var col = NewGo("JoinColumn", transform);
-            var colRt = (RectTransform)col.transform;
-            colRt.anchorMin        = new Vector2(1f, 0f);
-            colRt.anchorMax        = new Vector2(1f, 1f);
-            colRt.pivot            = new Vector2(1f, 0.5f);
-            colRt.anchoredPosition = Vector2.zero;
-            colRt.sizeDelta        = new Vector2(JoinColumnW, 0f);
+            float x = AccentW + Pad;
 
-            // Left divider
-            var div = MakeImage("Divider", col.transform, ColorPalette.Border);
-            div.raycastTarget = false;
+            var tile = MakeImage("ThumbBg", transform, RefSecondary);
+            SetRect(tile.rectTransform,
+                new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f),
+                new Vector2(x, -ThumbTopInset), new Vector2(ThumbSz, ThumbSz));
+
+            var tb = tile.gameObject.AddComponent<Outline>();
+            tb.effectColor    = WithAlpha(RefPrimary, 0.5f);
+            tb.effectDistance = new Vector2(1f, -1f);
+
+            if (caseIcon != null)
+            {
+                var icon = MakeImage("Thumb", tile.transform, Color.white);
+                icon.sprite         = caseIcon;
+                icon.preserveAspect = true;
+
+                var iRt = icon.rectTransform;
+                iRt.anchorMin = new Vector2(0.5f, 0.5f);
+                iRt.anchorMax = new Vector2(0.5f, 0.5f);
+                iRt.pivot     = new Vector2(0.5f, 0.5f);
+                iRt.sizeDelta = new Vector2(ThumbSz - 10f, ThumbSz - 10f);
+            }
+        }
+
+        void BuildTextContent(BattleLobbyData data)
+        {
+            var title = MakeTmp(transform, "Title", LobbyTitle(data),
+                15f, FontStyles.Bold, RefForeground);
+            title.alignment = TextAlignmentOptions.MidlineLeft;
+            SetRect(title.rectTransform,
+                new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0f, 1f),
+                new Vector2(TextLeft, -16f), new Vector2(TextWidthD, 22f));
+
+            var botBadge = MakeAngled("BotBadge", transform, RefPrimary, 3f);
+            SetRect(botBadge.rectTransform,
+                new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f),
+                new Vector2(TextLeft, -44f), new Vector2(76f, 18f));
+
+            var botLbl = MakeTmp(botBadge.transform, "Lbl", "BOT LOBBY",
+                8f, FontStyles.Bold, RefWhite);
+            botLbl.alignment        = TextAlignmentOptions.Center;
+            botLbl.characterSpacing = 1f;
+            Stretch(botLbl.rectTransform);
+
+            var typeBadge = MakeImage("TypeBadge", transform, RefSecondary);
+            SetRect(typeBadge.rectTransform,
+                new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f),
+                new Vector2(TextLeft + 82f, -44f), new Vector2(50f, 18f));
+
+            var typeBorder = typeBadge.gameObject.AddComponent<Outline>();
+            typeBorder.effectColor    = WithAlpha(RefPrimary, 0.6f);
+            typeBorder.effectDistance = new Vector2(1f, -1f);
+
+            var typeLbl = MakeTmp(typeBadge.transform, "Lbl", TypeText(data),
+                8f, FontStyles.Bold, RefPrimary);
+            typeLbl.alignment        = TextAlignmentOptions.Center;
+            typeLbl.characterSpacing = 1f;
+            Stretch(typeLbl.rectTransform);
+
+            string caseLine = $"{data.CaseName}  <color=#{Hex(RefGold)}><b>x1</b></color>";
+            var caseLbl = MakeTmp(transform, "CaseName", caseLine,
+                11f, FontStyles.Normal, RefMuted);
+            caseLbl.alignment = TextAlignmentOptions.MidlineLeft;
+            SetRect(caseLbl.rectTransform,
+                new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0f, 1f),
+                new Vector2(TextLeft, -68f), new Vector2(TextWidthD, 18f));
+        }
+
+        void BuildDivider()
+        {
+            var div = MakeImage("Divider", transform, WithAlpha(RefBorder, 0.7f));
             SetRect(div.rectTransform,
-                new Vector2(0f, 0f), new Vector2(0f, 1f), new Vector2(0f, 0.5f),
-                Vector2.zero, new Vector2(1f, 0f));
-
-            // JOIN button — nearly full height, 10dp inner vertical padding
-            _joinBg = MakeAngled("JoinBtn", col.transform, ColorPalette.ActiveRed, 8f, raycast: true);
-            var joinRt = _joinBg.rectTransform;
-            joinRt.anchorMin = Vector2.zero;
-            joinRt.anchorMax = Vector2.one;
-            joinRt.offsetMin = new Vector2(10f, 10f);
-            joinRt.offsetMax = new Vector2(-10f, -10f);
-
-            _joinButton = _joinBg.gameObject.AddComponent<Button>();
-            _joinButton.transition = Selectable.Transition.None;
-            _joinButton.onClick.AddListener(OnJoinPressed);
-
-            // Live pulse dot — sits above the JOIN label
-            _liveDot = MakeImage("LiveDot", _joinBg.transform, ColorPalette.ActiveRed);
-            _liveDot.raycastTarget = false;
-            SetRect(_liveDot.rectTransform,
-                new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0.5f, 1f),
-                new Vector2(0f, -7f), new Vector2(7f, 7f));
-
-            _joinLabel = MakeTmp(_joinBg.transform, "JoinLbl", "JOIN", 14f, FontStyles.Bold, Color.white);
-            _joinLabel.alignment = TextAlignmentOptions.Center;
-            Stretch(_joinLabel.rectTransform);
+                new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(0.5f, 0f),
+                new Vector2(0f, FooterH), new Vector2(-(AccentW + Pad * 2f), 1f));
         }
 
-        // ── Content zone — 3 rows inside [accent..join divider] ──────────────
-        void BuildContentZone(BattleLobbyData data)
+        void BuildMetaRow(BattleLobbyData data)
         {
-            var zone = NewGo("ContentZone", transform);
-            var zRt  = (RectTransform)zone.transform;
-            zRt.anchorMin = Vector2.zero;
-            zRt.anchorMax = Vector2.one;
-            zRt.offsetMin = new Vector2(AccentW + 2f, 0f);
-            zRt.offsetMax = new Vector2(-JoinColumnW, 0f);
-
-            BuildRow1(zone.transform, data);
-            BuildRow2(zone.transform, data);
-            BuildRow3(zone.transform, data);
-        }
-
-        // Row 1: [Mode badge]  [#ID]  ──spacer──  [Wager]
-        void BuildRow1(Transform zone, BattleLobbyData data)
-        {
-            var row = MakeHRow("Row1", zone, PadH, 6f, TextAnchor.MiddleLeft);
-            SetRect((RectTransform)row.transform,
-                new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
-                new Vector2(0f, -PadVTop), new Vector2(0f, Row1H));
-
-            // Mode badge — angled cut, rarity-tinted background
-            var mbGo = NewGo("ModeBadge", row.transform, typeof(AngledCutImage), typeof(LayoutElement));
-            var mbImg = mbGo.GetComponent<AngledCutImage>();
-            mbImg.color        = ColorPalette.ActiveRed;
-            mbImg.CutSize      = 5f;
-            mbImg.raycastTarget = false;
-            var mbLe = mbGo.GetComponent<LayoutElement>();
-            mbLe.minWidth  = 48f;
-            mbLe.minHeight = BadgeH;
-            ((RectTransform)mbGo.transform).sizeDelta = new Vector2(48f, BadgeH);
-            var mbLbl = MakeTmp(mbGo.transform, "ModeLbl", ModeText(data), 10f, FontStyles.Bold, Color.white);
-            mbLbl.characterSpacing = 1f;
-            mbLbl.alignment        = TextAlignmentOptions.Center;
-            Stretch(mbLbl.rectTransform);
-
-            // Lobby ID
-            var idLbl = MakeTmp(row.transform, "LobbyId", "#" + data.LobbyId,
-                11f, FontStyles.Normal, ColorPalette.TextDim);
-            idLbl.alignment = TextAlignmentOptions.MidlineLeft;
-            var idRt = idLbl.rectTransform;
-            idRt.sizeDelta = new Vector2(48f, Row1H);
-            idLbl.gameObject.AddComponent<LayoutElement>().minWidth = 48f;
-
-            // Spacer
-            AddSpacer(row.transform);
-
-            // Wager — dominant right element, large bold
-            var wagerLbl = MakeTmp(row.transform, "Wager",
-                "$" + data.WagerVP.ToString("N0"),
-                24f, FontStyles.Bold, Color.white);
-            wagerLbl.alignment = TextAlignmentOptions.MidlineRight;
-            wagerLbl.rectTransform.sizeDelta = new Vector2(120f, Row1H);
-            wagerLbl.gameObject.AddComponent<LayoutElement>().minWidth = 90f;
-        }
-
-        // Row 2: [Chip][Chip] ×N  ──spacer──  [P1][P2][○][○]
-        void BuildRow2(Transform zone, BattleLobbyData data)
-        {
-            float top = PadVTop + Row1H + RowGap;
-            var row = MakeHRow("Row2", zone, PadH, 4f, TextAnchor.MiddleLeft);
-            SetRect((RectTransform)row.transform,
-                new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
-                new Vector2(0f, -top), new Vector2(0f, Row2H));
-
-            // Case chips — up to 3, rarity-coloured background + border
-            Color chipBg     = ColorPalette.WithAlpha(ColorPalette.ForRarity(data.Rarity), 0.25f);
-            Color chipBorder = ColorPalette.ForRarity(data.Rarity);
-            string abbrev    = CaseAbbrev(data.CaseName);
-            int    chips     = Mathf.Clamp(data.Rounds, 1, 3);
-            for (int i = 0; i < chips; i++)
-            {
-                var chipGo  = NewGo("Chip_" + i, row.transform, typeof(Image), typeof(LayoutElement));
-                var chipImg = chipGo.GetComponent<Image>();
-                chipImg.color = chipBg; chipImg.raycastTarget = false;
-                var cb = chipGo.AddComponent<Outline>();
-                cb.effectColor    = chipBorder;
-                cb.effectDistance = new Vector2(1f, -1f);
-                ((RectTransform)chipGo.transform).sizeDelta = new Vector2(ChipSize, ChipSize);
-                chipGo.GetComponent<LayoutElement>().minWidth  = ChipSize;
-                chipGo.GetComponent<LayoutElement>().minHeight = ChipSize;
-                var chipLbl = MakeTmp(chipGo.transform, "Lbl", abbrev, 8f, FontStyles.Bold, Color.white);
-                chipLbl.alignment = TextAlignmentOptions.Center;
-                Stretch(chipLbl.rectTransform);
-            }
-
-            // ×N quantity
-            var qtyLbl = MakeTmp(row.transform, "Qty", "×" + data.Rounds,
-                11f, FontStyles.Bold, ColorPalette.TextDim);
-            qtyLbl.alignment = TextAlignmentOptions.MidlineLeft;
-            qtyLbl.rectTransform.sizeDelta = new Vector2(28f, Row2H);
-            qtyLbl.gameObject.AddComponent<LayoutElement>().minWidth = 28f;
-
-            // Spacer
-            AddSpacer(row.transform);
-
-            // Player circles — 24×24, clearly labeled and gapped
-            for (int i = 0; i < data.MaxPlayers; i++)
-            {
-                bool filled = i < data.CurrentPlayers;
-                var circGo  = NewGo("P_" + i, row.transform, typeof(Image), typeof(LayoutElement));
-                var circImg = circGo.GetComponent<Image>();
-                circImg.raycastTarget = false;
-                var circLe = circGo.GetComponent<LayoutElement>();
-                circLe.minWidth = circLe.minHeight = CircleSize;
-                ((RectTransform)circGo.transform).sizeDelta = new Vector2(CircleSize, CircleSize);
-
-                if (filled)
-                {
-                    Color32 pc = PlayerColors[Mathf.Clamp(i, 0, PlayerColors.Length - 1)];
-                    circImg.color = pc;
-                    var pLbl = MakeTmp(circGo.transform, "P", "P" + (i + 1),
-                        9f, FontStyles.Bold, Color.white);
-                    pLbl.alignment = TextAlignmentOptions.Center;
-                    Stretch(pLbl.rectTransform);
-                }
-                else
-                {
-                    circImg.color = ColorPalette.WithAlpha(ColorPalette.Surface, 0.4f);
-                    var eb = circGo.AddComponent<Outline>();
-                    eb.effectColor    = ColorPalette.WithAlpha(ColorPalette.Border, 0.7f);
-                    eb.effectDistance = new Vector2(1f, -1f);
-                    // "+" inside empty slot
-                    var plusLbl = MakeTmp(circGo.transform, "Plus", "+",
-                        11f, FontStyles.Normal, ColorPalette.WithAlpha(ColorPalette.TextDim, 0.5f));
-                    plusLbl.alignment = TextAlignmentOptions.Center;
-                    Stretch(plusLbl.rectTransform);
-                }
-
-                // Small gap between circles (not after last)
-                if (i < data.MaxPlayers - 1)
-                {
-                    var gap = NewGo("Gap_" + i, row.transform, typeof(LayoutElement));
-                    gap.GetComponent<LayoutElement>().minWidth = 4f;
-                }
-            }
-        }
-
-        // Row 3: status dot + "X/X OPS · WAITING"
-        void BuildRow3(Transform zone, BattleLobbyData data)
-        {
-            float top = PadVTop + Row1H + RowGap + Row2H + RowGap;
-            var row = MakeHRow("Row3", zone, PadH, 5f, TextAnchor.MiddleLeft);
-            SetRect((RectTransform)row.transform,
-                new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
-                new Vector2(0f, -top), new Vector2(0f, Row3H));
-
-            int cur    = data.CurrentPlayers;
-            int max    = data.MaxPlayers;
-            var status = data.ComputeStatus();
-
-            // Small coloured status dot
-            var dotGo  = NewGo("StatusDot", row.transform, typeof(Image), typeof(LayoutElement));
-            var dotImg = dotGo.GetComponent<Image>();
-            dotImg.raycastTarget = false;
-            dotImg.color = status == LobbyStatus.Live ? ColorPalette.ActiveRed
-                         : status == LobbyStatus.Full ? ColorPalette.TextDim
-                         : new Color(0.3f, 0.75f, 0.4f, 1f);   // green = waiting/open
-            var dotLe = dotGo.GetComponent<LayoutElement>();
-            dotLe.minWidth = dotLe.minHeight = 7f;
-            ((RectTransform)dotGo.transform).sizeDelta = new Vector2(7f, 7f);
-
-            string statusStr = status == LobbyStatus.Live    ? "LIVE"
-                             : status == LobbyStatus.Full    ? "FULL"
-                             : "WAITING";
-
-            var statusLbl = MakeTmp(row.transform, "Status",
-                cur + "/" + max + " OPS  ·  " + statusStr,
-                10f, FontStyles.Normal,
-                status == LobbyStatus.Live ? ColorPalette.ActiveRed : ColorPalette.TextDim);
-            statusLbl.alignment = TextAlignmentOptions.MidlineLeft;
-            statusLbl.rectTransform.sizeDelta = new Vector2(200f, Row3H);
-            statusLbl.gameObject.AddComponent<LayoutElement>().flexibleWidth = 1f;
-        }
-
-        // ── Status visuals on JOIN column ─────────────────────────────────────
-        void ApplyStatusVisuals()
-        {
-            var status = _data.ComputeStatus();
-            switch (status)
-            {
-                case LobbyStatus.Full:
-                    _joinBg.color             = ColorPalette.Surface;
-                    _joinLabel.text           = "FULL";
-                    _joinLabel.fontSize        = 11f;
-                    _joinLabel.color           = ColorPalette.TextDim;
-                    _joinButton.interactable   = false;
-                    _liveDot.gameObject.SetActive(false);
-                    EnsureJoinBorder(ColorPalette.Border);
-                    break;
-
-                case LobbyStatus.Live:
-                    _joinBg.color             = Color.clear;
-                    _joinLabel.text           = "LIVE";
-                    _joinLabel.fontSize        = 12f;
-                    _joinLabel.color           = ColorPalette.ActiveRed;
-                    _joinButton.interactable   = true;
-                    _liveDot.gameObject.SetActive(true);
-                    EnsureJoinBorder(ColorPalette.ActiveRed);
-                    break;
-
-                default:  // Waiting — primary CTA, full red
-                    _joinBg.color             = ColorPalette.ActiveRed;
-                    _joinLabel.text           = "JOIN";
-                    _joinLabel.fontSize        = 15f;
-                    _joinLabel.color           = Color.white;
-                    _joinButton.interactable   = true;
-                    _liveDot.gameObject.SetActive(false);
-                    RemoveJoinBorder();
-                    break;
-            }
-        }
-
-        void EnsureJoinBorder(Color c)
-        {
-            if (_joinBorder == null) _joinBorder = _joinBg.gameObject.AddComponent<Outline>();
-            _joinBorder.effectColor    = c;
-            _joinBorder.effectDistance = new Vector2(1f, -1f);
-        }
-
-        void RemoveJoinBorder()
-        {
-            if (_joinBorder != null) _joinBorder.effectColor = Color.clear;
-        }
-
-        // ── Unity events ──────────────────────────────────────────────────────
-        void OnEnable()
-        {
-            if (_data == null) return;
-            if (_data.ComputeStatus() == LobbyStatus.Live && _liveDot != null)
-                _livePulse = StartCoroutine(UIAnimator.PulseOpacity(_liveDot, 0.3f, 1f, 1f));
-        }
-
-        void OnDisable()
-        {
-            StopAllCoroutines();
-            _livePulse = null;
-        }
-
-        void OnJoinPressed()
-        {
-            if (_data.ComputeStatus() == LobbyStatus.Full) return;
-            StartCoroutine(UIAnimator.ScalePress(transform, 1.02f, 0.12f));
-            _onJoin?.Invoke(_data);
-        }
-
-        // ── Helpers ───────────────────────────────────────────────────────────
-        // Creates a row container with a HorizontalLayoutGroup.
-        static GameObject MakeHRow(string name, Transform parent, float padH, float spacing, TextAnchor align)
-        {
-            var go  = NewGo(name, parent, typeof(HorizontalLayoutGroup));
-            var hlg = go.GetComponent<HorizontalLayoutGroup>();
-            hlg.padding               = new RectOffset((int)padH, (int)padH, 0, 0);
-            hlg.spacing               = spacing;
+            var row = NewGo("MetaRow", transform, typeof(HorizontalLayoutGroup));
+            var hlg = row.GetComponent<HorizontalLayoutGroup>();
+            hlg.spacing                = 6f;
             hlg.childForceExpandWidth  = false;
             hlg.childForceExpandHeight = false;
             hlg.childControlWidth      = false;
             hlg.childControlHeight     = false;
-            hlg.childAlignment         = align;
-            return go;
+            hlg.childAlignment         = TextAnchor.MiddleLeft;
+
+            var rRt = (RectTransform)row.transform;
+            rRt.anchorMin = new Vector2(0f, 0f);
+            rRt.anchorMax = new Vector2(1f, 0f);
+            rRt.pivot     = new Vector2(0f, 0f);
+            rRt.offsetMin = new Vector2(AccentW + Pad, 17f);
+            rRt.offsetMax = new Vector2(-(JoinW + Pad + 8f), 41f);
+
+            string roundTxt = data.Rounds + (data.Rounds == 1 ? " ROUND" : " ROUNDS");
+            int prize = data.WagerVP * Mathf.Max(1, data.MaxPlayers);
+
+            AddMeta(row.transform, RefPrimary,
+                $"{data.CurrentPlayers}/{data.MaxPlayers}", RefForeground, 40f);
+
+            AddMeta(row.transform, WithAlpha(RefMuted, 0.9f),
+                roundTxt, RefMuted, 72f);
+
+            AddMeta(row.transform, RefGold,
+                prize.ToString("N0") + " VP", RefGold, 84f);
         }
 
-        static void AddSpacer(Transform parent)
+        static void AddMeta(Transform parent, Color dotColor, string text, Color textColor, float labelW)
         {
-            var sp = NewGo("Spacer", parent, typeof(LayoutElement));
-            sp.GetComponent<LayoutElement>().flexibleWidth = 1f;
+            var dot = MakeAngled("Dot", parent, dotColor, 2f);
+            ((RectTransform)dot.transform).sizeDelta = new Vector2(8f, 8f);
+            dot.gameObject.AddComponent<LayoutElement>().minWidth = 8f;
+
+            var lbl = MakeTmp(parent, "Lbl", text, 11f, FontStyles.Bold, textColor);
+            lbl.alignment               = TextAlignmentOptions.MidlineLeft;
+            lbl.rectTransform.sizeDelta = new Vector2(labelW, 20f);
+            lbl.gameObject.AddComponent<LayoutElement>().minWidth = labelW;
         }
 
-        static string ModeText(BattleLobbyData d)
+        void BuildJoinButton()
         {
-            return d.MaxPlayers switch
-            {
-                2 => "1V1",
-                3 => "1V1V1",
-                4 => d.Mode == BattleMode.Crazy ? "1V1V1V1" : "2V2",
-                _ => d.MaxPlayers + "P",
-            };
+            _joinBg = MakeAngled("JoinBtn", transform, RefPrimary, 6f, raycast: true);
+
+            var joinGlow = _joinBg.gameObject.AddComponent<Shadow>();
+            joinGlow.effectColor = WithAlpha(RefPrimary, 0.75f);
+            joinGlow.effectDistance = new Vector2(0f, -4f);
+
+            SetRect(_joinBg.rectTransform,
+                new Vector2(1f, 0f), new Vector2(1f, 0f), new Vector2(1f, 0f),
+                new Vector2(-Pad, (FooterH - JoinH) * 0.5f), new Vector2(JoinW, JoinH));
+
+            var joinBtn = _joinBg.gameObject.AddComponent<Button>();
+            joinBtn.transition = Selectable.Transition.None;
+            joinBtn.onClick.AddListener(OnJoinPressed);
+
+            var lbl = MakeTmp(_joinBg.transform, "Lbl", "JOIN",
+                14f, FontStyles.Bold, RefWhite);
+            lbl.alignment        = TextAlignmentOptions.Center;
+            lbl.characterSpacing = 2f;
+            Stretch(lbl.rectTransform);
         }
 
-        static string CaseAbbrev(string name)
+        void OnJoinPressed()
         {
-            if (string.IsNullOrEmpty(name)) return "??-";
-            var parts = name.Split(' ');
-            return parts.Length >= 2
-                ? (parts[0][..Mathf.Min(2, parts[0].Length)] + parts[1][0]).ToUpper() + "-"
-                : name[..Mathf.Min(3, name.Length)].ToUpper() + "-";
+            StartCoroutine(Flash());
+            _onJoin?.Invoke(_data);
+        }
+
+        IEnumerator Flash()
+        {
+            if (_joinBg == null) yield break;
+            _joinBg.color = WithAlpha(RefPrimary, 0.8f);
+            yield return new WaitForSecondsRealtime(0.09f);
+            if (_joinBg != null) _joinBg.color = RefPrimary;
+        }
+
+        void OnDisable() => StopAllCoroutines();
+
+        static string LobbyTitle(BattleLobbyData d) => d.MaxPlayers switch
+        {
+            2 => "Basic Vandal Duel",
+            3 => "Basic Vandal Triple Battle",
+            _ => d.CaseName + " Battle",
+        };
+
+        static string TypeText(BattleLobbyData d) => d.MaxPlayers switch
+        {
+            2 => "1V1",
+            3 => "1V1V1",
+            _ => d.MaxPlayers + "P",
+        };
+
+        static Color HexColor(string hex)
+        {
+            ColorUtility.TryParseHtmlString(hex, out var color);
+            return color;
+        }
+
+        static Color WithAlpha(Color color, float alpha)
+        {
+            color.a = alpha;
+            return color;
+        }
+
+        static string Hex(Color c)
+        {
+            Color32 c32 = c;
+            return c32.r.ToString("X2") + c32.g.ToString("X2") + c32.b.ToString("X2");
         }
     }
 }

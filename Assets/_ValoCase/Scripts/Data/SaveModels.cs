@@ -29,6 +29,15 @@ namespace ValoCase.Save
         public string rarestSkinId;
         public int rarestSkinRarity;
         public List<CaseOpenCountEntry> casesOpenedById = new();
+
+        // Battle stats
+        public int   battleTotal;
+        public int   battleWins;
+        public int   battleLosses;
+        public float battleWinRate;
+        public int   battleEarnings;
+        public int   battleStreak;
+        public int   battleBestStreak;
     }
 
     [Serializable]

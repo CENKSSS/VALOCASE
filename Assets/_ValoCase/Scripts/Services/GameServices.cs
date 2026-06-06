@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
+using ValoCase.Battle;
 using ValoCase.Core;
 using ValoCase.Data;
 using ValoCase.Save;
@@ -325,6 +326,32 @@ namespace ValoCase.Services
             Data.inventoryValue = inventory.InventoryValue;
             if (notify)
                 GameEvents.RaiseStatisticsChanged();
+        }
+
+        public void RecordBattleResult(BattleOutcome outcome, int earningsVp)
+        {
+            var stats = Data;
+            stats.battleTotal++;
+
+            if (outcome == BattleOutcome.PlayerWins)
+            {
+                stats.battleWins++;
+                stats.battleStreak++;
+                if (stats.battleStreak > stats.battleBestStreak)
+                    stats.battleBestStreak = stats.battleStreak;
+                stats.battleEarnings += earningsVp;
+            }
+            else
+            {
+                stats.battleLosses++;
+                stats.battleStreak = 0;
+            }
+
+            stats.battleWinRate = stats.battleTotal > 0
+                ? stats.battleWins * 100f / stats.battleTotal
+                : 0f;
+
+            GameEvents.RaiseStatisticsChanged();
         }
     }
 
