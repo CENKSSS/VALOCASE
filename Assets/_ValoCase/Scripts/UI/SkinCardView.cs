@@ -66,7 +66,7 @@ namespace ValoCase.UI
                 var bg = GetComponent<Image>();
                 if (bg != null) bg.color = v.cardBgColor;
 
-                // Rarity symbol PNG from Desktop/ValorantProject/Semboller/ (see ProjectPaths).
+                // Rarity symbol PNG from Assets/_ValoCase/Art/UI/Semboller/ (see ProjectPaths).
                 // Falls back to a solid-color dot if the file is not found.
                 if (rarityStripe != null)
                 {

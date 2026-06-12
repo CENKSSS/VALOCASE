@@ -10,7 +10,7 @@ namespace ValoCase.Profile
     /// Scans the FaceCards folder and returns (agentName, Sprite) pairs.
     /// Reuses FileSystemSkinLoader's proven image-loading pipeline.
     ///
-    /// Expected folder:  Desktop/ValorantProject/FaceCards/
+    /// Expected folder:  Assets/_ValoCase/Art/Avatars/
     /// Expected filenames: Chamber_icon.png, Jett_icon.png, Phoenix_icon.png …
     ///   The loader strips common suffixes (_icon, _face, _portrait, _card)
     ///   so the display name is clean ("Chamber", "Jett", etc.).

@@ -13,8 +13,8 @@ namespace ValoCase.Data
         [SerializeField] List<SkinDefinitionSO> skins = new List<SkinDefinitionSO>();
         [SerializeField] List<CaseDefinitionSO> cases = new List<CaseDefinitionSO>();
 
-        // Optional: override the desktop path. Leave empty to use the default
-        // (Desktop/ValorantProject/ValoSkinss). Set in Inspector if the folder is elsewhere.
+        // Optional: override the skins folder path. Leave empty to use the default
+        // (Assets/_ValoCase/Art/Skins). Set in Inspector if the folder is elsewhere.
         [Header("FileSystem Loader")]
         [SerializeField] string skinRootPathOverride = "";
 

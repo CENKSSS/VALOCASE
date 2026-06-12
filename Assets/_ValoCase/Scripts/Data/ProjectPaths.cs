@@ -1,68 +1,68 @@
-using System;
 using System.IO;
+using UnityEngine;
 
 namespace ValoCase.Data
 {
     /// <summary>
     /// Single source of truth for every on-disk folder the project reads at runtime.
     ///
-    /// Folder layout (all under Desktop/ValorantProject/):
-    ///   ValoSkinss/          ← weapon skin images  (FileSystemSkinLoader)
+    /// Folder layout (all under Assets/_ValoCase/Art/):
+    ///   Skins/               ← weapon skin images  (FileSystemSkinLoader)
     ///     Vandal/
     ///       Ozel/  Ustun/  Ihtisamli/  Ultra/  Seckin/
-    ///   Semboller/           ← rarity symbol PNGs   (RaritySymbolLoader)
-    ///   Case/                ← case icon images     (VandalCaseBuilder)
+    ///   UI/Semboller/        ← rarity symbol PNGs   (RaritySymbolLoader)
+    ///   Cases/               ← case icon images     (VandalCaseBuilder)
+    ///   UI/                  ← UI art (backgrounds, logos, etc.)
+    ///   Avatars/             ← agent portrait images (ProfileAvatarLoader)
     ///
-    /// To relocate the whole project tree, change only ProjectRoot below.
+    /// To relocate the whole art tree, change only ProjectRoot below.
     /// </summary>
     public static class ProjectPaths
     {
         // ── Root ──────────────────────────────────────────────────────────────
-        static readonly string Desktop =
-            Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
 
-        /// <summary>Desktop/ValorantProject/</summary>
+        /// <summary>Assets/_ValoCase/Art/ — all runtime-loaded art lives here.</summary>
         public static readonly string ProjectRoot =
-            Path.Combine(Desktop, "ValorantProject");
+            Path.Combine(Application.dataPath, "_ValoCase", "Art");
 
         // ── Sub-folders ───────────────────────────────────────────────────────
 
         /// <summary>
-        /// Desktop/ValorantProject/ValoSkinss/ — weapon skin images.
+        /// Assets/_ValoCase/Art/Skins/ — weapon skin images.
         /// Layout: WeaponName / RarityFolder / SkinName.png
         /// </summary>
         public static readonly string SkinsRoot =
-            Path.Combine(ProjectRoot, "ValoSkinss");
+            Path.Combine(ProjectRoot, "Skins");
 
         /// <summary>
-        /// Desktop/ValorantProject/Semboller/ — rarity symbol PNGs.
+        /// Assets/_ValoCase/Art/UI/Semboller/ — rarity symbol PNGs.
         /// </summary>
         public static readonly string SymbolsRoot =
-            Path.Combine(ProjectRoot, "Semboller");
+            Path.Combine(ProjectRoot, "UI", "Semboller");
 
         /// <summary>
-        /// Desktop/ValorantProject/Cases/ — case icon images (VCase.png etc.).
+        /// Assets/_ValoCase/Art/Cases/ — case icon images (VCase.png etc.).
         /// </summary>
         public static readonly string CaseIconsRoot =
             Path.Combine(ProjectRoot, "Cases");
 
         /// <summary>
-        /// Desktop/ValorantProject/Arayuz/ — UI art assets (backgrounds, logos, etc.).
+        /// Assets/_ValoCase/Art/UI/ — UI art assets (backgrounds, logos, etc.).
         /// </summary>
         public static readonly string ArayuzRoot =
-            Path.Combine(ProjectRoot, "Arayuz");
+            Path.Combine(ProjectRoot, "UI");
 
         /// <summary>
-        /// Desktop/ValorantProject/Arayuz/ArkaPlan.jpg — main menu full-screen background.
+        /// Assets/_ValoCase/Art/UI/ArkaPlan.jpg — main menu full-screen background.
         /// </summary>
         public static readonly string ArkaPlanPath =
             Path.Combine(ArayuzRoot, "ArkaPlan.jpg");
 
         /// <summary>
-        /// Desktop/ValorantProject/FaceCards/ — agent portrait images for player profiles.
+        /// Assets/_ValoCase/Art/Avatars/ — agent portrait images for player profiles.
         /// Expected filenames: Chamber_icon.png, Jett_icon.png, etc.
         /// </summary>
         public static readonly string FaceCardsRoot =
-            Path.Combine(ProjectRoot, "FaceCards");
+            Path.Combine(ProjectRoot, "Avatars");
     }
 }

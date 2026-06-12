@@ -475,7 +475,7 @@ namespace ValoCase.UI.Widgets
             if (_avatars == null || _avatars.Count == 0)
             {
                 var msg = MakeTmp(_avatarGridContent, "NoCards",
-                    "No face cards found.\n\nPlace images in:\nDesktop/ValorantProject/FaceCards/",
+                    "No face cards found.\n\nPlace images in:\nAssets/_ValoCase/Art/Avatars/",
                     10, FontStyles.Normal, TextAlignmentOptions.Center, TextDim);
                 msg.enableWordWrapping = true;
                 return;

@@ -512,7 +512,7 @@ namespace ValoCase.UI.Screens
             if (avatars == null || avatars.Count == 0)
             {
                 var msg = PT(_gridContent, "NoCards",
-                    "Place images in:\nDesktop/ValorantProject/FaceCards/",
+                    "Place images in:\nAssets/_ValoCase/Art/Avatars/",
                     9f, FontStyles.Normal, TextAlignmentOptions.Center, TextDim);
                 msg.enableWordWrapping = true;
                 return;

@@ -8,7 +8,7 @@ using UnityEngine;
 namespace ValoCase.Data
 {
     /// <summary>
-    /// Loads rarity-symbol images from Desktop/ValorantProject/Semboller at runtime.
+    /// Loads rarity-symbol images from Assets/_ValoCase/Art/UI/Semboller at runtime.
     ///
     /// SPAM POLICY
     ///   • Every error / warning is logged AT MOST ONCE per rarity per session.
@@ -89,7 +89,7 @@ namespace ValoCase.Data
                     Debug.LogWarning(
                         $"{Tag} No symbol file found for rarity={rarity} " +
                         $"(keywords: {string.Join(", ", kws)}). " +
-                        $"Expected in Desktop/ValorantProject/Semboller/");
+                        $"Expected in Assets/_ValoCase/Art/UI/Semboller/");
                 return null;
             }
 
@@ -217,9 +217,9 @@ namespace ValoCase.Data
             // Primary location + fallbacks, all from ProjectPaths.
             var roots = new[]
             {
-                ProjectPaths.SymbolsRoot,                          // ValorantProject/Semboller   ← canonical
-                Path.Combine(ProjectPaths.SkinsRoot, "Semboller"), // ValorantProject/ValoSkinss/Semboller
-                ProjectPaths.ProjectRoot,                          // ValorantProject/
+                ProjectPaths.SymbolsRoot,                          // Art/UI/Semboller   ← canonical
+                Path.Combine(ProjectPaths.SkinsRoot, "Semboller"), // Art/Skins/Semboller
+                ProjectPaths.ProjectRoot,                          // Art/
             };
 
             foreach (var root in roots)
