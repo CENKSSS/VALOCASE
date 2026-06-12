@@ -2,7 +2,6 @@ using System;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
-using ValoCase.Audio;
 using ValoCase.Core;
 using ValoCase.Data;
 using ValoCase.Pooling;
@@ -20,7 +19,6 @@ namespace ValoCase.UI
         [SerializeField] TextMeshProUGUI quantityBadge;
         [SerializeField] GameObject duplicateMarker;
         [SerializeField] TextMeshProUGUI vpValueLabel;
-        [SerializeField] Button sellButton;
 
         public OwnedSkinSaveEntry Entry { get; private set; }
         public SkinDefinitionSO Skin { get; private set; }
@@ -30,10 +28,10 @@ namespace ValoCase.UI
         void Awake()
         {
             if (button != null) button.onClick.AddListener(() => _onClick?.Invoke(this));
-            if (sellButton != null) sellButton.onClick.AddListener(SellDirect);
         }
 
-        public void Bind(OwnedSkinSaveEntry entry, SkinDefinitionSO skin, RarityVisualSO visuals, Action<SkinCardView> onClick)
+        public void Bind(OwnedSkinSaveEntry entry, SkinDefinitionSO skin, RarityVisualSO visuals,
+            Action<SkinCardView> onClick)
         {
             Entry = entry;
             Skin = skin;
@@ -91,21 +89,6 @@ namespace ValoCase.UI
                 var outline = GetComponent<Outline>();
                 if (outline != null)
                     outline.effectColor = new Color(v.primaryColor.r, v.primaryColor.g, v.primaryColor.b, 0.75f);
-            }
-        }
-
-        void SellDirect()
-        {
-            if (Skin == null) return;
-            var ctx = GameContext.Instance;
-            if (ctx?.Inventory == null) return;
-            if (ctx.Inventory.TrySell(Skin.SkinId, out var gained))
-            {
-                SoundManager.Instance?.Play(SoundId.SellSkin);
-                ctx.Statistics?.RecordVpEarned(gained);
-                ctx.Statistics?.RecalculateInventoryStats(ctx.Inventory, ctx.Content);
-                ctx.Save?.Save();
-                GameEvents.RaiseToast($"Sold for {gained:N0} VP");
             }
         }
 

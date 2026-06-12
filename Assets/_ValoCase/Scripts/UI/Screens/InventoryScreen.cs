@@ -1,12 +1,13 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
+using ValoCase.Audio;
 using ValoCase.Core;
 using ValoCase.Data;
 using ValoCase.Pooling;
-using ValoCase.Save;
 
 namespace ValoCase.UI.Screens
 {
@@ -15,84 +16,204 @@ namespace ValoCase.UI.Screens
         [SerializeField] UINavigator navigator;
         [SerializeField] Transform gridRoot;
         [SerializeField] Button backButton;
-        [SerializeField] TMP_Dropdown filterDropdown;
-        [SerializeField] TMP_Dropdown sortDropdown;
         [SerializeField] TextMeshProUGUI inventoryValueLabel;
         [SerializeField] SkinDetailPopup detailPopup;
         [SerializeField] TextMeshProUGUI walletLabel;
 
-        // Weapon-type filter (cloned at runtime from filterDropdown).
-        // Optional inspector field — if null, created automatically beside the rarity dropdown.
+        // Legacy filter controls — kept for layout reference only. They are hidden at
+        // runtime; their header slots are reused for the new Sort / Sell buttons.
+        [SerializeField] TMP_Dropdown filterDropdown;
+        [SerializeField] TMP_Dropdown sortDropdown;
         [SerializeField] TMP_Dropdown weaponDropdown;
 
         readonly List<SkinCardView> _cards = new();
-        bool _weaponDropdownReady;
+
+        SellFlow _sellFlow;
+        Button _sortButton;
+        TextMeshProUGUI _sortLabel;
+        Button _sellButton;
+        bool _headerBuilt;
+        bool _priceDescending = true; // default: highest value first (Price ↓)
+
+        // Scroll-panel insets (px, 1080×1920 ref). Top is larger than the prefab's 240
+        // so the grid sits below the Price / SELL row; bottom is lowered from 176 into
+        // the freed Back-button band, stopping ~20px above the 90px BottomNavBar.
+        const float GridTopPadding = 330f;
+        const float GridBottomPadding = 110f;
+
+        // Downward nudge (px, 1080×1920 ref) applied to the Price / SELL buttons relative
+        // to the old dropdown slot. Stays above the grid (grid top inset is 330).
+        const float HeaderButtonDrop = 25f;
 
         void Awake()
         {
-            if (backButton != null) backButton.onClick.AddListener(() => navigator?.Navigate(ScreenType.MainMenu));
-            if (filterDropdown != null) filterDropdown.onValueChanged.AddListener(_ => Refresh());
-            if (sortDropdown != null) sortDropdown.onValueChanged.AddListener(_ => Refresh());
+            if (backButton != null)
+                backButton.onClick.AddListener(() => navigator?.Navigate(ScreenType.MainMenu));
         }
 
         protected override void OnShown()
         {
-            EnsureWeaponDropdown();
+            EnsureSellFlow();
+            BuildHeaderControls();
             Refresh();
             GameEvents.OnInventoryChanged += Refresh;
             GameEvents.OnVpChanged += OnVpChanged;
             RefreshWallet();
         }
 
-        // Clones the existing rarity dropdown to create a weapon-type filter.
-        // Runs once; no prefab modifications needed.
-        void EnsureWeaponDropdown()
-        {
-            if (_weaponDropdownReady) return;
-
-            var db = GameContext.Instance?.Content;
-            if (db == null) return;
-
-            // Build the dropdown at runtime if not wired in the prefab.
-            if (weaponDropdown == null && filterDropdown != null)
-            {
-                weaponDropdown = Instantiate(filterDropdown, filterDropdown.transform.parent, false);
-                weaponDropdown.name = "WeaponDropdown";
-                weaponDropdown.onValueChanged.RemoveAllListeners();
-
-                var src = filterDropdown.GetComponent<RectTransform>();
-                var rt  = weaponDropdown.GetComponent<RectTransform>();
-                if (src != null && rt != null)
-                {
-                    rt.anchorMin = src.anchorMin;
-                    rt.anchorMax = src.anchorMax;
-                    rt.pivot     = src.pivot;
-                    rt.sizeDelta = src.sizeDelta;
-                    // Place below the filter+sort row.
-                    rt.anchoredPosition = src.anchoredPosition + new Vector2(0f, -50f);
-                }
-            }
-
-            if (weaponDropdown == null) return;
-
-            // Populate with "Tüm Silahlar" + each unique weapon name.
-            weaponDropdown.ClearOptions();
-            var opts = new List<string> { "Tüm Silahlar" };
-            opts.AddRange(db.GetUniqueWeaponNames());
-            weaponDropdown.AddOptions(opts);
-            weaponDropdown.value = 0;
-            weaponDropdown.RefreshShownValue();
-            weaponDropdown.onValueChanged.AddListener(_ => Refresh());
-
-            _weaponDropdownReady = true;
-        }
-
         protected override void OnHidden()
         {
             GameEvents.OnInventoryChanged -= Refresh;
             GameEvents.OnVpChanged -= OnVpChanged;
+            _sellFlow?.CloseAll();
         }
 
+        // ── Header construction ────────────────────────────────────────────────
+        void EnsureSellFlow()
+        {
+            if (_sellFlow != null) return;
+            var canvas = GetComponentInParent<Canvas>();
+            var root = canvas != null ? canvas.rootCanvas.transform : transform;
+            _sellFlow = new SellFlow(root,
+                onSellAll:   () => SellMatching(null),
+                onSellBelow: threshold => SellMatching(s => s.VpValue <= threshold));
+        }
+
+        void BuildHeaderControls()
+        {
+            if (_headerBuilt) return;
+
+            HideLegacyFilters();
+            RemoveBackButton();
+            ResizeGrid();
+
+            // Reuse the former filter slot for the sort toggle, the sort slot for SELL.
+            _sortButton = MakeHeaderButton("SortButton", filterDropdown, SellUIFactory.Grey,
+                SellUIFactory.Light, out _sortLabel);
+            if (_sortButton != null) _sortButton.onClick.AddListener(ToggleSort);
+
+            _sellButton = MakeHeaderButton("SellButton", sortDropdown, SellUIFactory.Red,
+                Color.white, out var sellLabel);
+            if (_sellButton != null)
+            {
+                sellLabel.text = "SELL";
+                _sellButton.onClick.AddListener(() => _sellFlow?.OpenOptions());
+            }
+
+            UpdateSortLabel();
+            _headerBuilt = true;
+        }
+
+        void HideLegacyFilters()
+        {
+            if (filterDropdown != null) filterDropdown.gameObject.SetActive(false);
+            if (sortDropdown != null) sortDropdown.gameObject.SetActive(false);
+            if (weaponDropdown != null) weaponDropdown.gameObject.SetActive(false);
+        }
+
+        // Completely removes the Back button GameObject (label, dark rectangle, and the
+        // space it occupied). Navigation off the screen is handled by the BottomNavBar.
+        void RemoveBackButton()
+        {
+            if (backButton == null) return;
+            Destroy(backButton.gameObject);
+        }
+
+        // Resizes the scroll panel: top edge pushed down below the Price / SELL row, and
+        // bottom edge extended into the freed Back-button band so the grid is taller and
+        // reaches near the BottomNavBar with a small safe margin. Idempotent across shows.
+        void ResizeGrid()
+        {
+            var scroll = gridRoot != null ? gridRoot.GetComponentInParent<ScrollRect>() : null;
+            if (scroll == null || scroll.transform is not RectTransform rt) return;
+            rt.offsetMax = new Vector2(rt.offsetMax.x, -GridTopPadding);
+            rt.offsetMin = new Vector2(rt.offsetMin.x, GridBottomPadding);
+        }
+
+        // Builds a fresh button placed in the given dropdown's former layout slot.
+        Button MakeHeaderButton(string name, TMP_Dropdown slotSource, Color bg, Color textColor,
+            out TextMeshProUGUI label)
+        {
+            var parent = slotSource != null ? slotSource.transform.parent : transform;
+            var btn = SellUIFactory.Button(parent, name, "", bg, textColor, 36, out label);
+            var rt = (RectTransform)btn.transform;
+
+            if (slotSource != null)
+            {
+                var src = slotSource.GetComponent<RectTransform>();
+                rt.anchorMin        = src.anchorMin;
+                rt.anchorMax        = src.anchorMax;
+                rt.pivot            = src.pivot;
+                rt.sizeDelta        = src.sizeDelta;
+                // Nudge the Price / SELL row slightly down from the old dropdown slot,
+                // keeping both buttons on the same line (same offset applied to each).
+                rt.anchoredPosition = src.anchoredPosition + new Vector2(0f, -HeaderButtonDrop);
+                rt.SetSiblingIndex(src.GetSiblingIndex());
+            }
+            else
+            {
+                // Fallback: top-right corner if the prefab slot is missing.
+                rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(1f, 1f);
+                rt.sizeDelta = new Vector2(280f, 90f);
+                rt.anchoredPosition = new Vector2(-40f, -40f);
+            }
+            return btn;
+        }
+
+        void ToggleSort()
+        {
+            _priceDescending = !_priceDescending;
+            UpdateSortLabel();
+            Refresh();
+        }
+
+        void UpdateSortLabel()
+        {
+            if (_sortLabel != null)
+                _sortLabel.text = _priceDescending ? "Price ↓" : "Price ↑";
+        }
+
+        // ── Selling ────────────────────────────────────────────────────────────
+        // predicate == null  → sell every skin.
+        void SellMatching(Func<SkinDefinitionSO, bool> predicate)
+        {
+            var ctx = GameContext.Instance;
+            if (ctx?.Inventory == null || ctx.Content == null) return;
+
+            // Suppress per-item grid rebuilds; we rebuild once at the end.
+            GameEvents.OnInventoryChanged -= Refresh;
+
+            int totalGained = 0;
+            // Snapshot ids up-front — selling mutates the underlying inventory list.
+            var ids = ctx.Inventory.Items.Select(e => e.skinId).Distinct().ToList();
+            foreach (var id in ids)
+            {
+                var skin = ctx.Content.GetSkin(id);
+                if (skin == null) continue;
+                if (predicate != null && !predicate(skin)) continue;
+
+                int qty = ctx.Inventory.GetQuantity(id);
+                for (int i = 0; i < qty; i++)
+                {
+                    if (ctx.Inventory.TrySell(id, out var gained)) totalGained += gained;
+                    else break;
+                }
+            }
+
+            GameEvents.OnInventoryChanged += Refresh;
+
+            if (totalGained > 0)
+            {
+                SoundManager.Instance?.Play(SoundId.SellSkin);
+                ctx.Statistics?.RecordVpEarned(totalGained);
+                ctx.Statistics?.RecalculateInventoryStats(ctx.Inventory, ctx.Content);
+            }
+
+            ctx.Save?.Save();
+            Refresh();
+        }
+
+        // ── Rendering ──────────────────────────────────────────────────────────
         void OnVpChanged(int _, int current) => RefreshWallet();
 
         void RefreshWallet()
@@ -106,7 +227,8 @@ namespace ValoCase.UI.Screens
         void Refresh()
         {
             var ctx = GameContext.Instance;
-            if (ctx == null || ctx.Inventory == null || ctx.Content == null || PoolManager.Instance == null || gridRoot == null)
+            if (ctx == null || ctx.Inventory == null || ctx.Content == null ||
+                PoolManager.Instance == null || gridRoot == null)
                 return;
 
             if (inventoryValueLabel != null)
@@ -118,20 +240,15 @@ namespace ValoCase.UI.Screens
                 PoolManager.Instance.ReleaseSkinCard(card);
             _cards.Clear();
 
-            var filter = filterDropdown != null ? (SkinFilterMode)filterDropdown.value : SkinFilterMode.All;
-            var sort = sortDropdown != null ? (InventorySortMode)sortDropdown.value : InventorySortMode.RarityDesc;
-            var items = ctx.Inventory.GetFilteredSorted(filter, sort);
-
-            // Apply weapon-type filter on top of rarity filter (index 0 = "All").
-            if (weaponDropdown != null && weaponDropdown.value > 0)
-            {
-                var weaponName = weaponDropdown.options[weaponDropdown.value].text;
-                items = items.Where(e =>
-                {
-                    var s = ctx.Content.GetSkin(e.skinId);
-                    return s != null && string.Equals(s.WeaponName, weaponName, System.StringComparison.OrdinalIgnoreCase);
-                }).ToList();
-            }
+            // Sort explicitly here (right before rendering) so the rendered order
+            // always reflects the toggle. OrderBy is stable, so equal VP values keep
+            // a deterministic secondary order by skin name.
+            var entries = ctx.Inventory.GetFilteredSorted(SkinFilterMode.All, InventorySortMode.ValueDesc);
+            var items = (_priceDescending
+                    ? entries.OrderByDescending(e => SkinValue(ctx, e.skinId))
+                    : entries.OrderBy(e => SkinValue(ctx, e.skinId)))
+                .ThenBy(e => SkinName(ctx, e.skinId), StringComparer.Ordinal)
+                .ToList();
 
             foreach (var entry in items)
             {
@@ -140,9 +257,24 @@ namespace ValoCase.UI.Screens
 
                 var card = PoolManager.Instance.GetSkinCard();
                 card.transform.SetParent(gridRoot, false);
+                // Pooled cards stay children of gridRoot when released, so SetParent
+                // alone won't reorder them — force sibling order to match the sort.
+                card.transform.SetAsLastSibling();
                 card.Bind(entry, skin, ctx.RarityVisuals, OnCardClicked);
                 _cards.Add(card);
             }
+        }
+
+        static int SkinValue(GameContext ctx, string skinId)
+        {
+            var skin = ctx.Content.GetSkin(skinId);
+            return skin != null ? skin.VpValue : 0;
+        }
+
+        static string SkinName(GameContext ctx, string skinId)
+        {
+            var skin = ctx.Content.GetSkin(skinId);
+            return skin != null ? skin.SkinName : string.Empty;
         }
 
         void OnCardClicked(SkinCardView card)

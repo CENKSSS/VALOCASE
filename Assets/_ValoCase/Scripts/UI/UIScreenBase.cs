@@ -12,10 +12,15 @@ namespace ValoCase.UI
         public ScreenType ScreenType => screenType;
         public bool IsVisible { get; private set; }
 
+        /// <summary>Screens that must appear with zero delay (e.g. Settings)
+        /// override this; the whole transition then skips the fade animation.</summary>
+        public virtual bool OpensInstantly => false;
+
         Coroutine _fadeRoutine;
 
         public virtual void ShowImmediate()
         {
+            CancelFade();
             gameObject.SetActive(true);
             if (canvasGroup != null)
             {
@@ -30,6 +35,12 @@ namespace ValoCase.UI
 
         public virtual void HideImmediate()
         {
+            // Keep-alive screens stay active while hidden, so a mid-flight fade
+            // coroutine would survive and re-raise the alpha — cancel it here.
+            CancelFade();
+            bool keepAlive = KeepAliveWhenHidden;
+            if (keepAlive) EnsureCanvasGroupExists();
+
             if (canvasGroup != null)
             {
                 canvasGroup.alpha = 0f;
@@ -38,12 +49,19 @@ namespace ValoCase.UI
             }
 
             IsVisible = false;
-            gameObject.SetActive(false);
+            if (!keepAlive || canvasGroup == null)
+                gameObject.SetActive(false);
             OnHidden();
         }
 
         public void ShowAnimated()
         {
+            if (OpensInstantly)
+            {
+                ShowImmediate();
+                return;
+            }
+
             gameObject.SetActive(true);
             if (_fadeRoutine != null) StopCoroutine(_fadeRoutine);
             _fadeRoutine = StartCoroutine(Fade(1f, true));
@@ -57,6 +75,8 @@ namespace ValoCase.UI
 
         IEnumerator Fade(float target, bool visibleAfter)
         {
+            if (!visibleAfter && KeepAliveWhenHidden) EnsureCanvasGroupExists();
+
             if (canvasGroup == null)
             {
                 if (visibleAfter) ShowImmediate();
@@ -82,8 +102,28 @@ namespace ValoCase.UI
             else
             {
                 OnHidden();
-                gameObject.SetActive(false);
+                if (!KeepAliveWhenHidden)
+                    gameObject.SetActive(false);
             }
+        }
+
+        // Screens that must keep running while another screen is shown (e.g. an
+        // active Case Battle under the Settings screen) opt in by overriding this.
+        // The screen is faded out and made non-interactive but stays active, so
+        // its coroutines and child overlays survive the navigation round-trip.
+        protected virtual bool KeepAliveWhenHidden => false;
+
+        void CancelFade()
+        {
+            if (_fadeRoutine == null) return;
+            StopCoroutine(_fadeRoutine);
+            _fadeRoutine = null;
+        }
+
+        void EnsureCanvasGroupExists()
+        {
+            if (canvasGroup == null) canvasGroup = GetComponent<CanvasGroup>();
+            if (canvasGroup == null) canvasGroup = gameObject.AddComponent<CanvasGroup>();
         }
 
         // Call this from a derived screen whenever an async operation (e.g. case spin)

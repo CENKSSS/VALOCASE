@@ -48,6 +48,10 @@ namespace ValoCase.UI
             }
             if (_current == next) return;
 
+            // Screens like Settings request a zero-delay open; promote the whole
+            // transition (outgoing hide + incoming show) to instant.
+            if (next.OpensInstantly) instant = true;
+
             if (_current != null)
             {
                 if (instant) _current.HideImmediate();

@@ -22,7 +22,10 @@ namespace ValoCase.Services
         int InventoryValue { get; }
         bool Owns(string skinId);
         int GetQuantity(string skinId);
-        void AddSkin(SkinDefinitionSO skin, out bool isDuplicate);
+        // grantDuplicateBonus: when the skin is already owned, also credit the
+        // configured duplicate VP bonus. Case opening leaves this true; Case Battle
+        // rewards pass false so skin value is never converted into VP balance.
+        void AddSkin(SkinDefinitionSO skin, out bool isDuplicate, bool grantDuplicateBonus = true);
         bool TrySell(string skinId, out int vpGained);
         // Removes one unit of a skin from inventory WITHOUT granting VP.
         // Used by gamble / upgrade flows where the input is consumed.
@@ -49,6 +52,20 @@ namespace ValoCase.Services
         /// `success` indicates whether the upgrade succeeded.
         /// Input is consumed in either case; target added on success.</summary>
         bool TryUpgrade(SkinDefinitionSO input, SkinDefinitionSO target, out bool success);
+
+        /// <summary>
+        /// Value-ratio success chance for a value-based (multi-skin) upgrade.
+        /// Falls as the target value grows relative to the combined input value.
+        /// 0..1; returns 0 when either value is non-positive.
+        /// </summary>
+        float ComputeValueChance(int totalInputValue, int targetValue);
+
+        /// <summary>
+        /// Resolves a value-based multi-skin upgrade. All inputs are consumed
+        /// (success and failure alike); the target is added on success.
+        /// Returns true on resolution; `success` indicates the outcome.
+        /// </summary>
+        bool TryUpgradeMulti(IReadOnlyList<SkinDefinitionSO> inputs, SkinDefinitionSO target, out bool success);
 
         /// <summary>Hook for animation systems, telemetry, future networking.</summary>
         event System.Action<SkinDefinitionSO, SkinDefinitionSO, bool> OnUpgradeResolved;

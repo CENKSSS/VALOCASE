@@ -19,6 +19,10 @@ namespace ValoCase.UI.Screens
     /// </summary>
     public sealed class SettingsScreen : UIScreenBase
     {
+        // Settings must appear with zero delay (no fade), e.g. when opened over
+        // an active Case Battle. Closing Settings keeps the normal transition.
+        public override bool OpensInstantly => true;
+
         // ── Serialized refs wired by ValoCaseUIBuilder ────────────────────────
         [SerializeField] UINavigator     navigator;
         [SerializeField] Button          backButton;

@@ -163,7 +163,7 @@ namespace ValoCase.Services
             return entry?.quantity ?? 0;
         }
 
-        public void AddSkin(SkinDefinitionSO skin, out bool isDuplicate)
+        public void AddSkin(SkinDefinitionSO skin, out bool isDuplicate, bool grantDuplicateBonus = true)
         {
             isDuplicate = false;
             if (skin == null) return;
@@ -182,8 +182,11 @@ namespace ValoCase.Services
             {
                 entry.quantity++;
                 isDuplicate = true;
-                var bonus = Mathf.RoundToInt(skin.VpValue * (_config.DuplicateBonusPercent / 100f));
-                if (bonus > 0) _vp.Add(bonus);
+                if (grantDuplicateBonus)
+                {
+                    var bonus = Mathf.RoundToInt(skin.VpValue * (_config.DuplicateBonusPercent / 100f));
+                    if (bonus > 0) _vp.Add(bonus);
+                }
             }
 
             GameEvents.RaiseSkinObtained(skin);
@@ -737,6 +740,68 @@ namespace ValoCase.Services
 
             _save?.Save();
             OnUpgradeResolved?.Invoke(input, target, success);
+            return true;
+        }
+
+        // ── Value-based (multi-skin) upgrade ──────────────────────────────────
+        // The screen now drives upgrades by combined VP value instead of rarity.
+        // The single-skin TryUpgrade above is left intact for any legacy callers.
+
+        /// <summary>
+        /// Pure value ratio: chance = totalInputValue / targetValue, clamped to 0..1.
+        /// More expensive targets yield a lower chance; a target equal to the input
+        /// value would be 100 %. With the screen's 1.5× minimum-target rule the
+        /// realistic ceiling is ~0.67.
+        /// </summary>
+        public float ComputeValueChance(int totalInputValue, int targetValue)
+        {
+            if (totalInputValue <= 0 || targetValue <= 0) return 0f;
+            return Mathf.Clamp01((float)totalInputValue / targetValue);
+        }
+
+        public bool TryUpgradeMulti(IReadOnlyList<SkinDefinitionSO> inputs, SkinDefinitionSO target, out bool success)
+        {
+            success = false;
+            if (inputs == null || inputs.Count == 0 || target == null || _inventory == null) return false;
+
+            // Tally required units per skin and the combined value.
+            var required = new Dictionary<string, int>();
+            var totalValue = 0;
+            foreach (var s in inputs)
+            {
+                if (s == null) return false;
+                required.TryGetValue(s.SkinId, out var c);
+                required[s.SkinId] = c + 1;
+                totalValue += s.VpValue;
+            }
+
+            // Verify the player actually owns every selected unit.
+            foreach (var kv in required)
+                if (_inventory.GetQuantity(kv.Key) < kv.Value) return false;
+
+            // Target must satisfy the 1.5× combined-value rule (also enforced in UI).
+            if (target.VpValue < totalValue * 1.5f) return false;
+
+            var chance = ComputeValueChance(totalValue, target.VpValue);
+            success = UnityEngine.Random.value < chance;
+
+            // Inputs are ALWAYS consumed — success and failure alike.
+            foreach (var s in inputs)
+            {
+                if (!_inventory.ConsumeOne(s.SkinId))
+                {
+                    // Should not happen after the ownership check; bail defensively.
+                    success = false;
+                    _save?.Save();
+                    return false;
+                }
+            }
+
+            if (success)
+                _inventory.AddSkin(target, out _);
+
+            _save?.Save();
+            OnUpgradeResolved?.Invoke(inputs[inputs.Count - 1], target, success);
             return true;
         }
     }

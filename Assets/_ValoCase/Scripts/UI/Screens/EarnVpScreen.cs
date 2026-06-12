@@ -1,114 +1,134 @@
-using System.Collections;
-using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
 using ValoCase.Core;
-#if ENABLE_INPUT_SYSTEM
-using UnityEngine.InputSystem;
-#endif
 
 namespace ValoCase.UI.Screens
 {
     /// <summary>
-    /// "EARN VP" screen — premium dark-casino style VP farming minigame.
+    /// "EARN VP" screen — tap-driven VP Reactor minigame.
     ///
-    /// ── ECONOMY ──────────────────────────────────────────────────────────────
-    /// No hard cap. Soft balance via three stacked systems:
-    ///   1. Duration multiplier  – resets on release (rewards active play)
-    ///   2. Combo multiplier     – decays 3 s after last reward
-    ///   3. AFK check            – reduces rate if mouse unmoved for > 15 s
-    ///
-    /// ── INPUTS ───────────────────────────────────────────────────────────────
-    /// Hold zone uses EventTrigger (PointerDown / PointerUp) so mobile and
-    /// desktop both work.  Every release resets the duration multiplier —
-    /// skilled players learn to tap-release for optimal gain.
+    /// ── GAMEPLAY ─────────────────────────────────────────────────────────────
+    ///   Reward      = 1.6 VP × multiplier, exact — the fractional part is
+    ///               carried between taps because the wallet stores int VP
+    ///   Multiplier  starts at 1.00×, +0.02× per tap, capped at 3.00×
+    ///   Decay       drains continuously toward 1.00× — no grace period — and
+    ///               ramps up in tiers the longer the player stays idle
+    ///   Critical    5% chance per tap → reward ×2
+    ///   Combo       consecutive-tap counter, visual only (resets after 3 s idle)
     ///
     /// ── UI BUILDS ITSELF ─────────────────────────────────────────────────────
-    /// The builder only lays down the chrome (back button, navigator ref).
-    /// All gameplay UI is constructed in BuildUiOnce() via code.
+    /// The editor builder only lays down the chrome (back button, wallet label,
+    /// navigator ref). All gameplay UI is constructed in BuildUiOnce() via code.
+    /// All per-tap visuals (floating text, particles) are pooled and driven from
+    /// a single Update — no per-tap allocations, no coroutines.
     /// </summary>
     public sealed class EarnVpScreen : UIScreenBase
     {
-        // ── Inspector refs (wired by builder) ─────────────────────────────────
-        [SerializeField] UINavigator          navigator;
-        [SerializeField] Button               backButton;
-        [SerializeField] TextMeshProUGUI      walletLabel;  // top-bar VP (compat)
+        // ── Inspector refs (wired by builder — names must not change) ─────────
+        [SerializeField] UINavigator     navigator;
+        [SerializeField] Button          backButton;
+        [SerializeField] TextMeshProUGUI walletLabel;  // legacy top-bar VP (hidden, kept in sync)
 
         // ── Palette ───────────────────────────────────────────────────────────
-        static readonly Color BgDeep      = new Color(0.016f, 0.010f, 0.045f, 1.00f);
-        static readonly Color BgPanel     = new Color(0.030f, 0.020f, 0.070f, 0.96f);
-        static readonly Color BgCard      = new Color(0.055f, 0.040f, 0.110f, 1.00f);
-        static readonly Color NeonPink    = new Color(1.00f, 0.18f, 0.55f, 1.00f);
-        static readonly Color NeonPinkSoft= new Color(1.00f, 0.18f, 0.55f, 0.22f);
-        static readonly Color NeonPinkDim = new Color(1.00f, 0.18f, 0.55f, 0.08f);
-        static readonly Color NeonPurple  = new Color(0.68f, 0.08f, 1.00f, 1.00f);
-        static readonly Color NeonCyan    = new Color(0.00f, 0.90f, 1.00f, 1.00f);
-        static readonly Color NeonGold    = new Color(1.00f, 0.82f, 0.12f, 1.00f);
-        static readonly Color NeonGreen   = new Color(0.22f, 1.00f, 0.08f, 1.00f);
-        static readonly Color TextWhite   = new Color(0.97f, 0.97f, 1.00f, 1.00f);
-        static readonly Color TextSub     = new Color(0.76f, 0.72f, 0.90f, 1.00f);
-        static readonly Color TextDim     = new Color(0.42f, 0.38f, 0.58f, 1.00f);
+        static readonly Color BgDeep     = new Color(0.020f, 0.027f, 0.039f, 1f); // #05070A
+        static readonly Color BgMid      = new Color(0.031f, 0.043f, 0.078f, 1f); // #080B14
+        static readonly Color BgCard     = new Color(0.051f, 0.067f, 0.090f, 1f); // #0D1117
+        static readonly Color Accent     = new Color(1.000f, 0.275f, 0.333f, 1f); // #FF4655
+        static readonly Color TextMain   = new Color(0.961f, 0.961f, 0.961f, 1f); // #F5F5F5
+        static readonly Color TextSub    = new Color(0.541f, 0.569f, 0.651f, 1f); // #8A91A6
+        static readonly Color CritGold   = new Color(1.000f, 0.823f, 0.290f, 1f);
+        static readonly Color TierOrange = new Color(1.000f, 0.624f, 0.180f, 1f);
+        static readonly Color TierGreen  = new Color(0.290f, 0.890f, 0.545f, 1f);
 
         // ── Economy constants ─────────────────────────────────────────────────
-        static readonly int[]   BaseRewards     = { 10, 25, 50 };
-        const float             MinInterval     = 0.25f;
-        const float             MaxInterval     = 0.60f;
-        const int               MaxCombo        = 10;
-        const float             ComboDecaySec   = 3.0f;   // grace after release
-        const float             AfkThresholdSec = 15.0f;  // idle mouse → 0.5× AFK penalty
+        const float BaseReward      = 1.6f;
+        const float MultStep        = 0.02f;
+        const float MultMax         = 3.0f;
+        const float ComboResetDelay = 3.0f;   // seconds of inactivity before the combo counter resets (visual only)
+        const float CritChance      = 0.05f;
 
-        // Duration multipliers  [breakpoints in seconds]
-        static readonly (float secs, float mult)[] DurationSteps =
-        {
-            (10f, 1.00f),
-            (30f, 0.80f),
-            (float.MaxValue, 0.50f),
-        };
+        // Progressive decay — drain rate ramps up the longer the player is idle.
+        // The slow tier runs between taps too, so it must stay below the gain
+        // rate of normal tapping (~0.06-0.10/s at 3-5 taps per second).
+        const float DecaySlow     = 0.05f;    // 0.0-1.0 s idle
+        const float DecayFast     = 0.325f;   // 1.0-1.75 s idle
+        const float DecayVeryFast = 0.78f;    // 1.75 s+ idle
+        const float FastAfter     = 1.0f;
+        const float VeryFastAfter = 1.75f;
+
+        static readonly float[] Milestones = { 1.5f, 2f, 2.5f, 3f };
 
         // ── Runtime state ─────────────────────────────────────────────────────
-        bool        _builtUi;
-        ScreenType  _prevScreen;   // captured on OnShown — used by back button
-        bool      _holding;
-        float     _holdStartTime;
-        int       _comboCount;
-        float     _lastRewardTime;
-        int       _sessionEarned;
-        Vector2   _lastMousePos;
-        float     _lastMouseMoveTime;
-        Coroutine _holdCo;
-        Coroutine _pulseCo;
+        bool       _builtUi;
+        ScreenType _prevScreen;
+        float      _multiplier = 1f;
+        float      _lastTapTime;
+        int        _combo;
+        bool       _comboActive;
+        bool       _atMax;
+        float      _fracCarry;             // sub-1 VP not yet credited to the int wallet
+        int        _shownMultCents = -1;   // label refresh throttle
+
+        // Animation timers (Update-driven, no coroutines)
+        float _punchT      = 99f;
+        float _glowKick;                   // extra glow alpha, relaxes to 0
+        float _flashT      = 99f;
+        float _walletPunchT = 99f;
+        float _tipTimer;
+        int   _tipIndex;
 
         // ── UI refs ───────────────────────────────────────────────────────────
-        TextMeshProUGUI  _balanceLabel;
-        TextMeshProUGUI  _multiplierLabel;   // "1.0×"
-        TextMeshProUGUI  _comboLabel;        // "COMBO ×5"
-        TextMeshProUGUI  _sessionLabel;      // "+2,450 VP this session"
-        TextMeshProUGUI  _hintLabel;
-        Image            _holdZoneImg;       // center circle image
-        RectTransform    _holdZoneRt;
-        Image            _holdRingOuter;     // outer glow ring
-        Image            _holdRingInner;     // bright inner ring
-        Image            _durationBarFill;   // left-to-right bar
-        Transform        _floatRoot;         // parent for floating texts
-        Transform        _shakeTarget;       // shaken on reward
-        readonly List<Image> _comboDots = new List<Image>();
+        TextMeshProUGUI _balanceLabel;
+        TextMeshProUGUI _multiplierLabel;
+        TextMeshProUGUI _maxLabel;
+        TextMeshProUGUI _comboLabel;
+        TextMeshProUGUI _flashLabel;
+        TextMeshProUGUI _tipLabel;
+        Image           _glowImg;
+        Image           _barFill;
+        RectTransform   _coreVisual;       // punched on tap
+        RectTransform   _ringSlow;
+        RectTransform   _ringFast;
+        RectTransform   _glowRt;
+        RectTransform   _floatRoot;
+        RectTransform   _particleRoot;
+        RectTransform   _balanceRt;
 
-        // ── Combo colour ramp ─────────────────────────────────────────────────
-        static readonly Color[] ComboColors =
+        static readonly string[] Tips =
         {
-            new Color(1.00f, 0.18f, 0.55f, 1f), // x1   neon pink
-            new Color(1.00f, 0.18f, 0.55f, 1f), // x2
-            new Color(1.00f, 0.45f, 0.15f, 1f), // x3   orange
-            new Color(1.00f, 0.55f, 0.05f, 1f), // x4
-            new Color(1.00f, 0.82f, 0.12f, 1f), // x5   gold
-            new Color(1.00f, 0.82f, 0.12f, 1f), // x6
-            new Color(0.22f, 1.00f, 0.08f, 1f), // x7   green
-            new Color(0.00f, 0.90f, 1.00f, 1f), // x8   cyan
-            new Color(0.68f, 0.08f, 1.00f, 1f), // x9   purple
-            new Color(1.00f, 1.00f, 1.00f, 1f), // x10  white (max)
+            "Keep tapping to increase your multiplier.",
+            "The multiplier starts dropping as soon as you stop tapping.",
+            "Critical taps grant double VP.",
         };
+
+        // ── Pools ─────────────────────────────────────────────────────────────
+        const int FloatPoolSize    = 14;
+        const int ParticlePoolSize = 24;
+        const int ParticlesPerTap  = 6;
+
+        struct FloatEntry
+        {
+            public RectTransform rt;
+            public TextMeshProUGUI tmp;
+            public float t, dur;
+            public Vector2 start;
+            public Color color;
+            public bool active;
+        }
+
+        struct ParticleEntry
+        {
+            public RectTransform rt;
+            public Image img;
+            public float t, dur;
+            public Vector2 start, dir;
+            public bool active;
+        }
+
+        readonly FloatEntry[]    _floats    = new FloatEntry[FloatPoolSize];
+        readonly ParticleEntry[] _particles = new ParticleEntry[ParticlePoolSize];
 
         // ═════════════════════════════════════════════════════════════════════
         // LIFECYCLE
@@ -116,361 +136,371 @@ namespace ValoCase.UI.Screens
 
         void Awake()
         {
-            // Legacy builder back button → reuse with correct navigation
             if (backButton != null)
                 backButton.onClick.AddListener(OnBackClicked);
         }
 
         void OnBackClicked()
         {
-            // Return to whichever screen opened VP Kazan.
-            // Exclude self (EarnVp) and Settings from valid return targets.
             var target = (_prevScreen != ScreenType.EarnVp &&
                           _prevScreen != ScreenType.Settings)
                 ? _prevScreen
                 : ScreenType.Tools;
-            Debug.Log("[VP_KAZAN] Back clicked, returning to: " + target);
             navigator?.Navigate(target);
         }
 
         protected override void OnShown()
         {
-            // Capture previous screen before UINavigator updates it
             _prevScreen = navigator?.PreviousScreen ?? ScreenType.Tools;
             BuildUiOnce();
-            _lastMousePos       = ReadMousePosition();
-            _lastMouseMoveTime  = Time.time;
+
+            _multiplier  = 1f;
+            _combo       = 0;
+            _comboActive = false;
+            _fracCarry   = 0f;
+            _lastTapTime = -999f;
+            _tipTimer    = 0f;
+            _tipIndex    = 0;
+
             RefreshBalance();
+            RefreshMultiplierUi(force: true);
+            RefreshComboLabel();
+            if (_tipLabel != null) _tipLabel.text = Tips[0];
+
             GameEvents.OnVpChanged += HandleVpChanged;
         }
 
         protected override void OnHidden()
         {
             GameEvents.OnVpChanged -= HandleVpChanged;
-            ForceStopHolding();
+
+            // Kill transient visuals so nothing lingers on next show
+            for (int i = 0; i < _floats.Length; i++)
+                if (_floats[i].active) { _floats[i].active = false; _floats[i].rt.gameObject.SetActive(false); }
+            for (int i = 0; i < _particles.Length; i++)
+                if (_particles[i].active) { _particles[i].active = false; _particles[i].rt.gameObject.SetActive(false); }
+            _punchT = _flashT = _walletPunchT = 99f;
+            _glowKick = 0f;
         }
+
+        void HandleVpChanged(int _, int __)
+        {
+            RefreshBalance();
+            _walletPunchT = 0f;
+        }
+
+        void RefreshBalance()
+        {
+            int bal = GameContext.Instance?.Vp?.Balance ?? 0;
+            if (_balanceLabel != null)
+                _balanceLabel.text = $"{bal:N0} <color=#FF4655>VP</color>";
+            if (walletLabel != null)
+                walletLabel.text = $"{bal:N0} VP";
+        }
+
+        // ═════════════════════════════════════════════════════════════════════
+        // TAP MECHANICS
+        // ═════════════════════════════════════════════════════════════════════
+
+        void OnTap()
+        {
+            float prevMult = _multiplier;
+
+            float rewardVp = BaseReward * _multiplier;
+            bool crit = Random.value < CritChance;
+            if (crit) rewardVp *= 2f;
+
+            // The wallet only stores whole VP (IVpCurrencyService is int-based).
+            // Credit the integer part now and carry the fraction into the next
+            // tap, so the long-run total is exactly BaseReward × multiplier.
+            _fracCarry += rewardVp;
+            int grant = Mathf.FloorToInt(_fracCarry);
+            _fracCarry -= grant;
+            if (grant > 0)
+            {
+                GameContext.Instance?.Vp?.Add(grant);
+                GameContext.Instance?.Statistics?.RecordVpEarned(grant);
+            }
+
+            _combo++;
+            _comboActive = true;
+            _multiplier  = Mathf.Min(_multiplier + MultStep, MultMax);
+            _lastTapTime = Time.time;
+
+            // ── Feedback ──────────────────────────────────────────────────────
+            _punchT   = 0f;
+            _glowKick = crit ? 0.45f : 0.30f;
+
+            SpawnFloat($"+{rewardVp:0.##} VP", crit ? CritGold : TextMain, crit ? 1.25f : 1f);
+            if (crit) SpawnFloat("CRITICAL!", CritGold, 1.45f);
+            SpawnParticles(crit ? CritGold : Accent);
+
+            // Milestone flash when crossing 2× / 3× / 5× / 10×
+            for (int i = 0; i < Milestones.Length; i++)
+                if (prevMult < Milestones[i] && _multiplier >= Milestones[i])
+                {
+                    ShowMilestoneFlash(Milestones[i]);
+                    break;
+                }
+
+            RefreshMultiplierUi();
+            RefreshComboLabel();
+        }
+
+        void ShowMilestoneFlash(float milestone)
+        {
+            if (_flashLabel == null) return;
+            _flashLabel.text = milestone >= MultMax
+                ? "MAX MULTIPLIER ×3"
+                : $"MULTIPLIER ×{milestone:0.#}";
+            _flashLabel.color = MultColor(milestone);
+            _flashT = 0f;
+            _flashLabel.gameObject.SetActive(true);
+        }
+
+        static Color MultColor(float m)
+        {
+            if (m >= 2.5f) return TierGreen;
+            if (m >= 1.5f) return TierOrange;
+            return TextMain;
+        }
+
+        static float MultToBar(float m)
+        {
+            // Linear fill 1.00×→3.00×; milestones (1.5/2/2.5×) land on the quarter marks
+            return Mathf.Clamp01((m - 1f) / (MultMax - 1f));
+        }
+
+        void RefreshMultiplierUi(bool force = false)
+        {
+            int cents = Mathf.RoundToInt(_multiplier * 100f);
+            if (!force && cents == _shownMultCents)
+            {
+                if (_barFill != null) _barFill.fillAmount = MultToBar(_multiplier);
+                return;
+            }
+            _shownMultCents = cents;
+
+            bool wasMax = _atMax;
+            _atMax = _multiplier >= MultMax - 0.001f;
+
+            if (_multiplierLabel != null)
+            {
+                _multiplierLabel.text  = $"{_multiplier:F2}x";
+                _multiplierLabel.color = MultColor(_multiplier);
+                if (wasMax && !_atMax)
+                    _multiplierLabel.rectTransform.localScale = Vector3.one;
+            }
+            if (_maxLabel != null && _maxLabel.gameObject.activeSelf != _atMax)
+                _maxLabel.gameObject.SetActive(_atMax);
+            if (_barFill != null)
+            {
+                _barFill.fillAmount = MultToBar(_multiplier);
+                _barFill.color      = MultColor(_multiplier) == TextMain ? Accent : MultColor(_multiplier);
+            }
+        }
+
+        void RefreshComboLabel()
+        {
+            if (_comboLabel == null) return;
+            if (_comboActive && _combo > 0)
+            {
+                _comboLabel.text  = $"COMBO  <color=#F5F5F5>x{_combo}</color>";
+                _comboLabel.color = Accent;
+            }
+            else
+            {
+                _comboLabel.text  = "COMBO  x0";
+                _comboLabel.color = TextSub;
+            }
+        }
+
+        // ═════════════════════════════════════════════════════════════════════
+        // UPDATE — decay, idle motion, pooled visuals
+        // ═════════════════════════════════════════════════════════════════════
 
         void Update()
         {
             if (!IsVisible) return;
+            float dt = Time.deltaTime;
 
-            // Track mouse movement for AFK detection
-            var curPos = ReadMousePosition();
-            if (curPos != _lastMousePos)
+            // ── Multiplier decay — starts immediately, ramps up while idle ────
+            if (_multiplier > 1f)
             {
-                _lastMousePos      = curPos;
-                _lastMouseMoveTime = Time.time;
+                float idle  = Time.time - _lastTapTime;
+                float speed = idle < FastAfter     ? DecaySlow
+                            : idle < VeryFastAfter ? DecayFast
+                            :                        DecayVeryFast;
+                _multiplier = Mathf.Max(1f, _multiplier - speed * dt);
+                RefreshMultiplierUi();
             }
 
-            // Combo decay
-            if (!_holding && _comboCount > 0 &&
-                Time.time - _lastRewardTime > ComboDecaySec)
+            // Combo counter keeps its own inactivity window (visual only)
+            if (_comboActive && Time.time - _lastTapTime > ComboResetDelay)
             {
-                _comboCount = 0;
-                UpdateComboVisual();
+                _comboActive = false;
+                _combo = 0;
+                RefreshComboLabel();
             }
 
-            // Duration bar fill (while holding)
-            if (_holding)
+            // ── Idle motion: rotating rings + breathing glow ──────────────────
+            if (_ringSlow != null) _ringSlow.Rotate(0f, 0f, 18f * dt);
+            if (_ringFast != null) _ringFast.Rotate(0f, 0f, -32f * dt);
+
+            if (_glowImg != null)
             {
-                float held = Time.time - _holdStartTime;
-                float fill = Mathf.Clamp01(held / 30f);   // 0→1 over 30 s
-                if (_durationBarFill != null)
-                    _durationBarFill.fillAmount = fill;
-
-                // Update multiplier label live
-                UpdateMultiplierLabel(held);
-            }
-        }
-
-        void HandleVpChanged(int _, int __) => RefreshBalance();
-
-        void RefreshBalance()
-        {
-            if (_balanceLabel == null) return;
-            int bal = GameContext.Instance?.Vp?.Balance ?? 0;
-            _balanceLabel.text = $"{bal:N0} VP";
-        }
-
-        // ═════════════════════════════════════════════════════════════════════
-        // HOLD MECHANICS
-        // ═════════════════════════════════════════════════════════════════════
-
-        void StartHolding()
-        {
-            if (_holding) return;
-            _holding       = true;
-            _holdStartTime = Time.time;
-
-            if (_holdZoneImg  != null) _holdZoneImg.color  = BgCard;
-            if (_holdRingInner != null) _holdRingInner.color =
-                new Color(NeonPink.r, NeonPink.g, NeonPink.b, 0.55f);
-
-            if (_hintLabel != null) _hintLabel.text = "EARNING…  RELEASE TO RESET MULTIPLIER";
-
-            if (_holdCo != null) StopCoroutine(_holdCo);
-            _holdCo = StartCoroutine(HoldRewardLoop());
-
-            if (_pulseCo != null) StopCoroutine(_pulseCo);
-            _pulseCo = StartCoroutine(PulseLoop());
-        }
-
-        void StopHolding()
-        {
-            if (!_holding) return;
-            _holding = false;
-
-            if (_holdCo  != null) { StopCoroutine(_holdCo);  _holdCo  = null; }
-            if (_pulseCo != null) { StopCoroutine(_pulseCo); _pulseCo = null; }
-
-            // Reset bar to 0 over 0.3 s
-            if (_durationBarFill != null) StartCoroutine(AnimateBarReset());
-            UpdateMultiplierLabel(0f);
-
-            if (_holdZoneRt   != null) _holdZoneRt.localScale   = Vector3.one;
-            if (_holdZoneImg  != null) _holdZoneImg.color        = BgPanel;
-            if (_holdRingInner != null) _holdRingInner.color =
-                new Color(NeonPink.r, NeonPink.g, NeonPink.b, 0.12f);
-
-            if (_hintLabel != null) _hintLabel.text = "HOLD TO EARN VP • RELEASE RESETS MULTIPLIER";
-        }
-
-        void ForceStopHolding()
-        {
-            _holding = false;
-            if (_holdCo  != null) { StopCoroutine(_holdCo);  _holdCo  = null; }
-            if (_pulseCo != null) { StopCoroutine(_pulseCo); _pulseCo = null; }
-        }
-
-        IEnumerator HoldRewardLoop()
-        {
-            while (_holding)
-            {
-                float interval = Random.Range(MinInterval, MaxInterval);
-                yield return new WaitForSeconds(interval);
-                if (_holding) GrantReward();
-            }
-        }
-
-        void GrantReward()
-        {
-            // ── Economy calculation ───────────────────────────────────────────
-            float held      = Time.time - _holdStartTime;
-            float durMult   = GetDurationMultiplier(held);
-            float comboMult = GetComboMultiplier();
-            bool  isAfk     = (Time.time - _lastMouseMoveTime) > AfkThresholdSec;
-            float afkMult   = isAfk ? 0.5f : 1.0f;
-
-            int baseReward  = BaseRewards[Random.Range(0, BaseRewards.Length)];
-            int finalReward = Mathf.RoundToInt(baseReward * durMult * comboMult * afkMult);
-            finalReward     = Mathf.Max(5, (finalReward / 5) * 5);   // round to nearest 5, min 5
-
-            // ── Apply ─────────────────────────────────────────────────────────
-            GameContext.Instance?.Vp?.Add(finalReward);
-            GameContext.Instance?.Statistics?.RecordVpEarned(finalReward);
-
-            _sessionEarned  += finalReward;
-            _comboCount      = Mathf.Min(_comboCount + 1, MaxCombo);
-            _lastRewardTime  = Time.time;
-
-            // ── Visuals ───────────────────────────────────────────────────────
-            Color accentColor = ComboColors[Mathf.Clamp(_comboCount - 1, 0, MaxCombo - 1)];
-            SpawnFloatingText($"+{finalReward} VP", accentColor);
-            StartCoroutine(ShakeTarget(_shakeTarget, 3f, 0.10f));
-
-            UpdateComboVisual();
-            UpdateSessionLabel();
-            RefreshBalance();
-
-            // Ring color follows combo
-            if (_holdRingOuter != null)
-                _holdRingOuter.color = new Color(
-                    accentColor.r, accentColor.g, accentColor.b, 0.20f);
-        }
-
-        // ── Economy helpers ───────────────────────────────────────────────────
-
-        static float GetDurationMultiplier(float heldSeconds)
-        {
-            float prev = 0f;
-            foreach (var (secs, mult) in DurationSteps)
-            {
-                if (heldSeconds <= secs) return mult;
-                prev = mult;
-            }
-            return prev;
-        }
-
-        float GetComboMultiplier()
-        {
-            // Smooth ramp: x1.0 at combo-0 → x3.0 at combo-10
-            return 1f + (_comboCount / (float)MaxCombo) * 2f;
-        }
-
-        // ═════════════════════════════════════════════════════════════════════
-        // VISUAL HELPERS
-        // ═════════════════════════════════════════════════════════════════════
-
-        void UpdateComboVisual()
-        {
-            Color accent = _comboCount > 0
-                ? ComboColors[Mathf.Clamp(_comboCount - 1, 0, MaxCombo - 1)]
-                : TextDim;
-
-            if (_comboLabel != null)
-                _comboLabel.text = _comboCount > 0
-                    ? $"COMBO  ×{_comboCount}"
-                    : "COMBO";
-
-            // Dot indicators
-            for (int i = 0; i < _comboDots.Count; i++)
-            {
-                bool filled = i < _comboCount;
-                _comboDots[i].color = filled ? accent : new Color(0.3f, 0.25f, 0.45f, 0.4f);
-                var ol = _comboDots[i].GetComponent<Outline>();
-                if (ol != null) ol.effectColor = filled
-                    ? new Color(accent.r, accent.g, accent.b, 0.55f)
-                    : Color.clear;
+                _glowKick = Mathf.MoveTowards(_glowKick, 0f, dt * 1.2f);
+                float idle = _atMax
+                    ? 0.14f + Mathf.Sin(Time.time * 3f) * 0.03f    // strong glow at MAX
+                    : 0.06f + Mathf.Sin(Time.time * 2f) * 0.015f;
+                var c = _glowImg.color;
+                _glowImg.color = new Color(c.r, c.g, c.b, idle + _glowKick);
+                float s = 1f + Mathf.Sin(Time.time * 2f) * 0.025f + _glowKick * 0.4f;
+                _glowRt.localScale = new Vector3(s, s, 1f);
             }
 
-            if (_comboLabel != null) _comboLabel.color = accent;
-        }
-
-        void UpdateMultiplierLabel(float heldSeconds)
-        {
-            if (_multiplierLabel == null) return;
-            float m = GetDurationMultiplier(heldSeconds);
-            _multiplierLabel.text  = $"{m:F1}×";
-            _multiplierLabel.color = m >= 1f ? NeonGreen : (m >= 0.8f ? NeonGold : NeonPink);
-        }
-
-        void UpdateSessionLabel()
-        {
-            if (_sessionLabel != null)
-                _sessionLabel.text = $"SESSION  +{_sessionEarned:N0} VP";
-        }
-
-        // ── Floating reward text ──────────────────────────────────────────────
-
-        void SpawnFloatingText(string text, Color color)
-        {
-            if (_floatRoot == null) return;
-
-            var go  = new GameObject("Float", typeof(RectTransform));
-            go.transform.SetParent(_floatRoot, false);
-            var rt  = (RectTransform)go.transform;
-            rt.sizeDelta        = new Vector2(220f, 56f);
-            rt.anchorMin        = new Vector2(0.5f, 0.5f);
-            rt.anchorMax        = new Vector2(0.5f, 0.5f);
-            rt.pivot            = new Vector2(0.5f, 0.5f);
-            rt.anchoredPosition = new Vector2(Random.Range(-50f, 50f), 20f);
-
-            var tmp = go.AddComponent<TextMeshProUGUI>();
-            tmp.text               = text;
-            tmp.fontSize           = 32f;
-            tmp.fontStyle          = FontStyles.Bold;
-            tmp.alignment          = TextAlignmentOptions.Center;
-            tmp.color              = color;
-            tmp.raycastTarget      = false;
-            tmp.enableWordWrapping = false;
-
-            var ol = go.AddComponent<Outline>();
-            ol.effectColor    = new Color(color.r, color.g, color.b, 0.55f);
-            ol.effectDistance = new Vector2(2f, -2f);
-
-            StartCoroutine(FloatTextAnim(go, rt, tmp));
-        }
-
-        IEnumerator FloatTextAnim(GameObject go, RectTransform rt, TextMeshProUGUI tmp)
-        {
-            const float dur    = 1.30f;
-            Vector2     start  = rt.anchoredPosition;
-            Color       col    = tmp.color;
-            float       t      = 0f;
-
-            rt.localScale = Vector3.one * 0.4f;
-
-            while (t < dur)
+            // ── MAX multiplier pulse ──────────────────────────────────────────
+            if (_atMax && _multiplierLabel != null)
             {
-                t += Time.deltaTime;
-                float p = t / dur;
-
-                // Float up
-                rt.anchoredPosition = start + Vector2.up * (p * 100f);
-
-                // Pop scale
-                float s = p < 0.12f ? Mathf.Lerp(0.4f, 1.25f, p / 0.12f)
-                        : p < 0.22f ? Mathf.Lerp(1.25f, 1.00f, (p - 0.12f) / 0.10f)
-                        : 1.00f;
-                rt.localScale = Vector3.one * s;
-
-                // Fade out second half
-                float a = p < 0.45f ? 1f : Mathf.Lerp(1f, 0f, (p - 0.45f) / 0.55f);
-                tmp.color = new Color(col.r, col.g, col.b, a);
-
-                yield return null;
+                float ms = 1f + Mathf.Sin(Time.time * 5f) * 0.04f;
+                _multiplierLabel.rectTransform.localScale = new Vector3(ms, ms, 1f);
             }
 
-            if (go != null) Destroy(go);
-        }
-
-        // ── Hold-zone pulse animation ─────────────────────────────────────────
-
-        IEnumerator PulseLoop()
-        {
-            while (_holding)
+            // ── Tap punch on core ─────────────────────────────────────────────
+            if (_punchT < 1f && _coreVisual != null)
             {
-                Color accent = ComboColors[Mathf.Clamp(_comboCount - 1, 0, MaxCombo - 1)];
-                if (_holdRingInner != null)
-                    _holdRingInner.color = new Color(
-                        accent.r, accent.g, accent.b, 0.55f);
+                _punchT += dt / 0.18f;
+                float p = Mathf.Clamp01(_punchT);
+                float s = p < 0.30f ? Mathf.Lerp(1.00f, 0.92f, p / 0.30f)
+                        : p < 0.65f ? Mathf.Lerp(0.92f, 1.06f, (p - 0.30f) / 0.35f)
+                        :             Mathf.Lerp(1.06f, 1.00f, (p - 0.65f) / 0.35f);
+                _coreVisual.localScale = new Vector3(s, s, 1f);
+            }
 
-                float dur = 0.40f;
-                float t   = 0f;
-                while (t < dur && _holding)
+            // ── Wallet punch ──────────────────────────────────────────────────
+            if (_walletPunchT < 1f && _balanceRt != null)
+            {
+                _walletPunchT += dt / 0.15f;
+                float s = Mathf.Lerp(1.08f, 1f, Mathf.Clamp01(_walletPunchT));
+                _balanceRt.localScale = new Vector3(s, s, 1f);
+            }
+
+            // ── Milestone flash ───────────────────────────────────────────────
+            if (_flashT < 1f && _flashLabel != null)
+            {
+                _flashT += dt / 0.80f;
+                float p = Mathf.Clamp01(_flashT);
+                float s = p < 0.18f ? Mathf.Lerp(1.55f, 1f, p / 0.18f) : 1f;
+                float a = p < 0.18f ? Mathf.Lerp(0f, 1f, p / 0.18f)
+                        : p < 0.62f ? 1f
+                        :             Mathf.Lerp(1f, 0f, (p - 0.62f) / 0.38f);
+                _flashLabel.rectTransform.localScale = new Vector3(s, s, 1f);
+                var c = _flashLabel.color;
+                _flashLabel.color = new Color(c.r, c.g, c.b, a);
+                if (p >= 1f) _flashLabel.gameObject.SetActive(false);
+            }
+
+            // ── Floating reward texts ─────────────────────────────────────────
+            for (int i = 0; i < _floats.Length; i++)
+            {
+                if (!_floats[i].active) continue;
+                _floats[i].t += dt;
+                float p = _floats[i].t / _floats[i].dur;
+                if (p >= 1f)
                 {
-                    t += Time.unscaledDeltaTime;
-                    float s = 1f + Mathf.Sin(t / dur * Mathf.PI) * 0.035f;
-                    if (_holdZoneRt != null)
-                        _holdZoneRt.localScale = new Vector3(s, s, 1f);
-                    yield return null;
+                    _floats[i].active = false;
+                    _floats[i].rt.gameObject.SetActive(false);
+                    continue;
                 }
+                _floats[i].rt.anchoredPosition = _floats[i].start + Vector2.up * (p * 130f);
+                float fs = p < 0.12f ? Mathf.Lerp(0.5f, 1.2f, p / 0.12f)
+                         : p < 0.24f ? Mathf.Lerp(1.2f, 1.0f, (p - 0.12f) / 0.12f)
+                         : 1f;
+                _floats[i].rt.localScale = Vector3.one * fs;
+                var col = _floats[i].color;
+                float fa = p < 0.45f ? 1f : Mathf.Lerp(1f, 0f, (p - 0.45f) / 0.55f);
+                _floats[i].tmp.color = new Color(col.r, col.g, col.b, fa);
+            }
+
+            // ── Particles ─────────────────────────────────────────────────────
+            for (int i = 0; i < _particles.Length; i++)
+            {
+                if (!_particles[i].active) continue;
+                _particles[i].t += dt;
+                float p = _particles[i].t / _particles[i].dur;
+                if (p >= 1f)
+                {
+                    _particles[i].active = false;
+                    _particles[i].rt.gameObject.SetActive(false);
+                    continue;
+                }
+                float ease = 1f - (1f - p) * (1f - p);   // ease-out
+                _particles[i].rt.anchoredPosition = _particles[i].start + _particles[i].dir * ease;
+                var c = _particles[i].img.color;
+                _particles[i].img.color = new Color(c.r, c.g, c.b, 1f - p);
+                float ps = Mathf.Lerp(1f, 0.3f, p);
+                _particles[i].rt.localScale = new Vector3(ps, ps, 1f);
+            }
+
+            // ── Tip rotation ──────────────────────────────────────────────────
+            _tipTimer += dt;
+            if (_tipTimer >= 6f && _tipLabel != null)
+            {
+                _tipTimer = 0f;
+                _tipIndex = (_tipIndex + 1) % Tips.Length;
+                _tipLabel.text = Tips[_tipIndex];
             }
         }
 
-        // ── Screen / element shake ────────────────────────────────────────────
+        // ═════════════════════════════════════════════════════════════════════
+        // POOLED VISUAL SPAWNERS
+        // ═════════════════════════════════════════════════════════════════════
 
-        IEnumerator ShakeTarget(Transform target, float amplitude, float duration)
+        void SpawnFloat(string text, Color color, float scaleMul)
         {
-            if (target == null) yield break;
-            Vector3 origin = target.localPosition;
-            float   t      = 0f;
-            while (t < duration)
+            int slot = -1;
+            float oldest = -1f;
+            for (int i = 0; i < _floats.Length; i++)
             {
-                t += Time.deltaTime;
-                float decay = 1f - (t / duration);
-                target.localPosition = origin + (Vector3)(
-                    Random.insideUnitCircle * amplitude * decay);
-                yield return null;
+                if (!_floats[i].active) { slot = i; break; }
+                if (_floats[i].t > oldest) { oldest = _floats[i].t; slot = i; }
             }
-            target.localPosition = origin;
+            if (slot < 0 || _floats[slot].rt == null) return;
+
+            _floats[slot].active = true;
+            _floats[slot].t      = 0f;
+            _floats[slot].dur    = 1.1f;
+            _floats[slot].start  = new Vector2(Random.Range(-60f, 60f), Random.Range(10f, 50f));
+            _floats[slot].color  = color;
+            _floats[slot].tmp.text     = text;
+            _floats[slot].tmp.color    = color;
+            _floats[slot].tmp.fontSize = 34f * scaleMul;
+            _floats[slot].rt.anchoredPosition = _floats[slot].start;
+            _floats[slot].rt.localScale       = Vector3.one * 0.5f;
+            _floats[slot].rt.gameObject.SetActive(true);
+            _floats[slot].rt.SetAsLastSibling();
         }
 
-        // ── Duration bar reset ────────────────────────────────────────────────
-
-        IEnumerator AnimateBarReset()
+        void SpawnParticles(Color color)
         {
-            if (_durationBarFill == null) yield break;
-            float dur   = 0.30f;
-            float start = _durationBarFill.fillAmount;
-            float t     = 0f;
-            while (t < dur)
+            int spawned = 0;
+            for (int i = 0; i < _particles.Length && spawned < ParticlesPerTap; i++)
             {
-                t += Time.deltaTime;
-                _durationBarFill.fillAmount = Mathf.Lerp(start, 0f, t / dur);
-                yield return null;
+                if (_particles[i].active || _particles[i].rt == null) continue;
+                float ang  = Random.Range(0f, Mathf.PI * 2f);
+                float dist = Random.Range(90f, 160f);
+
+                _particles[i].active = true;
+                _particles[i].t      = 0f;
+                _particles[i].dur    = Random.Range(0.35f, 0.55f);
+                _particles[i].start  = Vector2.zero;
+                _particles[i].dir    = new Vector2(Mathf.Cos(ang), Mathf.Sin(ang)) * dist;
+                _particles[i].img.color = color;
+                _particles[i].rt.anchoredPosition = Vector2.zero;
+                _particles[i].rt.localScale       = Vector3.one;
+                _particles[i].rt.gameObject.SetActive(true);
+                spawned++;
             }
-            _durationBarFill.fillAmount = 0f;
         }
 
         // ═════════════════════════════════════════════════════════════════════
@@ -484,79 +514,272 @@ namespace ValoCase.UI.Screens
 
             var rt = (RectTransform)transform;
 
-            // ── Deep background ───────────────────────────────────────────────
-            var bg = NewRect(rt, "Bg", Vector2.zero, Vector2.one, new Vector2(0.5f, 0.5f));
-            bg.offsetMin = bg.offsetMax = Vector2.zero;
-            var bgImg = bg.gameObject.AddComponent<Image>();
-            bgImg.color = BgDeep; bgImg.raycastTarget = false;
-            bg.SetSiblingIndex(0);
+            // Root panel tint + hide legacy builder chrome (TopBar with old back/wallet)
+            var rootImg = GetComponent<Image>();
+            if (rootImg != null) rootImg.color = BgDeep;
+            if (backButton != null && backButton.transform.parent != rt)
+                backButton.transform.parent.gameObject.SetActive(false);
 
-            // Radial center glow
-            var glow = NewRect(rt, "CenterGlow",
-                new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f));
-            glow.sizeDelta = new Vector2(700f, 700f);
-            glow.gameObject.AddComponent<Image>().color =
-                new Color(0.68f, 0.08f, 1.00f, 0.055f);
-            glow.GetComponent<Image>().raycastTarget = false;
+            // ── Background layers ─────────────────────────────────────────────
+            var bgTop = NewRect(rt, "BgTop", new Vector2(0f, 0.55f), Vector2.one, new Vector2(0.5f, 1f));
+            bgTop.offsetMin = bgTop.offsetMax = Vector2.zero;
+            var bgTopImg = bgTop.gameObject.AddComponent<Image>();
+            bgTopImg.color = BgMid; bgTopImg.raycastTarget = false;
+            bgTop.SetSiblingIndex(0);
 
-            // ── Center: hold zone + stats ─────────────────────────────────────
-            _shakeTarget = NewRect(rt, "Center",
-                new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f));
-            _shakeTarget.GetComponent<RectTransform>().sizeDelta = new Vector2(560f, 620f);
-            (_shakeTarget as RectTransform).anchoredPosition    = new Vector2(0f, -20f);
+            _glowRt = NewRect(rt, "CenterGlow", Center, Center, Center);
+            _glowRt.anchoredPosition = new Vector2(0f, 40f);
+            _glowRt.sizeDelta        = new Vector2(640f, 640f);
+            _glowRt.localRotation    = Quaternion.Euler(0f, 0f, 45f);
+            _glowImg = _glowRt.gameObject.AddComponent<Image>();
+            _glowImg.color = new Color(Accent.r, Accent.g, Accent.b, 0.06f);
+            _glowImg.raycastTarget = false;
 
-            // VP balance label (large, center-top)
-            _balanceLabel = CreateTmp(_shakeTarget, "Balance", "0 VP",
-                36, FontStyles.Bold, TextAlignmentOptions.Center, NeonGold);
-            _balanceLabel.rectTransform.anchorMin        = new Vector2(0f, 1f);
-            _balanceLabel.rectTransform.anchorMax        = new Vector2(1f, 1f);
-            _balanceLabel.rectTransform.pivot            = new Vector2(0.5f, 1f);
-            _balanceLabel.rectTransform.anchoredPosition = new Vector2(0f, -24f);
-            _balanceLabel.rectTransform.sizeDelta        = new Vector2(0f, 48f);
-            var oldOutline = _balanceLabel.GetComponent<Outline>();
-            if (oldOutline != null)
-                Destroy(oldOutline);
-            var balOl = _balanceLabel.gameObject.AddComponent<Outline>();
-            balOl.effectColor    = new Color(NeonGold.r, NeonGold.g, NeonGold.b, 0.45f);
-            balOl.effectDistance = new Vector2(2f, -2f);
+            // ── Top: wallet ───────────────────────────────────────────────────
+            BuildWalletBlock(rt);
 
-            // ── HOLD button ───────────────────────────────────────────────────
-            BuildHoldZone(_shakeTarget);
+            // ── Center container ──────────────────────────────────────────────
+            var center = NewRect(rt, "Center", Center, Center, Center);
+            center.anchoredPosition = new Vector2(0f, -30f);
+            center.sizeDelta        = new Vector2(620f, 860f);
 
-            // ── Duration multiplier bar ───────────────────────────────────────
-            BuildDurationBar(_shakeTarget);
+            BuildVpCore(center);
+            BuildMultiplierBlock(center);
 
-            // ── Combo section ─────────────────────────────────────────────────
-            BuildComboSection(_shakeTarget);
+            // Milestone flash (above the core)
+            _flashLabel = CreateTmp(center, "MilestoneFlash", "MULTIPLIER ×2",
+                34f, FontStyles.Bold, TextAlignmentOptions.Center, TierOrange);
+            _flashLabel.characterSpacing = 3f;
+            var flashRt = _flashLabel.rectTransform;
+            flashRt.anchorMin = flashRt.anchorMax = flashRt.pivot = new Vector2(0.5f, 0.5f);
+            flashRt.anchoredPosition = new Vector2(0f, 290f);
+            flashRt.sizeDelta        = new Vector2(560f, 48f);
+            _flashLabel.gameObject.SetActive(false);
 
-            // ── Stats row ─────────────────────────────────────────────────────
-            BuildStatsRow(_shakeTarget);
+            // ── Bottom: rotating tip ──────────────────────────────────────────
+            _tipLabel = CreateTmp(rt, "Tip", Tips[0],
+                13f, FontStyles.Normal, TextAlignmentOptions.Center, TextSub);
+            var tipRt = _tipLabel.rectTransform;
+            tipRt.anchorMin        = new Vector2(0f, 0f);
+            tipRt.anchorMax        = new Vector2(1f, 0f);
+            tipRt.pivot            = new Vector2(0.5f, 0f);
+            tipRt.anchoredPosition = new Vector2(0f, 140f);
+            tipRt.sizeDelta        = new Vector2(0f, 24f);
 
-            // ── Hint label ────────────────────────────────────────────────────
-            _hintLabel = CreateTmp(_shakeTarget, "Hint",
-                "HOLD TO EARN VP  •  RELEASE RESETS MULTIPLIER",
-                10, FontStyles.Normal, TextAlignmentOptions.Center, TextDim);
-            _hintLabel.characterSpacing = 1.5f;
-            _hintLabel.rectTransform.anchorMin        = new Vector2(0f, 0f);
-            _hintLabel.rectTransform.anchorMax        = new Vector2(1f, 0f);
-            _hintLabel.rectTransform.pivot            = new Vector2(0.5f, 0f);
-            _hintLabel.rectTransform.anchoredPosition = new Vector2(0f, 18f);
-            _hintLabel.rectTransform.sizeDelta        = new Vector2(0f, 20f);
+            // ── Back button (top-left, below global profile bar) ──────────────
+            BuildBackButton(rt);
 
-            // ── Float text root (above hold button) ───────────────────────────
-            var fr = NewRect(_shakeTarget, "FloatRoot",
-                new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0f));
-            fr.anchoredPosition = new Vector2(0f, 60f);
-            fr.sizeDelta        = new Vector2(340f, 200f);
-            _floatRoot          = fr;
+            // ── Pools ─────────────────────────────────────────────────────────
+            BuildPools(center);
+        }
 
-            UpdateComboVisual();
-            UpdateMultiplierLabel(0f);
-            UpdateSessionLabel();
+        static readonly Vector2 Center = new Vector2(0.5f, 0.5f);
 
-            // ── BACK button — added LAST so it renders on top of all content ──
-            // anchorMin/Max = (0,1): top-left corner of screen
-            // anchoredPosition = (28, -88): 88px below top (TopProfileBar 72px + 16px gap)
+        // ── Wallet block: large, premium, centered ───────────────────────────
+        void BuildWalletBlock(RectTransform rt)
+        {
+            var caption = CreateTmp(rt, "WalletCaption", "WALLET",
+                12f, FontStyles.Bold, TextAlignmentOptions.Center, TextSub);
+            caption.characterSpacing = 6f;
+            var capRt = caption.rectTransform;
+            capRt.anchorMin        = new Vector2(0f, 1f);
+            capRt.anchorMax        = new Vector2(1f, 1f);
+            capRt.pivot            = new Vector2(0.5f, 1f);
+            capRt.anchoredPosition = new Vector2(0f, -96f);
+            capRt.sizeDelta        = new Vector2(0f, 20f);
+
+            _balanceLabel = CreateTmp(rt, "WalletAmount", "0 <color=#FF4655>VP</color>",
+                46f, FontStyles.Bold, TextAlignmentOptions.Center, TextMain);
+            _balanceLabel.richText = true;
+            _balanceRt = _balanceLabel.rectTransform;
+            _balanceRt.anchorMin        = new Vector2(0f, 1f);
+            _balanceRt.anchorMax        = new Vector2(1f, 1f);
+            _balanceRt.pivot            = new Vector2(0.5f, 1f);
+            _balanceRt.anchoredPosition = new Vector2(0f, -118f);
+            _balanceRt.sizeDelta        = new Vector2(0f, 58f);
+
+            // Accent underline
+            var line = NewRect(rt, "WalletLine", new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0.5f, 1f));
+            line.anchoredPosition = new Vector2(0f, -184f);
+            line.sizeDelta        = new Vector2(140f, 3f);
+            var lineImg = line.gameObject.AddComponent<Image>();
+            lineImg.color = new Color(Accent.r, Accent.g, Accent.b, 0.85f);
+            lineImg.raycastTarget = false;
+        }
+
+        // ── VP Core: layered diamond reactor ─────────────────────────────────
+        void BuildVpCore(RectTransform parent)
+        {
+            const float coreY = 110f;
+
+            // Punched visual root (scaled on tap)
+            _coreVisual = NewRect(parent, "CoreVisual", Center, Center, Center);
+            _coreVisual.anchoredPosition = new Vector2(0f, coreY);
+            _coreVisual.sizeDelta        = new Vector2(400f, 400f);
+
+            // Rotating decorative rings (thin diamond frames)
+            _ringSlow = BuildRingFrame(_coreVisual, "RingSlow", 300f, new Color(Accent.r, Accent.g, Accent.b, 0.35f), 2f);
+            _ringFast = BuildRingFrame(_coreVisual, "RingFast", 252f, new Color(TextSub.r, TextSub.g, TextSub.b, 0.30f), 1.5f);
+
+            // Core diamond (#0D1117 with accent edge)
+            var coreOuter = BuildDiamond(_coreVisual, "CoreOuter", 206f, BgCard);
+            var coreOl = coreOuter.gameObject.AddComponent<Outline>();
+            coreOl.effectColor    = new Color(Accent.r, Accent.g, Accent.b, 0.9f);
+            coreOl.effectDistance = new Vector2(2.5f, -2.5f);
+
+            var coreInner = BuildDiamond(_coreVisual, "CoreInner", 168f, new Color(0.067f, 0.086f, 0.118f, 1f));
+            var innerOl = coreInner.gameObject.AddComponent<Outline>();
+            innerOl.effectColor    = new Color(Accent.r, Accent.g, Accent.b, 0.25f);
+            innerOl.effectDistance = new Vector2(1.5f, -1.5f);
+
+            // Center labels (not rotated)
+            var vpLbl = CreateTmp(_coreVisual, "VpLabel", "VP",
+                58f, FontStyles.Bold, TextAlignmentOptions.Center, TextMain);
+            var vpRt = vpLbl.rectTransform;
+            vpRt.anchorMin = vpRt.anchorMax = vpRt.pivot = Center;
+            vpRt.anchoredPosition = new Vector2(0f, 12f);
+            vpRt.sizeDelta        = new Vector2(200f, 64f);
+            var vpOl = vpLbl.gameObject.AddComponent<Outline>();
+            vpOl.effectColor    = new Color(Accent.r, Accent.g, Accent.b, 0.55f);
+            vpOl.effectDistance = new Vector2(2f, -2f);
+
+            var tapLbl = CreateTmp(_coreVisual, "TapLabel", "TAP",
+                14f, FontStyles.Bold, TextAlignmentOptions.Center, TextSub);
+            tapLbl.characterSpacing = 6f;
+            var tapRt = tapLbl.rectTransform;
+            tapRt.anchorMin = tapRt.anchorMax = tapRt.pivot = Center;
+            tapRt.anchoredPosition = new Vector2(0f, -34f);
+            tapRt.sizeDelta        = new Vector2(200f, 22f);
+
+            // Particle root — outside the punched visual so bursts don't scale with it
+            _particleRoot = NewRect(parent, "Particles", Center, Center, Center);
+            _particleRoot.anchoredPosition = new Vector2(0f, coreY);
+            _particleRoot.sizeDelta        = new Vector2(10f, 10f);
+
+            // Float text root — above the core
+            _floatRoot = NewRect(parent, "Floats", Center, Center, Center);
+            _floatRoot.anchoredPosition = new Vector2(0f, coreY + 130f);
+            _floatRoot.sizeDelta        = new Vector2(360f, 200f);
+
+            // Invisible tap hit area on top
+            var hit = NewRect(parent, "TapZone", Center, Center, Center);
+            hit.anchoredPosition = new Vector2(0f, coreY);
+            hit.sizeDelta        = new Vector2(360f, 360f);
+            var hitImg = hit.gameObject.AddComponent<Image>();
+            hitImg.color = Color.clear;
+            hitImg.raycastTarget = true;
+
+            var et = hit.gameObject.AddComponent<EventTrigger>();
+            var entry = new EventTrigger.Entry { eventID = EventTriggerType.PointerDown };
+            entry.callback.AddListener(_ => OnTap());
+            et.triggers.Add(entry);
+        }
+
+        // ── Multiplier + combo bar + combo counter ───────────────────────────
+        void BuildMultiplierBlock(RectTransform parent)
+        {
+            _multiplierLabel = CreateTmp(parent, "Multiplier", "1.00x",
+                52f, FontStyles.Bold, TextAlignmentOptions.Center, TextMain);
+            var mRt = _multiplierLabel.rectTransform;
+            mRt.anchorMin = mRt.anchorMax = mRt.pivot = Center;
+            mRt.anchoredPosition = new Vector2(0f, -150f);
+            mRt.sizeDelta        = new Vector2(400f, 64f);
+
+            // MAX badge — shown only while the multiplier is capped at 3.00×
+            _maxLabel = CreateTmp(parent, "MaxBadge", "MAX",
+                15f, FontStyles.Bold, TextAlignmentOptions.Center, TierGreen);
+            _maxLabel.characterSpacing = 4f;
+            var maxRt = _maxLabel.rectTransform;
+            maxRt.anchorMin = maxRt.anchorMax = maxRt.pivot = Center;
+            maxRt.anchoredPosition = new Vector2(138f, -150f);
+            maxRt.sizeDelta        = new Vector2(70f, 24f);
+            var maxOl = _maxLabel.gameObject.AddComponent<Outline>();
+            maxOl.effectColor    = new Color(TierGreen.r, TierGreen.g, TierGreen.b, 0.45f);
+            maxOl.effectDistance = new Vector2(1.5f, -1.5f);
+            _maxLabel.gameObject.SetActive(false);
+
+            var multCaption = CreateTmp(parent, "MultCaption", "MULTIPLIER",
+                11f, FontStyles.Bold, TextAlignmentOptions.Center, TextSub);
+            multCaption.characterSpacing = 5f;
+            var mcRt = multCaption.rectTransform;
+            mcRt.anchorMin = mcRt.anchorMax = mcRt.pivot = Center;
+            mcRt.anchoredPosition = new Vector2(0f, -192f);
+            mcRt.sizeDelta        = new Vector2(300f, 18f);
+
+            // ── Combo bar ─────────────────────────────────────────────────────
+            const float barW = 480f, barH = 12f;
+            var barBg = NewRect(parent, "ComboBar", Center, Center, Center);
+            barBg.anchoredPosition = new Vector2(0f, -242f);
+            barBg.sizeDelta        = new Vector2(barW, barH);
+            var barBgImg = barBg.gameObject.AddComponent<Image>();
+            barBgImg.color = BgCard;
+            barBgImg.raycastTarget = false;
+            var barOl = barBg.gameObject.AddComponent<Outline>();
+            barOl.effectColor    = new Color(1f, 1f, 1f, 0.06f);
+            barOl.effectDistance = new Vector2(1f, -1f);
+
+            var fillGo = new GameObject("Fill", typeof(RectTransform), typeof(Image));
+            fillGo.transform.SetParent(barBg, false);
+            _barFill = fillGo.GetComponent<Image>();
+            _barFill.type          = Image.Type.Filled;
+            _barFill.fillMethod    = Image.FillMethod.Horizontal;
+            _barFill.fillOrigin    = 0;
+            _barFill.fillAmount    = 0f;
+            _barFill.color         = Accent;
+            _barFill.raycastTarget = false;
+            var fillRt = (RectTransform)fillGo.transform;
+            fillRt.anchorMin = Vector2.zero; fillRt.anchorMax = Vector2.one;
+            fillRt.offsetMin = new Vector2(1.5f, 1.5f); fillRt.offsetMax = new Vector2(-1.5f, -1.5f);
+
+            // Milestone tick marks inside the bar (2x / 3x / 5x boundaries)
+            float[] ticks = { 0.25f, 0.50f, 0.75f };
+            for (int i = 0; i < ticks.Length; i++)
+            {
+                var mk = new GameObject($"Tick{i}", typeof(RectTransform), typeof(Image));
+                mk.transform.SetParent(barBg, false);
+                var mkRt = (RectTransform)mk.transform;
+                mkRt.anchorMin        = new Vector2(ticks[i], 0f);
+                mkRt.anchorMax        = new Vector2(ticks[i], 1f);
+                mkRt.pivot            = Center;
+                mkRt.anchoredPosition = Vector2.zero;
+                mkRt.sizeDelta        = new Vector2(2f, 0f);
+                var mkImg = mk.GetComponent<Image>();
+                mkImg.color = new Color(1f, 1f, 1f, 0.22f);
+                mkImg.raycastTarget = false;
+            }
+
+            // Milestone labels under the bar
+            string[] labels = { "1x", "1.5x", "2x", "2.5x", "3x" };
+            float[]  fracs  = { 0f, 0.25f, 0.50f, 0.75f, 1f };
+            var labelRow = NewRect(parent, "BarLabels", Center, Center, Center);
+            labelRow.anchoredPosition = new Vector2(0f, -264f);
+            labelRow.sizeDelta        = new Vector2(barW, 16f);
+            for (int i = 0; i < labels.Length; i++)
+            {
+                var l = CreateTmp(labelRow, $"L{i}", labels[i],
+                    10f, FontStyles.Normal, TextAlignmentOptions.Center, TextSub);
+                var lRt = l.rectTransform;
+                lRt.anchorMin        = new Vector2(fracs[i], 0.5f);
+                lRt.anchorMax        = new Vector2(fracs[i], 0.5f);
+                lRt.pivot            = Center;
+                lRt.anchoredPosition = Vector2.zero;
+                lRt.sizeDelta        = new Vector2(40f, 16f);
+            }
+
+            // ── Combo counter ─────────────────────────────────────────────────
+            _comboLabel = CreateTmp(parent, "Combo", "COMBO  x0",
+                16f, FontStyles.Bold, TextAlignmentOptions.Center, TextSub);
+            _comboLabel.richText = true;
+            _comboLabel.characterSpacing = 2f;
+            var cRt = _comboLabel.rectTransform;
+            cRt.anchorMin = cRt.anchorMax = cRt.pivot = Center;
+            cRt.anchoredPosition = new Vector2(0f, -310f);
+            cRt.sizeDelta        = new Vector2(300f, 24f);
+        }
+
+        // ── Back button ───────────────────────────────────────────────────────
+        void BuildBackButton(RectTransform rt)
+        {
             var backBtn = new GameObject("BackBtn",
                 typeof(RectTransform), typeof(Image), typeof(Button), typeof(Outline));
             backBtn.transform.SetParent(rt, false);
@@ -567,244 +790,114 @@ namespace ValoCase.UI.Screens
             backRt.anchoredPosition = new Vector2(28f, -88f);
             backRt.sizeDelta        = new Vector2(96f, 36f);
 
-            var backImg = backBtn.GetComponent<Image>();
-            backImg.color = new Color(0.031f, 0.055f, 0.102f, 0.97f);   // dark navy, fully opaque
-
+            backBtn.GetComponent<Image>().color = BgCard;
             var backOl = backBtn.GetComponent<Outline>();
-            backOl.effectColor    = new Color(1f, 0.122f, 0.224f, 0.80f);  // neon red border
+            backOl.effectColor    = new Color(Accent.r, Accent.g, Accent.b, 0.8f);
             backOl.effectDistance = new Vector2(1.5f, -1.5f);
 
             var backLbl = CreateTmp(backBtn.transform, "Lbl", "BACK",
-                12f, FontStyles.Bold, TextAlignmentOptions.Center, Color.white);
+                12f, FontStyles.Bold, TextAlignmentOptions.Center, TextMain);
             backLbl.characterSpacing = 2f;
             var bRt = backLbl.rectTransform;
             bRt.anchorMin = Vector2.zero; bRt.anchorMax = Vector2.one;
             bRt.offsetMin = bRt.offsetMax = Vector2.zero;
 
-            var backBtnComp = backBtn.GetComponent<Button>();
-            backBtnComp.transition = Selectable.Transition.None;
-            backBtnComp.onClick.AddListener(OnBackClicked);
-
-            // Render on top of everything inside EarnVpScreen
+            var btn = backBtn.GetComponent<Button>();
+            btn.transition = Selectable.Transition.None;
+            btn.onClick.AddListener(OnBackClicked);
             backBtn.transform.SetAsLastSibling();
-
-            Debug.Log("[VP_KAZAN] Back button created active=" + backBtn.activeInHierarchy);
-            Debug.Log("[VP_KAZAN] Back button sibling=" + backBtn.transform.GetSiblingIndex());
         }
 
-        // ── Hold zone: layered rings + text ──────────────────────────────────
-        void BuildHoldZone(Transform parent)
+        // ── Pools ─────────────────────────────────────────────────────────────
+        void BuildPools(RectTransform center)
         {
-            const float outerD = 240f, innerD = 220f, coreD = 196f;
-
-            // Outer soft glow ring
-            _holdRingOuter = BuildCircle(parent, "RingOuter", outerD,
-                new Color(NeonPink.r, NeonPink.g, NeonPink.b, 0.10f));
-            PositionCenter(_holdRingOuter.rectTransform, new Vector2(0f, -28f), outerD);
-
-            // Visible ring
-            _holdRingInner = BuildCircle(parent, "RingInner", innerD,
-                new Color(NeonPink.r, NeonPink.g, NeonPink.b, 0.12f));
-            PositionCenter(_holdRingInner.rectTransform, new Vector2(0f, -28f), innerD);
-            var ringOl = _holdRingInner.gameObject.AddComponent<Outline>();
-            ringOl.effectColor    = NeonPink;
-            ringOl.effectDistance = new Vector2(2f, -2f);
-
-            // Core button
-            _holdZoneImg = BuildCircle(parent, "HoldZone", coreD, BgPanel);
-            PositionCenter(_holdZoneImg.rectTransform, new Vector2(0f, -28f), coreD);
-            _holdZoneRt = _holdZoneImg.rectTransform;
-
-            // EventTrigger for hold input
-            var et = _holdZoneImg.gameObject.AddComponent<EventTrigger>();
-            AddPE(et, EventTriggerType.PointerDown, _ => StartHolding());
-            AddPE(et, EventTriggerType.PointerUp,   _ => StopHolding());
-            AddPE(et, EventTriggerType.PointerExit, _ => StopHolding()); // release if dragged off
-
-            // Inner text — "HOLD" + icon
-            var holdIconLbl = CreateTmp(_holdZoneImg.transform, "Icon", "VP",
-                42, FontStyles.Normal, TextAlignmentOptions.Center, TextWhite);
-            holdIconLbl.rectTransform.anchorMin        = new Vector2(0f, 0.5f);
-            holdIconLbl.rectTransform.anchorMax        = new Vector2(1f, 0.5f);
-            holdIconLbl.rectTransform.pivot            = new Vector2(0.5f, 0.5f);
-            holdIconLbl.rectTransform.anchoredPosition = new Vector2(0f, 24f);
-            holdIconLbl.rectTransform.sizeDelta        = new Vector2(0f, 54f);
-            holdIconLbl.raycastTarget                  = false;
-
-            var holdLbl = CreateTmp(_holdZoneImg.transform, "HoldLabel", "HOLD",
-                20, FontStyles.Bold, TextAlignmentOptions.Center, TextWhite);
-            holdLbl.characterSpacing = 4f;
-            holdLbl.rectTransform.anchorMin        = new Vector2(0f, 0.5f);
-            holdLbl.rectTransform.anchorMax        = new Vector2(1f, 0.5f);
-            holdLbl.rectTransform.pivot            = new Vector2(0.5f, 0.5f);
-            holdLbl.rectTransform.anchoredPosition = new Vector2(0f, -16f);
-            holdLbl.rectTransform.sizeDelta        = new Vector2(0f, 28f);
-            holdLbl.raycastTarget                  = false;
-
-            var earnLbl = CreateTmp(_holdZoneImg.transform, "EarnLabel", "TO EARN",
-                11, FontStyles.Normal, TextAlignmentOptions.Center, TextSub);
-            earnLbl.characterSpacing = 3f;
-            earnLbl.rectTransform.anchorMin        = new Vector2(0f, 0.5f);
-            earnLbl.rectTransform.anchorMax        = new Vector2(1f, 0.5f);
-            earnLbl.rectTransform.pivot            = new Vector2(0.5f, 0.5f);
-            earnLbl.rectTransform.anchoredPosition = new Vector2(0f, -40f);
-            earnLbl.rectTransform.sizeDelta        = new Vector2(0f, 18f);
-            earnLbl.raycastTarget                  = false;
-        }
-
-        // ── Duration multiplier bar ───────────────────────────────────────────
-        void BuildDurationBar(Transform parent)
-        {
-            // Container row: [label] [bar] [multiplier]
-            var row = NewRect(parent, "DurRow",
-                new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f));
-            row.anchoredPosition = new Vector2(0f, -160f);
-            row.sizeDelta        = new Vector2(480f, 28f);
-            var hl = row.gameObject.AddComponent<HorizontalLayoutGroup>();
-            hl.childAlignment        = TextAnchor.MiddleCenter;
-            hl.spacing               = 10f;
-            hl.childForceExpandWidth  = false;
-            hl.childForceExpandHeight = false;
-
-            // "HOLD BONUS" label
-            var durHint = CreateTmp(row, "DurHint", "HOLD BONUS",
-                9, FontStyles.Bold, TextAlignmentOptions.Right, TextDim);
-            durHint.characterSpacing = 2f;
-            durHint.gameObject.AddComponent<LayoutElement>().minWidth = 90f;
-
-            // Bar background
-            var barBg = new GameObject("BarBg", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
-            barBg.transform.SetParent(row, false);
-            barBg.GetComponent<LayoutElement>().minWidth = 260f;
-            barBg.GetComponent<LayoutElement>().minHeight = 10f;
-            barBg.GetComponent<Image>().color = new Color(0.08f, 0.05f, 0.18f, 1f);
-            var barBgRt = (RectTransform)barBg.transform;
-
-            // Bar fill (Filled image, left-to-right)
-            var fillGo = new GameObject("Fill", typeof(RectTransform), typeof(Image));
-            fillGo.transform.SetParent(barBg.transform, false);
-            _durationBarFill = fillGo.GetComponent<Image>();
-            _durationBarFill.fillMethod = Image.FillMethod.Horizontal;
-            _durationBarFill.type       = Image.Type.Filled;
-            _durationBarFill.fillOrigin = 0;  // left
-            _durationBarFill.fillAmount = 0f;
-            _durationBarFill.color      = NeonGreen;
-            var fillRt = (RectTransform)fillGo.transform;
-            fillRt.anchorMin = Vector2.zero; fillRt.anchorMax = Vector2.one;
-            fillRt.offsetMin = Vector2.zero; fillRt.offsetMax = Vector2.zero;
-
-            // Segment markers at 33% and 67% (10s and 30s milestones)
-            for (int i = 1; i <= 2; i++)
+            for (int i = 0; i < FloatPoolSize; i++)
             {
-                var mk = new GameObject($"Mk{i}", typeof(RectTransform), typeof(Image));
-                mk.transform.SetParent(barBg.transform, false);
-                var mkRt = (RectTransform)mk.transform;
-                mkRt.anchorMin        = new Vector2(i / 3f, 0f);
-                mkRt.anchorMax        = new Vector2(i / 3f, 1f);
-                mkRt.pivot            = new Vector2(0.5f, 0.5f);
-                mkRt.anchoredPosition = Vector2.zero;
-                mkRt.sizeDelta        = new Vector2(1.5f, 0f);
-                mk.GetComponent<Image>().color = new Color(1f, 1f, 1f, 0.18f);
+                var go = new GameObject($"Float{i}", typeof(RectTransform));
+                go.transform.SetParent(_floatRoot, false);
+                var frt = (RectTransform)go.transform;
+                frt.anchorMin = frt.anchorMax = frt.pivot = Center;
+                frt.sizeDelta = new Vector2(260f, 56f);
+
+                var tmp = go.AddComponent<TextMeshProUGUI>();
+                tmp.fontSize           = 34f;
+                tmp.fontStyle          = FontStyles.Bold;
+                tmp.alignment          = TextAlignmentOptions.Center;
+                tmp.raycastTarget      = false;
+                tmp.enableWordWrapping = false;
+                var ol = go.AddComponent<Outline>();
+                ol.effectColor    = new Color(0f, 0f, 0f, 0.6f);
+                ol.effectDistance = new Vector2(1.5f, -1.5f);
+
+                go.SetActive(false);
+                _floats[i] = new FloatEntry { rt = frt, tmp = tmp };
             }
 
-            // Multiplier label "1.0×"
-            _multiplierLabel = CreateTmp(row, "Mult", "1.0×",
-                13, FontStyles.Bold, TextAlignmentOptions.Left, NeonGreen);
-            _multiplierLabel.gameObject.AddComponent<LayoutElement>().minWidth = 48f;
-        }
-
-        // ── Combo section ─────────────────────────────────────────────────────
-        void BuildComboSection(Transform parent)
-        {
-            var section = NewRect(parent, "ComboSection",
-                new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f));
-            section.anchoredPosition = new Vector2(0f, -210f);
-            section.sizeDelta        = new Vector2(480f, 48f);
-
-            // "COMBO" label
-            _comboLabel = CreateTmp(section, "ComboLbl", "COMBO",
-                12, FontStyles.Bold, TextAlignmentOptions.Center, TextDim);
-            _comboLabel.characterSpacing = 3f;
-            _comboLabel.rectTransform.anchorMin        = new Vector2(0.5f, 1f);
-            _comboLabel.rectTransform.anchorMax        = new Vector2(0.5f, 1f);
-            _comboLabel.rectTransform.pivot            = new Vector2(0.5f, 1f);
-            _comboLabel.rectTransform.anchoredPosition = new Vector2(0f, 0f);
-            _comboLabel.rectTransform.sizeDelta        = new Vector2(300f, 20f);
-
-            // 10 dot indicators
-            var dotsRow = NewRect(section, "Dots",
-                new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0.5f, 0f));
-            dotsRow.anchoredPosition = new Vector2(0f, 0f);
-            dotsRow.sizeDelta        = new Vector2(340f, 22f);
-            var hl = dotsRow.gameObject.AddComponent<HorizontalLayoutGroup>();
-            hl.childAlignment        = TextAnchor.MiddleCenter;
-            hl.spacing               = 8f;
-            hl.childForceExpandWidth  = false;
-            hl.childForceExpandHeight = false;
-
-            _comboDots.Clear();
-            for (int i = 0; i < MaxCombo; i++)
+            for (int i = 0; i < ParticlePoolSize; i++)
             {
-                var dot = new GameObject($"Dot{i}", typeof(RectTransform), typeof(Image),
-                    typeof(Outline), typeof(LayoutElement));
-                dot.transform.SetParent(dotsRow, false);
-                dot.GetComponent<LayoutElement>().minWidth  = 18f;
-                dot.GetComponent<LayoutElement>().minHeight = 18f;
-                var dotImg = dot.GetComponent<Image>();
-                dotImg.color = new Color(0.3f, 0.25f, 0.45f, 0.4f);
-                var dotOl = dot.GetComponent<Outline>();
-                dotOl.effectColor    = Color.clear;
-                dotOl.effectDistance = new Vector2(2f, -2f);
-                _comboDots.Add(dotImg);
+                var go = new GameObject($"P{i}", typeof(RectTransform), typeof(Image));
+                go.transform.SetParent(_particleRoot, false);
+                var prt = (RectTransform)go.transform;
+                prt.anchorMin = prt.anchorMax = prt.pivot = Center;
+                prt.sizeDelta     = new Vector2(10f, 10f);
+                prt.localRotation = Quaternion.Euler(0f, 0f, 45f);
+                var img = go.GetComponent<Image>();
+                img.raycastTarget = false;
+
+                go.SetActive(false);
+                _particles[i] = new ParticleEntry { rt = prt, img = img };
             }
-        }
-
-        // ── Stats row ─────────────────────────────────────────────────────────
-        void BuildStatsRow(Transform parent)
-        {
-            var row = NewRect(parent, "StatsRow",
-                new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f));
-            row.anchoredPosition = new Vector2(0f, -268f);
-            row.sizeDelta        = new Vector2(480f, 28f);
-            var hl = row.gameObject.AddComponent<HorizontalLayoutGroup>();
-            hl.childAlignment        = TextAnchor.MiddleCenter;
-            hl.spacing               = 24f;
-            hl.childForceExpandWidth  = false;
-            hl.childForceExpandHeight = false;
-
-            // Session earned label
-            _sessionLabel = CreateTmp(row, "Session", "SESSION  +0 VP",
-                11, FontStyles.Bold, TextAlignmentOptions.Center, TextSub);
-            _sessionLabel.gameObject.AddComponent<LayoutElement>().minWidth = 200f;
-
-            // Reward rates info
-            var ratesLbl = CreateTmp(row, "Rates",
-                "0-10s: ×1.0  |  10-30s: ×0.8  |  30s+: ×0.5",
-                9, FontStyles.Normal, TextAlignmentOptions.Center, TextDim);
-            ratesLbl.gameObject.AddComponent<LayoutElement>().minWidth = 220f;
         }
 
         // ═════════════════════════════════════════════════════════════════════
         // PRIMITIVE HELPERS
         // ═════════════════════════════════════════════════════════════════════
 
-        Image BuildCircle(Transform parent, string name, float diameter, Color color)
+        // Solid diamond: default UI square rotated 45°
+        static Image BuildDiamond(Transform parent, string name, float size, Color color)
         {
             var go = new GameObject(name, typeof(RectTransform), typeof(Image));
             go.transform.SetParent(parent, false);
+            var drt = (RectTransform)go.transform;
+            drt.anchorMin = drt.anchorMax = drt.pivot = Center;
+            drt.anchoredPosition = Vector2.zero;
+            drt.sizeDelta        = new Vector2(size, size);
+            drt.localRotation    = Quaternion.Euler(0f, 0f, 45f);
             var img = go.GetComponent<Image>();
             img.color = color;
-            img.raycastTarget = true;
+            img.raycastTarget = false;
             return img;
         }
 
-        static void PositionCenter(RectTransform rt, Vector2 pos, float size)
+        // Thin square frame (4 bars) — rotated continuously to read as a ring
+        static RectTransform BuildRingFrame(Transform parent, string name, float size, Color color, float thickness)
         {
-            rt.anchorMin        = new Vector2(0.5f, 0.5f);
-            rt.anchorMax        = new Vector2(0.5f, 0.5f);
-            rt.pivot            = new Vector2(0.5f, 0.5f);
-            rt.anchoredPosition = pos;
-            rt.sizeDelta        = new Vector2(size, size);
+            var pivot = new GameObject(name, typeof(RectTransform));
+            pivot.transform.SetParent(parent, false);
+            var prt = (RectTransform)pivot.transform;
+            prt.anchorMin = prt.anchorMax = prt.pivot = Center;
+            prt.anchoredPosition = Vector2.zero;
+            prt.sizeDelta        = new Vector2(size, size);
+            prt.localRotation    = Quaternion.Euler(0f, 0f, 45f);
+
+            float half = size * 0.5f;
+            Vector2[] pos  = { new Vector2(0f, half), new Vector2(0f, -half), new Vector2(-half, 0f), new Vector2(half, 0f) };
+            bool[] horiz   = { true, true, false, false };
+            for (int i = 0; i < 4; i++)
+            {
+                var bar = new GameObject($"Edge{i}", typeof(RectTransform), typeof(Image));
+                bar.transform.SetParent(pivot.transform, false);
+                var brt = (RectTransform)bar.transform;
+                brt.anchorMin = brt.anchorMax = brt.pivot = Center;
+                brt.anchoredPosition = pos[i];
+                brt.sizeDelta = horiz[i]
+                    ? new Vector2(size + thickness, thickness)
+                    : new Vector2(thickness, size + thickness);
+                var img = bar.GetComponent<Image>();
+                img.color = color;
+                img.raycastTarget = false;
+            }
+            return prt;
         }
 
         static RectTransform NewRect(Transform parent, string name,
@@ -812,9 +905,9 @@ namespace ValoCase.UI.Screens
         {
             var go = new GameObject(name, typeof(RectTransform));
             go.transform.SetParent(parent, false);
-            var rt = (RectTransform)go.transform;
-            rt.anchorMin = aMin; rt.anchorMax = aMax; rt.pivot = pivot;
-            return rt;
+            var nrt = (RectTransform)go.transform;
+            nrt.anchorMin = aMin; nrt.anchorMax = aMax; nrt.pivot = pivot;
+            return nrt;
         }
 
         static TextMeshProUGUI CreateTmp(Transform parent, string name, string text,
@@ -831,34 +924,6 @@ namespace ValoCase.UI.Screens
             tmp.raycastTarget      = false;
             tmp.enableWordWrapping = false;
             return tmp;
-        }
-
-        static void StretchFull(RectTransform rt)
-        {
-            rt.anchorMin = Vector2.zero; rt.anchorMax = Vector2.one;
-            rt.offsetMin = Vector2.zero; rt.offsetMax = Vector2.zero;
-        }
-
-        /// <summary>
-        /// Returns the current pointer/mouse position, compatible with both the
-        /// legacy Input Manager and the new Input System package.
-        /// </summary>
-        static Vector2 ReadMousePosition()
-        {
-#if ENABLE_INPUT_SYSTEM
-            var mouse = Mouse.current;
-            return mouse != null ? mouse.position.ReadValue() : Vector2.zero;
-#else
-            return Input.mousePosition;
-#endif
-        }
-
-        static void AddPE(EventTrigger et, EventTriggerType type,
-            UnityEngine.Events.UnityAction<BaseEventData> action)
-        {
-            var e = new EventTrigger.Entry { eventID = type };
-            e.callback.AddListener(action);
-            et.triggers.Add(e);
         }
     }
 }

@@ -63,11 +63,28 @@ namespace ValoCase.UI.Screens
         TextMeshProUGUI _statLost;
         TextMeshProUGUI _statStreak;
 
+        // True while the Battle Room overlay is up (ready, running or finished).
+        // While open, this screen survives navigation (e.g. Settings) without
+        // resetting the battle — only an explicit Leave closes the room.
+        bool BattleViewOpen => _waitingPanel != null && _waitingPanel.IsOpen;
+
+        protected override bool KeepAliveWhenHidden => BattleViewOpen;
+
         protected override void OnShown()
         {
             BuildOnce();
+
+            if (BattleViewOpen)
+            {
+                // Returning from Settings (or any other screen) mid-battle:
+                // restore the exact battle view, state and panels untouched.
+                Debug.Log("[BATTLE_NAV] Returned to active battle room — state preserved");
+                return;
+            }
+
             _createPanel?.Hide();
             _waitingPanel?.Hide();
+            SetLobbyChromeActive(true);   // restore lobby if returning from a battle
             RefreshBalance();
             RefreshStats();
             StartCoroutine(UIAnimator.SlideFromBottom((RectTransform)transform, 0.25f));
@@ -76,6 +93,11 @@ namespace ValoCase.UI.Screens
         protected override void OnHidden()
         {
             StopAllCoroutines();
+
+            // Battle room stays alive while Settings (or another screen) is open;
+            // its coroutines keep running because the GameObject is not deactivated.
+            if (BattleViewOpen) return;
+
             _createPanel?.Hide();
             _waitingPanel?.Hide();
         }
@@ -518,17 +540,65 @@ namespace ValoCase.UI.Screens
 
         void OnJoinLobby(BattleLobbyData lobby)
         {
-            // Joining a default bot lobby → existing waiting-room / battle flow.
+            // Block entry unless the player can afford the battle cost.
+            if (!CanAffordEntry(lobby)) return;
+
+            // Joining a default bot lobby → full-screen Battle Room.
+            SetLobbyChromeActive(false);
             _waitingPanel.Show(lobby, isHost: false);
         }
 
         void OpenWaitingFromCreate(BattleLobbyData lobby)
         {
+            // Block entry unless the player can afford the battle cost; the create
+            // panel stays open so the player can adjust or cancel.
+            if (!CanAffordEntry(lobby)) return;
+
             _createPanel.Hide();
+            SetLobbyChromeActive(false);
             _waitingPanel.Show(lobby, isHost: true);
         }
 
-        void CloseWaiting() => _waitingPanel.Hide();
+        // Entry cost = Case Price × Round Count, stored as WagerVP on the lobby.
+        // Shows a message and returns false when the balance is insufficient.
+        bool CanAffordEntry(BattleLobbyData lobby)
+        {
+            int cost = lobby?.WagerVP ?? 0;
+            var vp   = GameContext.Instance?.Vp;
+
+            if (vp != null && vp.Balance < cost)
+            {
+                GameEvents.RaiseToast("Not enough VP to join this battle");
+                return false;
+            }
+
+            return true;
+        }
+
+        void CloseWaiting()
+        {
+            _waitingPanel.Hide();
+            SetLobbyChromeActive(true);
+
+            // The battle may have changed the balance (entry cost) and stats; keep
+            // the lobby chrome in sync on return.
+            RefreshBalance();
+            RefreshStats();
+        }
+
+        // Toggles the lobby's own UI so the Battle Room shows full-screen with no
+        // lobby content visible behind it. The create/waiting overlays are left alone.
+        void SetLobbyChromeActive(bool active)
+        {
+            for (int i = 0; i < transform.childCount; i++)
+            {
+                var child = transform.GetChild(i);
+                if (child == null) continue;
+                string n = child.name;
+                if (n == "WaitingPanel" || n == "CreatePanel") continue;
+                child.gameObject.SetActive(active);
+            }
+        }
 
         void OnBattleStart(BattleLobbyData lobby)
         {

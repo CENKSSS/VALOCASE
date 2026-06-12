@@ -44,6 +44,10 @@ namespace ValoCase.UI
             {
                 icon.sprite = skin.Icon;
                 icon.enabled = skin.Icon != null;
+                // Keep the weapon's original proportions (no vertical squash) and show it
+                // at full brightness/opacity — the prefab icon ships at alpha 0.12.
+                icon.preserveAspect = true;
+                icon.color = Color.white;
             }
 
             if (skinName != null) skinName.text = skin.SkinName;
