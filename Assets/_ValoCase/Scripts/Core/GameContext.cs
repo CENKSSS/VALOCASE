@@ -27,6 +27,7 @@ namespace ValoCase.Core
         public ICaseProgressionService CaseProgression { get; private set; }
         public IFakeOnlineService FakeOnline { get; private set; }
         public IUpgradeService Upgrade { get; private set; }
+        public IEconomyService Economy { get; private set; }
 
         void Awake()
         {
@@ -69,6 +70,7 @@ namespace ValoCase.Core
             FakeOnline = services.FakeOnline;
             CaseOpening = services.CaseOpening;
             Upgrade = services.Upgrade;
+            Economy = services.Economy;
 
             // ── Admin VP grant (one-time) ─────────────────────────────────────
             // Gives 500 000 VP exactly once, keyed on the adminVpGrantApplied flag

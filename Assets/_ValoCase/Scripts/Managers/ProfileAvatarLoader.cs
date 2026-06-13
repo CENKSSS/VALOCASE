@@ -1,67 +1,58 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using UnityEngine;
 using ValoCase.Data;
 
 namespace ValoCase.Profile
 {
     /// <summary>
-    /// Scans the FaceCards folder and returns (agentName, Sprite) pairs.
-    /// Reuses FileSystemSkinLoader's proven image-loading pipeline.
+    /// Loads agent portrait sprites from Resources (Art/Avatars) and returns them
+    /// as (agentName, Sprite) pairs. MOBILE-SAFE: uses Resources.LoadAll&lt;Sprite&gt;
+    /// instead of System.IO, so it works in Android/iOS player builds.
     ///
-    /// Expected folder:  Assets/_ValoCase/Art/Avatars/
-    /// Expected filenames: Chamber_icon.png, Jett_icon.png, Phoenix_icon.png …
-    ///   The loader strips common suffixes (_icon, _face, _portrait, _card)
-    ///   so the display name is clean ("Chamber", "Jett", etc.).
+    /// Expected files:  Resources/Art/Avatars/Chamber_icon.png, Jett_icon.png, …
+    ///   Common suffixes (_icon, _face, _portrait, _card) are stripped so the
+    ///   display name is clean ("Chamber", "Jett", etc.).
     /// </summary>
     public static class ProfileAvatarLoader
     {
-        static readonly HashSet<string> ImageExts =
-            new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".png", ".jpg", ".jpeg" };
-
         static readonly string[] StripSuffixes =
-            { "_icon", "_face", "_portrait", "_card", "_Icon", "_Face", "_Portrait", "_Card" };
+            { "_icon", "_face", "_portrait", "_card" };
 
         public static string DefaultPath => ProjectPaths.FaceCardsRoot;
 
         // ── Public API ────────────────────────────────────────────────────────
 
         /// <summary>
-        /// Loads all images in <paramref name="folderPath"/> and returns them as
-        /// (agentName, Sprite) pairs sorted alphabetically.
-        /// Returns an empty list if the folder does not exist.
+        /// Loads all avatar sprites under <paramref name="resourceFolder"/> and
+        /// returns them as (agentName, Sprite) pairs sorted alphabetically.
+        /// Returns an empty list if none are found.
         /// </summary>
-        public static List<(string name, Sprite sprite)> LoadAll(string folderPath = null)
+        public static List<(string name, Sprite sprite)> LoadAll(string resourceFolder = null)
         {
-            if (string.IsNullOrEmpty(folderPath))
-                folderPath = DefaultPath;
+            if (string.IsNullOrEmpty(resourceFolder))
+                resourceFolder = DefaultPath;
 
-            var result = new List<(string, Sprite)>();
+            var result  = new List<(string, Sprite)>();
+            var sprites = Resources.LoadAll<Sprite>(resourceFolder);
 
-            if (!Directory.Exists(folderPath))
+            if (sprites == null || sprites.Length == 0)
             {
-                Debug.LogWarning($"[ProfileAvatarLoader] FaceCards folder not found: {folderPath}");
+                Debug.LogWarning($"[ProfileAvatarLoader] No avatars found in Resources/{resourceFolder}/");
                 return result;
             }
 
-            var files = Directory.GetFiles(folderPath, "*.*", SearchOption.TopDirectoryOnly);
-            Array.Sort(files, StringComparer.OrdinalIgnoreCase);
-
-            foreach (var file in files)
+            foreach (var sprite in sprites)
             {
-                if (!ImageExts.Contains(Path.GetExtension(file))) continue;
-
-                var agentName = CleanName(Path.GetFileNameWithoutExtension(file));
-                if (string.IsNullOrWhiteSpace(agentName)) continue;
-
-                // Reuse the production-tested loader from FileSystemSkinLoader
-                var sprite = FileSystemSkinLoader.LoadSpriteFromFile(file, agentName);
                 if (sprite == null) continue;
 
+                var agentName = CleanName(sprite.name);
+                if (string.IsNullOrWhiteSpace(agentName)) continue;
+
                 result.Add((agentName, sprite));
-                Debug.Log($"[ProfileAvatarLoader] Loaded face card: {agentName}");
             }
+
+            result.Sort((a, b) => string.Compare(a.Item1, b.Item1, StringComparison.OrdinalIgnoreCase));
 
             Debug.Log($"[ProfileAvatarLoader] Total face cards loaded: {result.Count}");
             return result;

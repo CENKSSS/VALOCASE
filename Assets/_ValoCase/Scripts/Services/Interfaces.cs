@@ -83,6 +83,25 @@ namespace ValoCase.Services
         SkinDefinitionSO RollSkin(CaseDefinitionSO caseDef);
     }
 
+    /// <summary>
+    /// Phase-3 result-generation seam. The SINGLE place authoritative/random results
+    /// are produced. Today a local implementation reuses the existing odds + RNG; a
+    /// future Spring Boot integration replaces ONLY this provider (same call sites,
+    /// same ID-based result contracts). Generation is separated here from the
+    /// animation/presentation layers, which only consume the results.
+    /// </summary>
+    public interface IResultProvider
+    {
+        /// <summary>Roll a single skin from a case's drop table (the shared primitive).</summary>
+        SkinDefinitionSO RollSkin(CaseDefinitionSO caseDef);
+
+        /// <summary>Produce a full, ID-based case-opening result (one roll).</summary>
+        CaseOpeningResult GenerateCaseOpening(CaseDefinitionSO caseDef, int vpSpent);
+
+        /// <summary>Produce a full, ID-based upgrade result (performs the success roll).</summary>
+        UpgradeResult GenerateUpgrade(IReadOnlyList<SkinDefinitionSO> inputs, SkinDefinitionSO target, float chance);
+    }
+
     public interface IShopService
     {
         IReadOnlyList<CaseDefinitionSO> FeaturedCases { get; }
@@ -105,9 +124,34 @@ namespace ValoCase.Services
     {
         PlayerStatisticsSave Data { get; }
         void RecordCaseOpened(CaseDefinitionSO caseDef, SkinDefinitionSO skin, int vpSpent);
-        void RecordVpEarned(int amount);
+        // notify=false records the value without raising OnStatisticsChanged — used when
+        // the recording happens inside a larger mutation that refreshes stats once at the end.
+        void RecordVpEarned(int amount, bool notify = true);
         void RecalculateInventoryStats(IInventoryService inventory, ContentDatabaseSO database, bool notify = true);
         void RecordBattleResult(BattleOutcome outcome, int earningsVp);
+    }
+
+    /// <summary>
+    /// Phase-4 economy transaction facade. Composes the existing VP / inventory /
+    /// statistics primitives into COMPLETE, consistent transactions (mutate + record
+    /// statistic + persist) so callers stop reassembling that composition ad-hoc.
+    ///
+    /// It does NOT introduce new economy rules, amounts, odds or rewards — it only
+    /// centralizes the orchestration. This is the single boundary a future Spring Boot
+    /// integration would make server-authoritative.
+    /// </summary>
+    public interface IEconomyService
+    {
+        /// <summary>Grant a VP reward: Vp.Add + RecordVpEarned (+ persist unless save=false).
+        /// `source` is a free-text tag for telemetry/future backend (e.g. "mission").</summary>
+        void GrantReward(int amount, string source, bool save = true);
+
+        /// <summary>Sell one unit: Inventory.TrySell + RecordVpEarned + recalc + persist.</summary>
+        bool SellOne(string skinId, out int vpGained);
+
+        /// <summary>Bulk-sell every unit of skins matching <paramref name="match"/>
+        /// (null = all). Batched: records + persists ONCE. Returns the units sold.</summary>
+        int SellMatching(System.Func<SkinDefinitionSO, bool> match, out int totalVpGained);
     }
 
     public interface ICaseProgressionService

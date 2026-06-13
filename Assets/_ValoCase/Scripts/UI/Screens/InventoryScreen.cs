@@ -53,6 +53,8 @@ namespace ValoCase.UI.Screens
 
         protected override void OnShown()
         {
+            // Shared section background (cover image, aspect preserved)
+            FullscreenBackground.AttachShared(gameObject);
             EnsureSellFlow();
             BuildHeaderControls();
             Refresh();
@@ -178,38 +180,17 @@ namespace ValoCase.UI.Screens
         void SellMatching(Func<SkinDefinitionSO, bool> predicate)
         {
             var ctx = GameContext.Instance;
-            if (ctx?.Inventory == null || ctx.Content == null) return;
+            if (ctx?.Economy == null) return;
 
-            // Suppress per-item grid rebuilds; we rebuild once at the end.
+            // Suppress per-item grid rebuilds; we rebuild once at the end. The economy
+            // facade performs the actual loop + record-stat + single save (Phase-4).
             GameEvents.OnInventoryChanged -= Refresh;
-
-            int totalGained = 0;
-            // Snapshot ids up-front — selling mutates the underlying inventory list.
-            var ids = ctx.Inventory.Items.Select(e => e.skinId).Distinct().ToList();
-            foreach (var id in ids)
-            {
-                var skin = ctx.Content.GetSkin(id);
-                if (skin == null) continue;
-                if (predicate != null && !predicate(skin)) continue;
-
-                int qty = ctx.Inventory.GetQuantity(id);
-                for (int i = 0; i < qty; i++)
-                {
-                    if (ctx.Inventory.TrySell(id, out var gained)) totalGained += gained;
-                    else break;
-                }
-            }
-
+            ctx.Economy.SellMatching(predicate, out var totalGained);
             GameEvents.OnInventoryChanged += Refresh;
 
             if (totalGained > 0)
-            {
                 SoundManager.Instance?.Play(SoundId.SellSkin);
-                ctx.Statistics?.RecordVpEarned(totalGained);
-                ctx.Statistics?.RecalculateInventoryStats(ctx.Inventory, ctx.Content);
-            }
 
-            ctx.Save?.Save();
             Refresh();
         }
 

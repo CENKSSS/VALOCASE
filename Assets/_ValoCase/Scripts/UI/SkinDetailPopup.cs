@@ -65,12 +65,10 @@ namespace ValoCase.UI
         void Sell()
         {
             var ctx = GameContext.Instance;
-            if (ctx?.Inventory != null && ctx.Inventory.TrySell(_skinId, out var gained))
+            // Phase-4: one economy call (TrySell + RecordVpEarned + recalc + save).
+            if (ctx?.Economy != null && ctx.Economy.SellOne(_skinId, out _))
             {
                 SoundManager.Instance?.Play(SoundId.SellSkin);
-                ctx.Statistics?.RecordVpEarned(gained);
-                ctx.Statistics?.RecalculateInventoryStats(ctx.Inventory, ctx.Content);
-                ctx.Save?.Save();
                 Hide();
             }
         }

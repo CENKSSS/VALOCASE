@@ -19,7 +19,6 @@ namespace ValoCase.UI.Screens
         [SerializeField] Button backButton;
 
         // ── Palette (Valorant dark navy + neon red, matches BottomNavBar) ─────
-        static readonly Color BgDeep    = new Color(0.031f, 0.055f, 0.102f, 1f);
         static readonly Color CardBg    = new Color(0.040f, 0.065f, 0.125f, 1f);
         static readonly Color ActiveRed = new Color(1f, 0.122f, 0.224f, 1f);
         static readonly Color AccentVP  = new Color(0.902f, 0.816f, 0.435f, 1f);   // gold
@@ -93,10 +92,8 @@ namespace ValoCase.UI.Screens
 
             var rt = (RectTransform)transform;
 
-            // Background
-            var bg = NewGo("Bg", rt, typeof(Image));
-            Stretch(bg);
-            bg.GetComponent<Image>().color = BgDeep;
+            // Shared section background (cover image, aspect preserved)
+            FullscreenBackground.AttachShared(gameObject);
 
             // Content area — between TopProfileBar (115 px) and BottomNavBar (110 px)
             const float topPad  = 115f;

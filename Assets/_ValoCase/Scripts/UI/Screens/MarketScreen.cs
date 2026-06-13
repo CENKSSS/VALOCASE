@@ -13,7 +13,6 @@ namespace ValoCase.UI.Screens
         [SerializeField] UINavigator navigator;
         [SerializeField] Button backButton;
 
-        static readonly Color BgDeep    = new Color(0.031f, 0.055f, 0.102f, 1f);
         static readonly Color ActiveRed = new Color(1f, 0.122f, 0.224f, 1f);
         static readonly Color TextBright= new Color(0.925f, 0.910f, 0.882f, 1f);
         static readonly Color TextDim   = new Color(1f, 1f, 1f, 0.38f);
@@ -38,14 +37,8 @@ namespace ValoCase.UI.Screens
 
             var rt = (RectTransform)transform;
 
-            // Background
-            var bg = new GameObject("Bg", typeof(RectTransform), typeof(Image));
-            bg.transform.SetParent(rt, false);
-            var bgRt = (RectTransform)bg.transform;
-            bgRt.anchorMin = Vector2.zero;
-            bgRt.anchorMax = Vector2.one;
-            bgRt.offsetMin = bgRt.offsetMax = Vector2.zero;
-            bg.GetComponent<Image>().color = BgDeep;
+            // Shared section background (cover image, aspect preserved)
+            FullscreenBackground.AttachShared(gameObject);
 
             // MARKET title
             var titleGo = new GameObject("Title", typeof(RectTransform));

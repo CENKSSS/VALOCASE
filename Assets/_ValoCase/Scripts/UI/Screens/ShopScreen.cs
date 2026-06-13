@@ -25,8 +25,6 @@ namespace ValoCase.UI.Screens
         bool _dealsSectionHidden;
 
         // ── Palette ───────────────────────────────────────────────────────────
-        static readonly Color BgDeep     = new Color(0.031f, 0.055f, 0.102f, 1f);
-        static readonly Color CardBg     = new Color(0.040f, 0.065f, 0.125f, 1f);
         static readonly Color GreenBadge = new Color(0.09f,  0.55f,  0.26f,  1f);
         static readonly Color TextBright = new Color(0.925f, 0.910f, 0.882f, 1f);
         static readonly Color TextDim    = new Color(1f,     1f,     1f,     0.38f);
@@ -170,9 +168,8 @@ namespace ValoCase.UI.Screens
 
         void BuildGrid(GameContext ctx)
         {
-            // Screen background
-            var bgImg = GetComponent<Image>();
-            if (bgImg != null) bgImg.color = BgDeep;
+            // Shared section background (cover image, aspect preserved)
+            FullscreenBackground.AttachShared(gameObject);
 
             // Compute column count & cell dimensions from actual screen width
             float scrollW  = Screen.width - 32f; // 16 px margin each side
@@ -305,7 +302,23 @@ namespace ValoCase.UI.Screens
             {
                 // ── Card root ─────────────────────────────────────────────────
                 var card = Child(parent, "Card_" + (caseId.Length > 0 ? caseId : "unknown"));
-                card.AddComponent<Image>().color = CardBg;
+                // Transparent root image — keeps the button raycast surface; the
+                // visible fill is the shared background02 cover image below.
+                card.AddComponent<Image>().color = new Color(0f, 0f, 0f, 0f);
+
+                // Card background — background02 as a cover image (aspect kept,
+                // overflow clipped to the card). Texture is shared between cards.
+                FullscreenBackground.Attach(card, ProjectPaths.CaseCardBackgroundPath);
+
+                // Subtle dark scrim above the photo so name / price / drop-rate
+                // text stays readable. Sits below all card content (sibling 1).
+                {
+                    var scrim = Child(card.transform, "BgScrim");
+                    StretchFill(scrim.GetComponent<RectTransform>());
+                    var sImg = scrim.AddComponent<Image>();
+                    sImg.color         = new Color(0f, 0f, 0f, 0.35f);
+                    sImg.raycastTarget = false;
+                }
 
                 var btn = card.AddComponent<Button>();
                 var bc  = btn.colors;

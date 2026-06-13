@@ -1,5 +1,4 @@
-using System;
-using System.IO;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 using ValoCase.Data;
@@ -7,7 +6,7 @@ using ValoCase.Data;
 namespace ValoCase.UI
 {
     /// <summary>
-    /// Loads an image from disk at runtime and displays it as a full-screen "cover" background.
+    /// Loads a sprite from Resources at runtime and displays it as a full-screen "cover" background.
     ///
     /// Cover behaviour (no black bars, no distortion, no stretching):
     ///   • The Image sits inside a RectMask2D container that fills the entire screen.
@@ -36,6 +35,10 @@ namespace ValoCase.UI
         // ── Runtime ───────────────────────────────────────────────────────────
         Sprite _loaded;
 
+        // Sprites shared between instances, keyed by file path — screens using the
+        // same background reuse one texture instead of decoding it once each.
+        static readonly Dictionary<string, Sprite> SharedSprites = new();
+
         void Start()
         {
             // Self-heal: if the builder wired nothing, create the structure now.
@@ -45,15 +48,39 @@ namespace ValoCase.UI
 
         // ── Public API ────────────────────────────────────────────────────────
 
-        /// <summary>Force a reload from disk (e.g. after the file is replaced).</summary>
+        /// <summary>
+        /// Attaches the shared section background (ProjectPaths.SharedScreenBackgroundPath)
+        /// to a screen root as a full-screen cover image behind all its UI.
+        /// Idempotent — safe to call from OnShown every time the screen appears.
+        /// </summary>
+        public static void AttachShared(GameObject host) =>
+            Attach(host, ProjectPaths.SharedScreenBackgroundPath);
+
+        /// <summary>
+        /// Attaches an arbitrary background image to a host rect as a cover image
+        /// (aspect preserved, overflow clipped). The host's own rect defines the
+        /// covered region. Idempotent.
+        /// </summary>
+        public static void Attach(GameObject host, string path)
+        {
+            var bg = host.GetComponent<FullscreenBackground>();
+            if (bg == null) bg = host.AddComponent<FullscreenBackground>();
+            if (string.IsNullOrEmpty(bg.overridePath))
+                bg.overridePath = path;
+            bg.EnsureStructure();
+            bg.LoadImage();
+        }
+
+        /// <summary>Force a reload (e.g. after invalidating the cache).</summary>
         public void Reload()
         {
-            if (_loaded != null)
-            {
-                Destroy(_loaded.texture);
-                Destroy(_loaded);
-                _loaded = null;
-            }
+            // Sprites come from Resources (shared, managed assets) — do NOT Destroy
+            // them here, only drop our cached references so LoadImage re-fetches.
+            var path = string.IsNullOrEmpty(overridePath)
+                ? ProjectPaths.ArkaPlanPath
+                : overridePath;
+            SharedSprites.Remove(path);
+            _loaded = null;
             LoadImage();
         }
 
@@ -107,60 +134,42 @@ namespace ValoCase.UI
         {
             if (_loaded != null) return;   // already done
 
+            // path is a Resources path (no extension, forward slashes).
             var path = string.IsNullOrEmpty(overridePath)
                 ? ProjectPaths.ArkaPlanPath
                 : overridePath;
 
-            if (!File.Exists(path))
+            if (SharedSprites.TryGetValue(path, out var shared) &&
+                shared != null && shared.texture != null)
             {
-                // Try both .jpg and .jpeg spellings as a fallback.
-                var alt = Path.ChangeExtension(path, ".jpeg");
-                if (File.Exists(alt)) path = alt;
-                else
-                {
-                    Debug.LogWarning($"[FullscreenBackground] Dosya bulunamadı: {path}");
-                    return;
-                }
-            }
-
-            byte[] bytes;
-            try   { bytes = File.ReadAllBytes(path); }
-            catch (Exception ex)
-            {
-                Debug.LogError($"[FullscreenBackground] Okunamadı ({path}): {ex.Message}");
+                _loaded = shared;
+                ApplySprite(shared);
                 return;
             }
 
-            // Use RGB24 for JPEGs — no alpha channel needed, saves memory.
-            var tex = new Texture2D(2, 2, TextureFormat.RGB24, mipChain: false);
-            tex.name       = "ArkaPlan";
-            tex.filterMode = FilterMode.Bilinear;
-            tex.wrapMode   = TextureWrapMode.Clamp;
-
-            if (!tex.LoadImage(bytes))
+            var sprite = Resources.Load<Sprite>(path);
+            if (sprite == null)
             {
-                Debug.LogWarning($"[FullscreenBackground] LoadImage başarısız: {path}");
-                Destroy(tex);
+                Debug.LogWarning($"[FullscreenBackground] Sprite bulunamadı (Resources): {path}");
                 return;
             }
 
-            _loaded = Sprite.Create(
-                tex,
-                new Rect(0, 0, tex.width, tex.height),
-                new Vector2(0.5f, 0.5f),
-                pixelsPerUnit: 100f);
-            _loaded.name = "ArkaPlan";
+            _loaded = sprite;
+            SharedSprites[path] = sprite;
+            ApplySprite(sprite);
 
-            if (backgroundImage != null)
-            {
-                backgroundImage.sprite = _loaded;
+            if (sprite.texture != null)
+                Debug.Log($"[FullscreenBackground] {sprite.texture.width}×{sprite.texture.height}px yüklendi ← {path}");
+        }
 
-                // Update the fitter to match the real image aspect ratio.
-                if (aspectFitter != null)
-                    aspectFitter.aspectRatio = (float)tex.width / tex.height;
-            }
+        void ApplySprite(Sprite sprite)
+        {
+            if (backgroundImage == null) return;
+            backgroundImage.sprite = sprite;
 
-            Debug.Log($"[FullscreenBackground] {tex.width}×{tex.height}px yüklendi ← {path}");
+            // Update the fitter to match the real image aspect ratio.
+            if (aspectFitter != null && sprite.texture != null)
+                aspectFitter.aspectRatio = (float)sprite.texture.width / sprite.texture.height;
         }
     }
 }

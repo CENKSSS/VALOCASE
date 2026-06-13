@@ -126,13 +126,16 @@ namespace ValoCase.Services
         readonly ContentDatabaseSO _database;
         readonly GameConfigSO _config;
         readonly IVpCurrencyService _vp;
+        readonly IStatisticsService _statistics;
 
-        public InventoryService(ISaveService save, ContentDatabaseSO database, GameConfigSO config, IVpCurrencyService vp)
+        public InventoryService(ISaveService save, ContentDatabaseSO database, GameConfigSO config,
+                                IVpCurrencyService vp, IStatisticsService statistics)
         {
             _save = save;
             _database = database;
             _config = config;
             _vp = vp;
+            _statistics = statistics;
         }
 
         public IReadOnlyList<OwnedSkinSaveEntry> Items => _save.Data.inventory;
@@ -185,7 +188,14 @@ namespace ValoCase.Services
                 if (grantDuplicateBonus)
                 {
                     var bonus = Mathf.RoundToInt(skin.VpValue * (_config.DuplicateBonusPercent / 100f));
-                    if (bonus > 0) _vp.Add(bonus);
+                    if (bonus > 0)
+                    {
+                        _vp.Add(bonus);
+                        // Phase-4: duplicate-bonus VP is now counted in totalVpEarned.
+                        // notify:false — the enclosing flow (open/upgrade) refreshes stats
+                        // once it persists; the VpChanged event already fired via _vp.Add.
+                        _statistics?.RecordVpEarned(bonus, notify: false);
+                    }
                 }
             }
 
@@ -316,10 +326,10 @@ namespace ValoCase.Services
             GameEvents.RaiseStatisticsChanged();
         }
 
-        public void RecordVpEarned(int amount)
+        public void RecordVpEarned(int amount, bool notify = true)
         {
             Data.totalVpEarned += amount;
-            GameEvents.RaiseStatisticsChanged();
+            if (notify) GameEvents.RaiseStatisticsChanged();
         }
 
         public void RecalculateInventoryStats(IInventoryService inventory, ContentDatabaseSO database, bool notify = true)
@@ -569,19 +579,25 @@ namespace ValoCase.Services
         readonly IStatisticsService _statistics;
         readonly ICaseProgressionService _progression;
         readonly IShopService _shop;
+        readonly ContentDatabaseSO _database;
+        readonly IResultProvider _provider;
 
         public CaseOpeningService(
             IVpCurrencyService vp,
             IInventoryService inventory,
             IStatisticsService statistics,
             ICaseProgressionService progression,
-            IShopService shop)
+            IShopService shop,
+            ContentDatabaseSO database,
+            IResultProvider provider)
         {
             _vp = vp;
             _inventory = inventory;
             _statistics = statistics;
             _progression = progression;
             _shop = shop;
+            _database = database;
+            _provider = provider;
         }
 
         public bool CanOpen(CaseDefinitionSO caseDef)
@@ -600,7 +616,16 @@ namespace ValoCase.Services
             vpSpent = _shop.GetDiscountedPrice(caseDef);
             if (!_vp.TrySpend(vpSpent)) return false;
 
-            rolled = RollSkin(caseDef);
+            // ── Phase-3 seam: result GENERATION goes through the provider ──────────
+            // The provider returns an ID-based CaseOpeningResult (the shape a backend
+            // would later return). We resolve it back to the SkinDefinitionSO the
+            // existing animation/reward flow consumes. Behaviour is identical to the
+            // previous inline RollSkin path (pooled skins always resolve via the DB).
+            var result = _provider.GenerateCaseOpening(caseDef, vpSpent);
+            rolled = string.IsNullOrEmpty(result?.RolledSkinId)
+                ? null
+                : _database?.GetSkin(result.RolledSkinId);
+
             if (rolled == null)
             {
                 _vp.Add(vpSpent);
@@ -628,35 +653,9 @@ namespace ValoCase.Services
             return true;
         }
 
-        public SkinDefinitionSO RollSkin(CaseDefinitionSO caseDef)
-        {
-            var table = caseDef?.DropTable;
-            if (table == null || table.PossibleDrops.Count == 0) return null;
-
-            var rarity = RollRarity(table);
-            var pool = table.PossibleDrops
-                .Where(d => d.skin != null && d.skin.Rarity == rarity)
-                .ToList();
-
-            if (pool.Count == 0)
-                pool = table.PossibleDrops.Where(d => d.skin != null).ToList();
-
-            if (pool.Count == 0) return null;
-
-            var skins = pool.Select(p => p.skin).ToList();
-            var weights = pool.Select(p => p.skinWeightOverride > 0 ? p.skinWeightOverride : 1f).ToList();
-            return WeightedRandomizer.Pick(skins, weights);
-        }
-
-        static SkinRarity RollRarity(CaseDropTableSO table)
-        {
-            var entries = table.RarityWeights;
-            if (entries == null || entries.Count == 0) return SkinRarity.Select;
-
-            var rarities = entries.Select(e => e.rarity).ToList();
-            var weights = entries.Select(e => e.weightPercent).ToList();
-            return WeightedRandomizer.Pick(rarities, weights);
-        }
+        // Delegates to the result provider (the canonical roll logic now lives there).
+        // Kept on the interface because the battle engine resolves rolls via this.
+        public SkinDefinitionSO RollSkin(CaseDefinitionSO caseDef) => _provider.RollSkin(caseDef);
     }
 
     /// <summary>
@@ -669,6 +668,7 @@ namespace ValoCase.Services
         readonly IInventoryService _inventory;
         readonly ContentDatabaseSO _database;
         readonly ISaveService      _save;
+        readonly IResultProvider   _provider;
 
         public event System.Action<SkinDefinitionSO, SkinDefinitionSO, bool> OnUpgradeResolved;
 
@@ -676,11 +676,13 @@ namespace ValoCase.Services
         public float MinChance => 0f;
         public float MaxChance => 1f;
 
-        public UpgradeService(IInventoryService inventory, ContentDatabaseSO database, ISaveService save)
+        public UpgradeService(IInventoryService inventory, ContentDatabaseSO database, ISaveService save,
+                              IResultProvider provider)
         {
             _inventory = inventory;
             _database  = database;
             _save      = save;
+            _provider  = provider;
         }
 
         /// <summary>
@@ -726,7 +728,9 @@ namespace ValoCase.Services
             if (!RaritySystem.IsEligibleTarget(input.Rarity, target.Rarity)) return false;
 
             var chance = ComputeChance(input, target);
-            success = UnityEngine.Random.value < chance;
+            // Phase-3 seam: success is generated by the provider (same RNG/odds).
+            // Commit timing below is UNCHANGED — consume/grant/save still happen here.
+            success = _provider.GenerateUpgrade(new[] { input }, target, chance).Success;
 
             // Input is ALWAYS consumed — success and failure alike.
             if (!_inventory.ConsumeOne(input.SkinId))
@@ -783,7 +787,9 @@ namespace ValoCase.Services
             if (target.VpValue < totalValue * 1.5f) return false;
 
             var chance = ComputeValueChance(totalValue, target.VpValue);
-            success = UnityEngine.Random.value < chance;
+            // Phase-3 seam: success is generated by the provider (same RNG/odds).
+            // Commit timing below is UNCHANGED — consume/grant/save still happen here.
+            success = _provider.GenerateUpgrade(inputs, target, chance).Success;
 
             // Inputs are ALWAYS consumed — success and failure alike.
             foreach (var s in inputs)
@@ -820,6 +826,7 @@ namespace ValoCase.Services
             public IFakeOnlineService FakeOnline;
             public ICaseOpeningService CaseOpening;
             public IUpgradeService Upgrade;
+            public IEconomyService Economy;
         }
 
         public static ServiceBundle Create(ContentDatabaseSO contentDatabase, GameConfigSO gameConfig)
@@ -828,15 +835,29 @@ namespace ValoCase.Services
             var save = new SaveService(repository, gameConfig);
             save.LoadOrCreate();
 
+            // Phase-1 stable-ID migration: rewrite legacy skin IDs in the loaded save
+            // to stable catalog IDs BEFORE any service reads it. No-op unless a skin
+            // catalog is loaded (legacy map present) and the save is below version 2.
+            if (contentDatabase != null && contentDatabase.MigrateSaveIfNeeded(save.Data))
+                save.Save();
+
+            // Phase-3 result-generation seam. Swap this single line for a remote
+            // provider to make Spring Boot authoritative — no call sites change.
+            var resultProvider = new LocalResultProvider();
+
             var vp = new VpCurrencyService(save);
-            var inventory = new InventoryService(save, contentDatabase, gameConfig, vp);
+            // Statistics is created before Inventory so the duplicate-bonus VP grant
+            // inside InventoryService.AddSkin can be counted in totalVpEarned (Phase 4).
             var statistics = new StatisticsService(save, contentDatabase);
+            var inventory = new InventoryService(save, contentDatabase, gameConfig, vp, statistics);
             var caseProgression = new CaseProgressionService(save, gameConfig);
             var shop = new ShopService(save, contentDatabase, gameConfig);
             var dailyRewards = new DailyRewardService(save, gameConfig, vp);
             var fakeOnline = new FakeOnlineCountService(gameConfig);
-            var caseOpening = new CaseOpeningService(vp, inventory, statistics, caseProgression, shop);
-            var upgrade = new UpgradeService(inventory, contentDatabase, save);
+            var caseOpening = new CaseOpeningService(vp, inventory, statistics, caseProgression, shop,
+                                                     contentDatabase, resultProvider);
+            var upgrade = new UpgradeService(inventory, contentDatabase, save, resultProvider);
+            var economy = new EconomyService(vp, inventory, statistics, save, contentDatabase);
 
             shop.EnsureRotation(notify: false);
             fakeOnline.Refresh();
@@ -853,7 +874,8 @@ namespace ValoCase.Services
                 DailyRewards = dailyRewards,
                 FakeOnline = fakeOnline,
                 CaseOpening = caseOpening,
-                Upgrade = upgrade
+                Upgrade = upgrade,
+                Economy = economy
             };
         }
     }

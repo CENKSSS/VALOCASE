@@ -218,8 +218,9 @@ namespace ValoCase.UI.Screens
             _fracCarry -= grant;
             if (grant > 0)
             {
-                GameContext.Instance?.Vp?.Add(grant);
-                GameContext.Instance?.Statistics?.RecordVpEarned(grant);
+                // Phase-4: single economy entry point. save:false preserves the existing
+                // no-save-per-tap behavior (VP persists on app pause/quit as before).
+                GameContext.Instance?.Economy?.GrantReward(grant, "earn_vp", save: false);
             }
 
             _combo++;

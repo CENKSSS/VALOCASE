@@ -1,68 +1,67 @@
-using System.IO;
-using UnityEngine;
-
 namespace ValoCase.Data
 {
     /// <summary>
-    /// Single source of truth for every on-disk folder the project reads at runtime.
+    /// Single source of truth for every art location the project loads at runtime.
     ///
-    /// Folder layout (all under Assets/_ValoCase/Art/):
-    ///   Skins/               ← weapon skin images  (FileSystemSkinLoader)
-    ///     Vandal/
+    /// MOBILE-SAFE: every value here is a Unity *Resources path* — relative to a
+    /// Resources folder, forward-slashed, and WITHOUT a file extension. These are
+    /// passed to Resources.Load&lt;Sprite&gt; / Resources.LoadAll&lt;Sprite&gt;, which
+    /// works identically in the Editor and in Android/iOS player builds.
+    ///
+    /// (The old System.IO + Application.dataPath scheme did NOT work on device,
+    /// because Application.dataPath points inside the compressed APK/app bundle.)
+    ///
+    /// Physical layout (all under Assets/_ValoCase/Resources/Art/):
+    ///   Skins/               ← weapon skin images   (FileSystemSkinLoader)
+    ///     &lt;Weapon&gt;/
     ///       Ozel/  Ustun/  Ihtisamli/  Ultra/  Seckin/
-    ///   UI/Semboller/        ← rarity symbol PNGs   (RaritySymbolLoader)
-    ///   Cases/               ← case icon images     (VandalCaseBuilder)
-    ///   UI/                  ← UI art (backgrounds, logos, etc.)
+    ///   UI/Semboller/        ← rarity symbol PNGs    (RaritySymbolLoader)
+    ///   Cases/               ← case icon images      (VandalCaseBuilder)
     ///   Avatars/             ← agent portrait images (ProfileAvatarLoader)
+    ///   Backgorunds/         ← screen / card backgrounds (FullscreenBackground)
+    ///   UI/                  ← misc UI art (ArkaPlan, etc.)
     ///
-    /// To relocate the whole art tree, change only ProjectRoot below.
+    /// To relocate the whole art tree, change only Root below (and move the files).
     /// </summary>
     public static class ProjectPaths
     {
         // ── Root ──────────────────────────────────────────────────────────────
 
-        /// <summary>Assets/_ValoCase/Art/ — all runtime-loaded art lives here.</summary>
-        public static readonly string ProjectRoot =
-            Path.Combine(Application.dataPath, "_ValoCase", "Art");
+        /// <summary>Resources/Art — all runtime-loaded art lives here.</summary>
+        public const string ProjectRoot = "Art";
 
-        // ── Sub-folders ───────────────────────────────────────────────────────
+        // ── Sub-folders (Resources roots) ──────────────────────────────────────
 
-        /// <summary>
-        /// Assets/_ValoCase/Art/Skins/ — weapon skin images.
-        /// Layout: WeaponName / RarityFolder / SkinName.png
-        /// </summary>
-        public static readonly string SkinsRoot =
-            Path.Combine(ProjectRoot, "Skins");
+        /// <summary>Art/Skins — weapon skin images. Layout: Weapon/RarityFolder/Skin.png</summary>
+        public const string SkinsRoot = ProjectRoot + "/Skins";
 
-        /// <summary>
-        /// Assets/_ValoCase/Art/UI/Semboller/ — rarity symbol PNGs.
-        /// </summary>
-        public static readonly string SymbolsRoot =
-            Path.Combine(ProjectRoot, "UI", "Semboller");
+        /// <summary>Art/UI/Semboller — rarity symbol sprites.</summary>
+        public const string SymbolsRoot = ProjectRoot + "/UI/Semboller";
 
-        /// <summary>
-        /// Assets/_ValoCase/Art/Cases/ — case icon images (VCase.png etc.).
-        /// </summary>
-        public static readonly string CaseIconsRoot =
-            Path.Combine(ProjectRoot, "Cases");
+        /// <summary>Art/Cases — case icon sprites.</summary>
+        public const string CaseIconsRoot = ProjectRoot + "/Cases";
 
-        /// <summary>
-        /// Assets/_ValoCase/Art/UI/ — UI art assets (backgrounds, logos, etc.).
-        /// </summary>
-        public static readonly string ArayuzRoot =
-            Path.Combine(ProjectRoot, "UI");
+        /// <summary>Art/UI — misc UI art.</summary>
+        public const string ArayuzRoot = ProjectRoot + "/UI";
 
-        /// <summary>
-        /// Assets/_ValoCase/Art/UI/ArkaPlan.jpg — main menu full-screen background.
-        /// </summary>
-        public static readonly string ArkaPlanPath =
-            Path.Combine(ArayuzRoot, "ArkaPlan.jpg");
+        /// <summary>Art/Backgorunds — screen / card background sprites.
+        /// (Folder name matches the existing on-disk spelling.)</summary>
+        public const string BackgroundsRoot = ProjectRoot + "/Backgorunds";
 
-        /// <summary>
-        /// Assets/_ValoCase/Art/Avatars/ — agent portrait images for player profiles.
-        /// Expected filenames: Chamber_icon.png, Jett_icon.png, etc.
-        /// </summary>
-        public static readonly string FaceCardsRoot =
-            Path.Combine(ProjectRoot, "Avatars");
+        /// <summary>Art/Avatars — agent portrait sprites for player profiles.</summary>
+        public const string FaceCardsRoot = ProjectRoot + "/Avatars";
+
+        // ── Individual sprites (Resources paths, no extension) ──────────────────
+
+        /// <summary>Art/UI/ArkaPlan — main menu full-screen background.</summary>
+        public const string ArkaPlanPath = ArayuzRoot + "/ArkaPlan";
+
+        /// <summary>Art/Backgorunds/background01 — shared background for the
+        /// Cases, Tools, Inventory, Upgrade and Market screens.</summary>
+        public const string SharedScreenBackgroundPath = BackgroundsRoot + "/background01";
+
+        /// <summary>Art/Backgorunds/background02 — background inside every case
+        /// card on the Cases screen.</summary>
+        public const string CaseCardBackgroundPath = BackgroundsRoot + "/background02";
     }
 }

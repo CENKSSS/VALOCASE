@@ -1,19 +1,25 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using UnityEngine;
 // Paths managed centrally in ProjectPaths.cs
 
 namespace ValoCase.Data
 {
-    // Scans the skin folder and produces SkinDefinitionSO instances at runtime.
-    // Folder layout expected (see ProjectPaths.SkinsRoot):
-    //   <root>/
+    // Loads weapon-skin sprites from Resources and produces SkinDefinitionSO
+    // instances at runtime. MOBILE-SAFE: uses Resources.LoadAll<Sprite> instead of
+    // System.IO, so it works in Android/iOS player builds (no Application.dataPath).
+    //
+    // Resources layout (under Assets/_ValoCase/Resources/, see ProjectPaths.SkinsRoot):
+    //   Art/Skins/
     //     <WeaponName>/
     //       <RarityFolder>/
-    //         <SkinName>.png
+    //         <SkinName>.png   → loaded as a Sprite (see ResourcesArtTextureImporter)
     //
-    // Rarity folder names (case-insensitive, Turkish or English accepted):
+    // Resources has NO runtime directory enumeration, so the weapon list and the
+    // five rarity folders are declared explicitly below. Adding a new weapon =
+    // add its folder under Art/Skins AND add its name to Weapons[].
+    //
+    // Rarity folder names map to SkinRarity (case-insensitive, Turkish or English):
     //   Ozel / Özel / Select   → SkinRarity.Select    rank 0
     //   Ustun / Üstün / Deluxe → SkinRarity.Deluxe    rank 1
     //   Ihtisamli / Premium    → SkinRarity.Premium   rank 2
@@ -21,10 +27,68 @@ namespace ValoCase.Data
     //   Seckin / Exclusive     → SkinRarity.Exclusive rank 4
     public static class FileSystemSkinLoader
     {
-        // Default path from central ProjectPaths — change the root there, not here.
+        // Default Resources root from central ProjectPaths — change it there, not here.
         public static readonly string DefaultRootPath = ProjectPaths.SkinsRoot;
 
+        // Weapon folders present under Art/Skins. Resources cannot enumerate folders
+        // at runtime, so this list is explicit.
+        static readonly string[] Weapons =
+        {
+            "Ares", "Bandit", "Bucky", "Bulldog", "Classic", "Frenzy", "Ghost",
+            "Guardian", "Judge", "Marshal", "Odin", "Operator", "Outlaw", "Phantom",
+            "Sheriff", "Shorty", "Spectre", "Stinger", "Vandal",
+        };
+
+        // The five rarity sub-folders scanned inside each weapon folder.
+        static readonly string[] RarityFolders =
+        {
+            "Ozel", "Ustun", "Ihtisamli", "Seckin", "Ultra",
+        };
+
+        // ── Scan metadata (read-only, for the editor catalog generator) ───────
+        // Exposes the otherwise-private scan tables so the bootstrap tool can walk
+        // the exact same folders the runtime loader does, without duplicating them.
+        public static IReadOnlyList<string> WeaponFolders   => Weapons;
+        public static IReadOnlyList<string> RarityFolderNames => RarityFolders;
+        public static SkinRarity? ParseRarityFolderName(string folderName) => ParseRarityFolder(folderName);
+
         // ── Public API ───────────────────────────────────────────────────────
+
+        // Builds runtime SkinDefinitionSO instances from an authored skin catalog.
+        // Identity (skinId) comes from the catalog, NOT from file/folder names — the
+        // resourceKey is used only to locate the sprite. All entries are loaded
+        // (including enabled=false) so saved inventories referencing them still resolve;
+        // filtering disabled skins out of pools/shop is a deliberate future concern.
+        public static List<SkinDefinitionSO> BuildFromCatalog(SkinCatalogRoot root)
+        {
+            var result = new List<SkinDefinitionSO>();
+            if (root?.skins == null) return result;
+
+            foreach (var e in root.skins)
+            {
+                if (e == null || string.IsNullOrEmpty(e.skinId)) continue;
+
+                if (!Enum.TryParse<SkinRarity>(e.rarity, true, out var rarity))
+                {
+                    Debug.LogWarning($"[FileSystemSkinLoader] Unknown rarity '{e.rarity}' for {e.skinId} " +
+                                     $"— defaulting to Select.");
+                    rarity = SkinRarity.Select;
+                }
+
+                var vp = e.vpValue > 0 ? e.vpValue : RaritySystem.GetVp(rarity);
+                var displayName = string.IsNullOrEmpty(e.displayName) ? e.skinId : e.displayName;
+
+                // Phase-6 mobile hardening: store the resourceKey and resolve the sprite
+                // LAZILY on first Icon access — startup no longer loads ~1000 textures.
+                var so = ScriptableObject.CreateInstance<SkinDefinitionSO>();
+                so.name = e.skinId;
+                so.InitializeRuntimeLazy(e.skinId, displayName, e.weapon, rarity, e.resourceKey, vp);
+                result.Add(so);
+            }
+
+            Debug.Log($"[FileSystemSkinLoader] Catalog: {result.Count} skin kaydedildi (lazy sprite).");
+            return result;
+        }
 
         public static List<SkinDefinitionSO> LoadAll(string rootPath = null)
         {
@@ -33,117 +97,80 @@ namespace ValoCase.Data
 
             var result = new List<SkinDefinitionSO>();
 
-            if (!Directory.Exists(rootPath))
+            foreach (var weaponName in Weapons)
             {
-                Debug.LogWarning($"[FileSystemSkinLoader] Klasör bulunamadı: {rootPath}");
-                return result;
-            }
+                var beforeCount = result.Count;
 
-            var weaponDirs = Directory.GetDirectories(rootPath);
-            Debug.Log($"[FileSystemSkinLoader] {weaponDirs.Length} silah klasörü taranıyor: {rootPath}");
-
-            foreach (var weaponDir in weaponDirs)
-            {
-                var weaponName   = Path.GetFileName(weaponDir);
-                var beforeCount  = result.Count;
-
-                // ── Rarity sub-folders ──────────────────────────────────────────
-                var rarityDirs = Directory.GetDirectories(weaponDir);
-                Debug.Log($"[FileSystemSkinLoader] {weaponName}: {rarityDirs.Length} rarity klasörü bulundu");
-
-                foreach (var rarityDir in rarityDirs)
+                foreach (var rarityFolder in RarityFolders)
                 {
-                    var rarityFolderName = Path.GetFileName(rarityDir);
-                    var rarity           = ParseRarityFolder(rarityFolderName);
-
-                    if (rarity == null)
-                    {
-                        Debug.LogWarning($"[FileSystemSkinLoader]   ? '{rarityFolderName}' tanınamadı — " +
-                                         $"Özel Seri (Select) olarak yüklenecek");
-                        rarity = SkinRarity.Select;
-                    }
-                    else
-                    {
-                        Debug.Log($"[FileSystemSkinLoader]   '{rarityFolderName}' → {rarity}");
-                    }
-
-                    LoadImagesFromDir(rarityDir, weaponName, rarity.Value, result);
+                    var rarity = ParseRarityFolder(rarityFolder) ?? SkinRarity.Select;
+                    LoadSpritesFromResourceFolder(
+                        $"{rootPath}/{weaponName}/{rarityFolder}", weaponName, rarity, result);
                 }
 
-                // ── Images placed directly in the weapon folder (no rarity sub-folder) ─
-                LoadImagesFromDir(weaponDir, weaponName, SkinRarity.Select, result,
-                                  onlyTopLevelFiles: true);
-
                 // ── Per-weapon rarity summary ───────────────────────────────────
-                var weaponSkins = result.FindAll(s => s != null &&
-                    string.Equals(s.WeaponName, weaponName, StringComparison.OrdinalIgnoreCase));
+                var loaded = result.Count - beforeCount;
+                if (loaded == 0) continue;
 
-                var cntOzel    = weaponSkins.FindAll(s => s.Rarity == SkinRarity.Select).Count;
-                var cntUstun   = weaponSkins.FindAll(s => s.Rarity == SkinRarity.Deluxe).Count;
-                var cntIhtis   = weaponSkins.FindAll(s => s.Rarity == SkinRarity.Premium).Count;
-                var cntSeckin  = weaponSkins.FindAll(s => s.Rarity == SkinRarity.Exclusive).Count;
-                var cntUltra   = weaponSkins.FindAll(s => s.Rarity == SkinRarity.Ultra).Count;
-                var totalLoaded = result.Count - beforeCount;
+                int cnt(SkinRarity r)
+                {
+                    var c = 0;
+                    for (var i = beforeCount; i < result.Count; i++)
+                        if (result[i].Rarity == r) c++;
+                    return c;
+                }
 
-                Debug.Log($"[WEAPON SUMMARY] {weaponName} => TOPLAM:{totalLoaded} | " +
-                          $"Özel:{cntOzel} Üstün:{cntUstun} İhtişamlı:{cntIhtis} " +
-                          $"Seçkin:{cntSeckin} Ultra:{cntUltra}");
+                Debug.Log($"[WEAPON SUMMARY] {weaponName} => TOPLAM:{loaded} | " +
+                          $"Özel:{cnt(SkinRarity.Select)} Üstün:{cnt(SkinRarity.Deluxe)} " +
+                          $"İhtişamlı:{cnt(SkinRarity.Premium)} " +
+                          $"Seçkin:{cnt(SkinRarity.Exclusive)} Ultra:{cnt(SkinRarity.Ultra)}");
             }
 
-            Debug.Log($"[FileSystemSkinLoader] TOPLAM: {result.Count} skin yüklendi.");
+            Debug.Log($"[FileSystemSkinLoader] TOPLAM: {result.Count} skin yüklendi (Resources).");
             return result;
         }
 
-        // ── Image directory loader ────────────────────────────────────────────
-        // Scans ONE directory (top-level only) for image files and registers them.
+        // ── Resource folder loader ────────────────────────────────────────────
+        // Loads every Sprite in one Resources sub-folder and registers it.
         //
-        // BUG FIX: skinId now includes rarity so that identically-named files
-        // in different rarity folders ("Ozel/Skin1.png" vs "Ustun/Skin1.png")
-        // produce DIFFERENT SkinDefinitionSO entries instead of being de-duped.
-        //
-        // onlyTopLevelFiles = true → skip files that are inside sub-folders
-        //   (used when scanning the weapon root dir to avoid re-picking rarity skins).
-        static void LoadImagesFromDir(string dir, string weaponName, SkinRarity rarity,
-                                      List<SkinDefinitionSO> output,
-                                      bool onlyTopLevelFiles = false)
+        // skinId includes rarity so identically-named files in different rarity
+        // folders ("Ozel/Skin1" vs "Ustun/Skin1") stay DISTINCT — this matches the
+        // original on-disk loader's IDs exactly, so saved inventories keep working.
+        static void LoadSpritesFromResourceFolder(
+            string resourceFolder, string weaponName, SkinRarity rarity,
+            List<SkinDefinitionSO> output)
         {
-            if (!Directory.Exists(dir)) return;
+            var sprites = Resources.LoadAll<Sprite>(resourceFolder);
+            if (sprites == null || sprites.Length == 0) return;
 
-            var imageExts = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-                { ".png", ".jpg", ".jpeg" };
-
-            // When scanning the weapon root we want ONLY files that live directly
-            // there (not inside rarity sub-folders, which GetFiles already excludes
-            // with TopDirectoryOnly — but sub-folder *entries* also appear in
-            // GetDirectories, not GetFiles, so TopDirectoryOnly is always correct).
-            foreach (var filePath in Directory.GetFiles(dir, "*.*", SearchOption.TopDirectoryOnly))
+            foreach (var sprite in sprites)
             {
-                var ext = Path.GetExtension(filePath);
-                if (!imageExts.Contains(ext)) continue;
-
-                // rawName: original filename (no ext), used for stable IDs and duplicate check.
-                // skinName: human-readable display name — underscores become spaces.
-                //   Prime_Vandal.png → display "Prime Vandal", id stays "Vandal_Select_Prime_Vandal"
-                var rawName  = Path.GetFileNameWithoutExtension(filePath);
-                if (string.IsNullOrWhiteSpace(rawName)) continue;
-                var skinName = rawName.Replace('_', ' ').Trim();
-
-                // ── KEY FIX: rarity is part of the ID ────────────────────────
-                // "Vandal_Select_Skin1" and "Vandal_Deluxe_Skin1" are DIFFERENT
-                // skins — no false de-duplication even when filenames match.
-                var skinId = $"{weaponName}_{rarity}_{rawName}";
-
-                var sprite = LoadSprite(filePath, skinId);
                 if (sprite == null) continue;
+
+                // sprite.name == the source filename without extension == rawName.
+                var rawName = sprite.name;
+                if (string.IsNullOrWhiteSpace(rawName)) continue;
+
+                var skinName = rawName.Replace('_', ' ').Trim();
+                var skinId   = $"{weaponName}_{rarity}_{rawName}";
 
                 var vp = GetVpForRarity(rarity);
                 var so = ScriptableObject.CreateInstance<SkinDefinitionSO>();
                 so.name = skinId;
                 so.InitializeRuntime(skinId, skinName, weaponName, rarity, sprite, vp);
                 output.Add(so);
-
-                Debug.Log($"[SKIN LOADED] {weaponName} | {rarity} | {skinName}  (id={skinId})");
             }
+        }
+
+        // ── Single-sprite loader (Resources path, no extension) ─────────────────
+        // Kept for callers that need one sprite by its Resources path.
+        public static Sprite LoadSpriteFromResources(string resourcePath)
+        {
+            if (string.IsNullOrEmpty(resourcePath)) return null;
+            var sprite = Resources.Load<Sprite>(resourcePath);
+            if (sprite == null)
+                Debug.LogWarning($"[FileSystemSkinLoader] Sprite bulunamadı (Resources): {resourcePath}");
+            return sprite;
         }
 
         // ── Rarity → VP value ────────────────────────────────────────────────
@@ -164,85 +191,13 @@ namespace ValoCase.Data
                               .Replace("ö", "o")
                               .Replace("ç", "c");
 
-            // Select  (Özel / Ozel / ozel seri / ozel_seri)
-            if (n.Contains("ozel") || n == "select") return SkinRarity.Select;
-
-            // Deluxe  (Üstün / Ustun / üstün seri)
-            if (n.Contains("ustun") || n == "deluxe") return SkinRarity.Deluxe;
-
-            // Premium (İhtişamlı / Ihtisamli / premium)
-            if (n.Contains("ihtis") || n == "premium") return SkinRarity.Premium;
-
-            // Exclusive (Seçkin / Seckin / exclusive)
-            if (n.Contains("seckin") || n == "exclusive") return SkinRarity.Exclusive;
-
-            // Ultra
-            if (n.Contains("ultra")) return SkinRarity.Ultra;
+            if (n.Contains("ozel")  || n == "select")    return SkinRarity.Select;
+            if (n.Contains("ustun") || n == "deluxe")    return SkinRarity.Deluxe;
+            if (n.Contains("ihtis") || n == "premium")   return SkinRarity.Premium;
+            if (n.Contains("seckin")|| n == "exclusive") return SkinRarity.Exclusive;
+            if (n.Contains("ultra"))                      return SkinRarity.Ultra;
 
             return null;
-        }
-
-        // ── PNG → Sprite ─────────────────────────────────────────────────────
-
-        // Loads a single image file → Sprite. Tries the given path first,
-        // then common extensions (.png, .jpg, .jpeg) when none is provided.
-        // Returns null if the file can't be found or decoded.
-        public static Sprite LoadSpriteFromFile(string fullPath, string spriteName = null)
-        {
-            if (string.IsNullOrEmpty(fullPath)) return null;
-
-            // Resolve missing extension by probing common image formats.
-            if (!File.Exists(fullPath))
-            {
-                string[] candidates = { fullPath + ".png", fullPath + ".jpg", fullPath + ".jpeg",
-                                        fullPath + ".PNG", fullPath + ".JPG" };
-                foreach (var c in candidates)
-                {
-                    if (File.Exists(c)) { fullPath = c; break; }
-                }
-            }
-
-            if (!File.Exists(fullPath))
-            {
-                Debug.LogWarning($"[FileSystemSkinLoader] Dosya bulunamadı: {fullPath}");
-                return null;
-            }
-
-            return LoadSprite(fullPath, spriteName ?? Path.GetFileNameWithoutExtension(fullPath));
-        }
-
-        static Sprite LoadSprite(string fullPath, string spriteName)
-        {
-            try
-            {
-                var bytes = File.ReadAllBytes(fullPath);
-                var tex   = new Texture2D(2, 2, TextureFormat.RGBA32, mipChain: false);
-                tex.name  = spriteName;
-
-                if (!tex.LoadImage(bytes))
-                {
-                    Debug.LogWarning($"[FileSystemSkinLoader] PNG yüklenemedi: {fullPath}");
-                    UnityEngine.Object.Destroy(tex);
-                    return null;
-                }
-
-                tex.filterMode = FilterMode.Bilinear;
-                tex.wrapMode   = TextureWrapMode.Clamp;
-
-                var sprite = Sprite.Create(
-                    tex,
-                    new Rect(0, 0, tex.width, tex.height),
-                    new Vector2(0.5f, 0.5f),
-                    pixelsPerUnit: 100f);
-
-                sprite.name = spriteName;
-                return sprite;
-            }
-            catch (Exception ex)
-            {
-                Debug.LogError($"[FileSystemSkinLoader] Hata ({fullPath}): {ex.Message}");
-                return null;
-            }
         }
     }
 }

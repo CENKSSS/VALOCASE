@@ -47,7 +47,10 @@
       "PowerShell(Select-String -Path \"Assets\\\\_ValoCase\\\\Prefabs\\\\PF_WeaponSkinCard.prefab\" -Pattern \"m_Name:\" | ForEach-Object { $_.Line })",
       "PowerShell($lines = Get-Content \"Assets\\\\_ValoCase\\\\Prefabs\\\\PF_UICanvas.prefab\"; foreach \\($start in @\\(14180, 17523, 18396\\)\\) { $chunk = $lines[$start..\\($start+45\\)]; $go = \\($chunk | Select-String 'm_GameObject'\\).Line; $constraint = \\($chunk | Select-String 'm_Constraint|m_CellSize|m_StartAxis'\\).Line; Write-Output \"=== block @$start ===\"; Write-Output $go; Write-Output $constraint })",
       "PowerShell(Select-String -Path \"Assets\\\\_ValoCase\\\\Prefabs\\\\PF_UICanvas.prefab\" -Pattern \"EarnVp|EarnVpScreen\" | Select-Object -First 20 | ForEach-Object { \"$\\($_.LineNumber\\): $\\($_.Line.Trim\\(\\)\\)\" })",
-      "mcp__UnityMCP__validate_script"
+      "mcp__UnityMCP__validate_script",
+      "PowerShell($f = Get-ChildItem -Recurse \"C:\\\\Users\\\\cenk_\\\\Desktop\\\\ValorantProject\" -File; $f | Group-Object { Split-Path \\(Split-Path $_.FullName -Parent\\) -Leaf } | ForEach-Object { \"$\\($_.Name\\): $\\($_.Count\\) files\" }; \"Total: $\\($f.Count\\)\")",
+      "mcp__UnityMCP__manage_editor",
+      "Bash(xargs grep -l \"Rarity\\\\|Symbol\\\\|Visual\")"
     ]
   }
 }

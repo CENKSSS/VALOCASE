@@ -87,7 +87,6 @@ namespace ValoCase.UI.Screens
         static readonly Color SlotBorder  = new Color(0.235f, 0.267f, 0.325f, 1f);
 
         // Dark-navy theme shared with Inventory / Battle / Main Menu.
-        static readonly Color ScreenBg    = new Color(0.043f, 0.063f, 0.125f, 1f); // #0B1020
         static readonly Color PanelBg     = new Color(0.055f, 0.078f, 0.157f, 1f); // #0E1428
         static readonly Color CenterBg    = new Color(0.067f, 0.094f, 0.153f, 1f); // #111827
         static readonly Color PanelBorder = new Color(0.165f, 0.204f, 0.278f, 1f); // #2A3447
@@ -375,8 +374,9 @@ namespace ValoCase.UI.Screens
             if (_themed) return;
             _themed = true;
 
-            var rootImg = GetComponent<Image>();
-            if (rootImg != null) rootImg.color = ScreenBg;
+            // Shared section background (cover image, aspect preserved) instead of
+            // the old flat ScreenBg recolor.
+            FullscreenBackground.AttachShared(gameObject);
 
             StylePanel(inputIcon  != null ? inputIcon.transform.parent  : null, PanelBg);
             StylePanel(targetIcon != null ? targetIcon.transform.parent : null, PanelBg);

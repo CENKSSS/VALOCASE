@@ -435,13 +435,15 @@ namespace ValoCase.UI.Screens
         void OnClaimClicked(int index)
         {
             var ctx = GameContext.Instance;
-            if (ctx?.Vp == null)
+            if (ctx?.Economy == null)
             {
-                Debug.LogError("[MissionsScreen] GameContext or VP service unavailable.");
+                Debug.LogError("[MissionsScreen] GameContext or Economy service unavailable.");
                 return;
             }
             if (!_system.TryClaim(index, out int reward)) return;
-            ctx.Vp.Add(reward);
+            // Phase-4: route through the economy facade so the reward is counted in
+            // totalVpEarned and persisted consistently with every other VP grant.
+            ctx.Economy.GrantReward(reward, "mission");
             GameEvents.RaiseToast($"+{reward} VP reward claimed!");
         }
 
