@@ -28,13 +28,16 @@ namespace ValoCase.UI.Screens
         // ── Palette ───────────────────────────────────────────────────────────
         static readonly Color GreenBadge = new Color(0.09f,  0.55f,  0.26f,  1f);
         static readonly Color TextBright = new Color(0.925f, 0.910f, 0.882f, 1f);
-        static readonly Color TextDim    = new Color(1f,     1f,     1f,     0.38f);
 
         // ── Grid constants ────────────────────────────────────────────────────
-        const int   DefaultColumns = 2;
-        const float MinCellWidth   = 80f;   // fallback to 2 columns if narrower
-        const float CellAspect     = 1.2f;  // height = width × CellAspect (2-column portrait)
-        const float HPad           = 8f;    // grid left & right padding
+        const int   DefaultColumns = 2;     // phones (portrait)
+        const int   WideColumns    = 3;     // tablets / iPad portrait
+        const int   MaxColumns     = 4;     // iPad landscape / very wide screens
+        const float WideMinViewportWidth     = 1080f; // ≥ this (canvas units) → 3 columns
+        const float VeryWideMinViewportWidth = 1500f; // ≥ this (canvas units) → 4 columns
+        const float CellAspect     = 1.3f;  // cellHeight = cellWidth × CellAspect (1.25–1.35 range)
+        const float HPad           = 8f;    // grid left & right padding (tablet / iPad)
+        const float PhoneHPad      = 20f;   // larger safe side padding on phones (2-col)
         const float Gap            = 8f;    // spacing between cells
 
         // ── Lifecycle ─────────────────────────────────────────────────────────
@@ -165,7 +168,7 @@ namespace ValoCase.UI.Screens
                 t.gameObject.SetActive(false);
         }
 
-        // ── 2-column grid ─────────────────────────────────────────────────────
+        // ── Responsive case grid (2 / 3 / 4 columns) ──────────────────────────
 
         void BuildGrid(GameContext ctx)
         {
@@ -182,9 +185,10 @@ namespace ValoCase.UI.Screens
             Debug.Log("[SHOP_GRID] vandal featured cases=" + sortedCases.Count +
                       " columns=" + DefaultColumns);
 
-            // Column count is fixed for portrait; the cell dimensions are applied
-            // later by SizeGridToViewport() once the Viewport rect is valid (see
-            // coroutine), so we never rely on the unreliable Awake-time selfRt.rect.
+            // Column count and cell dimensions are both decided later by
+            // SizeGridToViewport() from the live Viewport rect (see coroutine), so we
+            // never rely on the unreliable Awake-time selfRt.rect. Start at the phone
+            // default; the coroutine widens to 3 / 4 columns on tablets.
             int cols = DefaultColumns;
 
             // ── ScrollRect ────────────────────────────────────────────────────
@@ -231,7 +235,7 @@ namespace ValoCase.UI.Screens
             grid.spacing         = new Vector2(Gap, Gap);
             grid.startCorner     = GridLayoutGroup.Corner.UpperLeft;
             grid.startAxis       = GridLayoutGroup.Axis.Horizontal;
-            grid.childAlignment  = TextAnchor.UpperCenter;
+            grid.childAlignment  = TextAnchor.UpperLeft;  // cards start top-left; partial last row fills from left
             grid.constraint      = GridLayoutGroup.Constraint.FixedColumnCount;
             grid.constraintCount = cols;
 
@@ -258,18 +262,18 @@ namespace ValoCase.UI.Screens
                 BuildCard(ctGo.transform, caseDef);
             }
 
-            // Size the grid from the REAL Viewport rect after layout settles next
-            // frame — avoids the unreliable Awake-time rect read and the 1600f
-            // fallback, and guarantees the grid fills the bar-to-nav viewport.
-            StartCoroutine(SizeGridToViewport(grid, vpRt, ctRt, sortedCases.Count, cols));
+            // Decide columns and cell size from the REAL Viewport rect after layout
+            // settles next frame — avoids the unreliable Awake-time rect read.
+            StartCoroutine(SizeGridToViewport(grid, vpRt, ctRt));
         }
 
-        // Computes cellSize from the actual Viewport rect one frame after the grid is
-        // built, when the Canvas layout is valid. The viewport height is the true space
-        // between the TopProfileBar and the BottomNavBar, so rows are scaled to fill it
-        // instead of clustering at the top.
+        // Picks the column count and cell size from the actual Viewport rect one frame
+        // after the grid is built, when the Canvas layout is valid. Card height is kept
+        // proportional to card WIDTH (not the viewport), so cards never stretch to fill
+        // the screen; ContentSizeFitter then derives the Content height from the row
+        // count and the ScrollRect scrolls when needed.
         IEnumerator SizeGridToViewport(GridLayoutGroup grid, RectTransform vpRt,
-                                       RectTransform ctRt, int cardCount, int cols)
+                                       RectTransform ctRt)
         {
             // Let the freshly-built hierarchy run at least one layout pass, then wait
             // until the Viewport actually has a size (guards a late layout frame).
@@ -281,18 +285,44 @@ namespace ValoCase.UI.Screens
             float vpW = vpRt.rect.width;
             float vpH = vpRt.rect.height;
 
-            // 2-column width straight from the viewport — no selfRt / fallback math.
-            float cellW = (vpW - HPad * 2f - Gap * (cols - 1)) / cols;
+            // Responsive column count from the actual device/game-view aspect ratio.
+            // The ScrollRect viewport can be shorter than the full screen, so vpW / vpH
+            // may falsely classify a tall iPhone as a tablet. Screen aspect is safer:
+            // iPhone portrait ≈ 0.46 → 2 columns, iPad portrait ≈ 0.70 → 3 columns,
+            // iPad landscape >= 1.0 → 4 columns when there is enough viewport width.
+            float screenAspect = Screen.height > 0 ? (float)Screen.width / Screen.height : 0f;
+            int cols;
+            if (screenAspect < 0.60f)                                                   cols = DefaultColumns; // phone portrait → 2
+            else if (screenAspect >= 1.0f && vpW >= VeryWideMinViewportWidth)           cols = MaxColumns;     // landscape wide → 4
+            else if (screenAspect >= 0.60f && vpW >= WideMinViewportWidth)              cols = WideColumns;    // tablet portrait → 3
+            else                                                                        cols = DefaultColumns; // fallback → 2
+            grid.constraintCount = cols;
 
-            // Scale cell height so the rows fill the viewport vertically. Clamped to a
-            // sane aspect range so a single short row can't produce a giant card.
-            int   rows   = Mathf.Max(1, Mathf.CeilToInt(cardCount / (float)cols));
-            float availH = vpH - 20f - Gap * Mathf.Max(0, rows - 1); // 20 = grid top+bottom padding
-            float cellH  = Mathf.Clamp(availH / rows, cellW * 0.9f, cellW * 1.8f);
+            // Card width from the viewport width, side padding and gaps. Phones use a
+            // larger safe side padding; tablets/iPad keep the tight padding.
+            float sidePad   = cols == DefaultColumns ? PhoneHPad : HPad;
+            float available = Mathf.Max(40f, vpW - sidePad * 2f - Gap * (cols - 1));
+            float cellW     = available / cols;
+
+            // Safety cap (phone): one column never exceeds ~46% of the viewport, so two
+            // columns always fit with slack even if the measured width is slightly large.
+            if (cols == DefaultColumns)
+                cellW = Mathf.Min(cellW, vpW * 0.46f);
+            cellW = Mathf.Max(1f, cellW);
+
+            // Re-center: spread any leftover width as equal left/right padding, so the row
+            // is guaranteed to sit inside the viewport (right column can never overflow).
+            int pad = Mathf.RoundToInt(Mathf.Max(HPad, (vpW - cols * cellW - Gap * (cols - 1)) * 0.5f));
+            grid.padding = new RectOffset(pad, pad, 10, 10);
+
+            // Card height is proportional to its OWN width — natural portrait shape,
+            // no artificial stretching to fill the viewport.
+            float cellH = cellW * CellAspect;
 
             grid.cellSize = new Vector2(cellW, cellH);
             Debug.Log("[SHOP_GRID] sized grid vpW=" + vpW + " vpH=" + vpH +
-                      " cols=" + cols + " rows=" + rows + " cellW=" + cellW + " cellH=" + cellH);
+                      " screenAspect=" + screenAspect +
+                      " cols=" + cols + " cellW=" + cellW + " cellH=" + cellH);
 
             // Apply the new Content height immediately so ScrollRect bounds are correct.
             if (ctRt != null)
@@ -425,7 +455,9 @@ namespace ValoCase.UI.Screens
                     rt.offsetMax = new Vector2(-4f, 0f);
                     var tmp = g.AddComponent<TextMeshProUGUI>();
                     tmp.text               = caseName;
-                    tmp.fontSize           = 9.5f;
+                    tmp.enableAutoSizing   = true;   // scales with card → readable on phone & tablet
+                    tmp.fontSizeMin        = 12f;
+                    tmp.fontSizeMax        = 38f;
                     tmp.fontStyle          = FontStyles.Bold;
                     tmp.alignment          = TextAlignmentOptions.Center;
                     tmp.color              = TextBright;
@@ -442,8 +474,8 @@ namespace ValoCase.UI.Screens
                 {
                     var g  = Child(card.transform, "PriceBadge");
                     var rt = g.GetComponent<RectTransform>();
-                    rt.anchorMin = new Vector2(0.08f, 0.13f);
-                    rt.anchorMax = new Vector2(0.92f, 0.28f);
+                    rt.anchorMin = new Vector2(0.11f, 0.14f);  // ≈78 % width, ≈12 % height — not full card
+                    rt.anchorMax = new Vector2(0.89f, 0.26f);
                     rt.offsetMin = new Vector2(0f,  2f);
                     rt.offsetMax = new Vector2(0f, -2f);
                     g.AddComponent<Image>().color = GreenBadge;   // badge background
@@ -452,7 +484,9 @@ namespace ValoCase.UI.Screens
                     StretchFill(lblGo.GetComponent<RectTransform>());
                     var tmp = lblGo.AddComponent<TextMeshProUGUI>();
                     tmp.text               = caseDef.VpPrice.ToString("N0") + " VP";
-                    tmp.fontSize           = 9.5f;
+                    tmp.enableAutoSizing   = true;   // fits the price bar at any card size
+                    tmp.fontSizeMin        = 12f;
+                    tmp.fontSizeMax        = 34f;
                     tmp.fontStyle          = FontStyles.Bold;
                     tmp.alignment          = TextAlignmentOptions.Center;
                     tmp.color              = Color.white;
@@ -460,23 +494,8 @@ namespace ValoCase.UI.Screens
                     Debug.Log("[SHOP_CARD_DEBUG] price text created");
                 }
 
-                // ── Drop rates (bottom 13 %) ──────────────────────────────────
-                {
-                    var g  = Child(card.transform, "Rates");
-                    var rt = g.GetComponent<RectTransform>();
-                    rt.anchorMin = new Vector2(0f, 0f);
-                    rt.anchorMax = new Vector2(1f, 0.13f);
-                    rt.offsetMin = new Vector2(3f,  1f);
-                    rt.offsetMax = new Vector2(-3f, -1f);
-                    var tmp = g.AddComponent<TextMeshProUGUI>();
-                    tmp.text               = BuildRateString(caseDef); // always returns a string
-                    tmp.fontSize           = 6.5f;
-                    tmp.alignment          = TextAlignmentOptions.Center;
-                    tmp.color              = TextDim;
-                    tmp.enableWordWrapping = true;
-                    tmp.overflowMode       = TextOverflowModes.Ellipsis;
-                    Debug.Log("[SHOP_CARD_DEBUG] drop text created");
-                }
+                // Drop-rate text intentionally omitted from the shop card for a cleaner
+                // layout. BuildRateString is kept (not deleted) for potential reuse.
 
                 _cards.Add(card);
             }
