@@ -185,7 +185,11 @@ namespace ValoCase.UI
             rRt.offsetMax = new Vector2(-(JoinW + Pad + 8f), 41f);
 
             string roundTxt = data.Rounds + (data.Rounds == 1 ? " ROUND" : " ROUNDS");
-            int prize = data.WagerVP * Mathf.Max(1, data.MaxPlayers);
+            // Show the real entry cost (= case price × rounds), which is exactly what
+            // WaitingRoomScreen charges on join (EntryCost => WagerVP). Previously this
+            // displayed the prize pot (WagerVP × players), e.g. 1000 for a 1-round
+            // 500 VP 1V1, which did not match the amount actually charged.
+            int entryCost = data.WagerVP;
 
             AddMeta(row.transform, RefPrimary,
                 $"{data.CurrentPlayers}/{data.MaxPlayers}", RefForeground, 40f);
@@ -194,7 +198,7 @@ namespace ValoCase.UI
                 roundTxt, RefMuted, 72f);
 
             AddMeta(row.transform, RefGold,
-                prize.ToString("N0") + " VP", RefGold, 84f);
+                entryCost.ToString("N0") + " VP", RefGold, 84f);
         }
 
         static void AddMeta(Transform parent, Color dotColor, string text, Color textColor, float labelW)

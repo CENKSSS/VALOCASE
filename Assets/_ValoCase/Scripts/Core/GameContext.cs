@@ -1,7 +1,10 @@
+using System.Collections;
 using UnityEngine;
 using ValoCase.Data;
 using ValoCase.Profile;
+using ValoCase.Save;
 using ValoCase.Services;
+using ValoCase.Services.Backend;
 
 namespace ValoCase.Core
 {
@@ -28,6 +31,11 @@ namespace ValoCase.Core
         public IFakeOnlineService FakeOnline { get; private set; }
         public IUpgradeService Upgrade { get; private set; }
         public IEconomyService Economy { get; private set; }
+
+        // Backend (Spring Boot). Non-null only when GameConfig.UseBackend is true.
+        // Exposed so a future Step-2 remote case-opening path can reuse the client.
+        public BackendApiClient Backend { get; private set; }
+        public bool BackendEnabled => gameConfig != null && gameConfig.UseBackend && Backend != null;
 
         void Awake()
         {
@@ -104,6 +112,147 @@ namespace ValoCase.Core
 
             // Boot profile system — loads FaceCards + restores PlayerPrefs once
             ProfileManager.EnsureInitialized();
+
+            // Backend mode (opt-in via GameConfig.useBackend). Local mode skips this
+            // entirely and behaves exactly as before.
+            TryStartBackendSync();
+        }
+
+        // ── Backend boot sync ───────────────────────────────────────────────────
+        // No-op in local mode. In backend mode: ensure a guest token, then pull the
+        // authoritative wallet + inventory into the local save (used as a cache).
+        // Any failure leaves the cached local state intact — never faked as success.
+        void TryStartBackendSync()
+        {
+            if (gameConfig == null || !gameConfig.UseBackend) return;
+            if (Save?.Data == null) return;
+
+            Backend = new BackendApiClient(
+                gameConfig.BackendBaseUrl,
+                gameConfig.RequestTimeoutSeconds,
+                Save.Data.guestToken);
+
+            StartCoroutine(BackendBootSync());
+        }
+
+        IEnumerator BackendBootSync()
+        {
+            Debug.Log("[Backend] Boot sync started — baseUrl=" + gameConfig.BackendBaseUrl);
+
+            // 1) Ensure a guest token.
+            if (string.IsNullOrEmpty(Save.Data.guestToken))
+            {
+                var registered = false;
+                yield return Backend.RegisterGuest(
+                    res =>
+                    {
+                        registered = true;
+                        Save.Data.guestToken = res.guestToken;
+                        Save.Data.guestAccountId = res.guestAccountId;
+                        Backend.GuestToken = res.guestToken;
+                        Save.Save();
+                        Debug.Log("[Backend] Guest registered — accountId=" + res.guestAccountId);
+                    },
+                    err => Debug.LogWarning("[Backend] Guest registration failed — staying on local cache. " + err));
+
+                if (!registered)
+                {
+                    Debug.LogWarning("[Backend] No guest token — aborting boot sync (offline/local cache in use).");
+                    yield break;
+                }
+            }
+            else
+            {
+                Backend.GuestToken = Save.Data.guestToken;
+            }
+
+            // 2) Wallet — backend is authoritative; overwrite the local cached balance.
+            yield return Backend.GetWallet(
+                res =>
+                {
+                    Vp?.SetBalance(res.vpBalance);
+                    Save.Save();
+                    Debug.Log("[Backend] Wallet synced — vp=" + res.vpBalance);
+                },
+                err => Debug.LogWarning("[Backend] Wallet sync failed — keeping cached balance. " + err));
+
+            // 3) Inventory — replace the local cached inventory wholesale (idempotent;
+            //    no duplication on repeat sync).
+            yield return Backend.GetInventory(
+                ApplyInventoryFromBackend,
+                err => Debug.LogWarning("[Backend] Inventory sync failed — keeping cached inventory. " + err));
+
+            Debug.Log("[Backend] Boot sync complete.");
+        }
+
+        // ── Backend live helpers (used by the case-opening backend path) ────────
+
+        // Apply the server's authoritative wallet balance to the local VP cache.
+        // Never spends locally — this is a direct overwrite of the cached balance.
+        public void ApplyBackendWallet(int vpBalance)
+        {
+            Vp?.SetBalance(vpBalance);
+            Save?.Save();
+        }
+
+        // Best-effort wallet + inventory re-sync. Used after an ambiguous open
+        // (transport timeout that may have committed) or an unresolved skin, so the
+        // local cache reconciles to the authoritative server state.
+        public void RequestBackendResync()
+        {
+            if (!BackendEnabled) return;
+            StartCoroutine(ResyncWalletAndInventory());
+        }
+
+        IEnumerator ResyncWalletAndInventory()
+        {
+            yield return Backend.GetWallet(
+                res => { Vp?.SetBalance(res.vpBalance); Save.Save(); Debug.Log("[Backend] Wallet re-synced — vp=" + res.vpBalance); },
+                err => Debug.LogWarning("[Backend] Wallet re-sync failed — keeping cached balance. " + err));
+
+            yield return Backend.GetInventory(
+                ApplyInventoryFromBackend,
+                err => Debug.LogWarning("[Backend] Inventory re-sync failed — keeping cached inventory. " + err));
+        }
+
+        // Server-authoritative inventory replace. The backend is the source of truth,
+        // so the local list is rebuilt from the response rather than merged — this is
+        // what makes repeated syncs idempotent (no double-grant). Unknown skin IDs are
+        // kept (so nothing is silently dropped) and logged; downstream value/display
+        // code already null-checks via ContentDatabaseSO.GetSkin.
+        void ApplyInventoryFromBackend(InventoryResponse res)
+        {
+            if (res?.items == null)
+            {
+                Debug.LogWarning("[Backend] Inventory response had no items array — leaving cache untouched.");
+                return;
+            }
+
+            var now = TimeUtil.NowUnix();
+            var list = Save.Data.inventory;
+            list.Clear();
+
+            int unknown = 0;
+            foreach (var item in res.items)
+            {
+                if (item == null || string.IsNullOrEmpty(item.skinId) || item.quantity <= 0) continue;
+                if (contentDatabase != null && contentDatabase.GetSkin(item.skinId) == null)
+                {
+                    unknown++;
+                    Debug.LogWarning("[Backend] Inventory skinId not in local catalog (kept): " + item.skinId);
+                }
+                list.Add(new OwnedSkinSaveEntry
+                {
+                    skinId = item.skinId,
+                    quantity = item.quantity,
+                    obtainedUnix = now
+                });
+            }
+
+            Statistics?.RecalculateInventoryStats(Inventory, contentDatabase, notify: false);
+            Save.Save();
+            GameEvents.RaiseInventoryChanged();
+            Debug.Log($"[Backend] Inventory synced — {list.Count} entries ({unknown} unknown to local catalog).");
         }
 
         public void Persist() => Save?.Save();

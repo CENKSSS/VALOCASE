@@ -1,7 +1,10 @@
+using System;
+using System.Collections;
 using UnityEngine;
 using ValoCase.Core;
 using ValoCase.Data;
 using ValoCase.Services;
+using ValoCase.Services.Backend;
 
 namespace ValoCase.CaseOpening
 {
@@ -13,6 +16,7 @@ namespace ValoCase.CaseOpening
         SkinDefinitionSO _rolledSkin;
         int _vpSpent;
         bool _sessionActive;
+        bool _backendMode;   // true while a backend-authoritative open is in progress
 
         public bool SessionActive => _sessionActive;
 
@@ -34,8 +38,130 @@ namespace ValoCase.CaseOpening
 
             _activeCase = caseDef;
             _sessionActive = true;
+            _backendMode = false;
             Debug.Log($"[FLOW] StartOpening — case='{caseDef.CaseId}' rolledSkin='{_rolledSkin?.SkinName}'");
             spinController.BeginSpin(caseDef, _rolledSkin, OnSpinFinished);
+        }
+
+        // ── Backend-authoritative open ──────────────────────────────────────────
+        // Used only when GameContext.BackendEnabled is true. Waits for the server to
+        // decide + commit (spend VP, grant skin) BEFORE any spin starts. The session
+        // is marked active immediately so the back button stays blocked during the
+        // in-flight request. onSpinStarting fires once the server result is in and the
+        // spin is about to begin (the screen uses it to reveal the spin overlay +
+        // start its watchdog). onFailed fires when no spin should start at all.
+        public void StartOpeningBackend(CaseDefinitionSO caseDef, Action onSpinStarting, Action<string> onFailed)
+        {
+            if (_sessionActive || caseDef == null) return;
+            var ctx = GameContext.Instance;
+            if (ctx == null || !ctx.BackendEnabled || ctx.Backend == null)
+            {
+                onFailed?.Invoke("Sunucu kullanılamıyor.");
+                return;
+            }
+
+            _activeCase = caseDef;
+            _sessionActive = true;
+            _backendMode = true;
+            StartCoroutine(BackendOpenRoutine(caseDef, onSpinStarting, onFailed));
+        }
+
+        IEnumerator BackendOpenRoutine(CaseDefinitionSO caseDef, Action onSpinStarting, Action<string> onFailed)
+        {
+            var ctx = GameContext.Instance;
+
+            OpenCaseResultResponse response = null;
+            BackendError error = null;
+
+            yield return ctx.Backend.OpenCase(caseDef.CaseId,
+                r => response = r,
+                e => error = e);
+
+            // ── Request failed BEFORE any local commit — no spin, no spend, no grant.
+            if (error != null || response == null)
+            {
+                Debug.LogWarning("[FLOW] Backend open failed — " + (error?.ToString() ?? "null response"));
+                // Ambiguous transport failure (status 0) may have committed server-side:
+                // reconcile wallet + inventory before we surface anything.
+                if (error == null || error.HttpStatus == 0)
+                    ctx.RequestBackendResync();
+                AbortBackendSession();
+                onFailed?.Invoke("Kasa açılamadı. Lütfen tekrar deneyin.");
+                yield break;
+            }
+
+            // ── Resolve the backend-selected skin via the stable-ID catalog. ──
+            var mapped = BackendResultMapper.ToCaseOpeningResult(response);
+            var skin = ctx.Content != null ? ctx.Content.GetSkin(mapped?.RolledSkinId) : null;
+
+            if (skin == null)
+            {
+                // Server committed but we cannot resolve the skin locally. Do NOT
+                // fake-grant or refund. Apply the authoritative wallet, reconcile
+                // inventory from the server, and show a safe message.
+                Debug.LogError("[FLOW] Backend won skinId not resolvable locally: " +
+                               (response.wonSkin != null ? response.wonSkin.skinId : "null"));
+                ctx.ApplyBackendWallet(response.newVpBalance);
+                ctx.RequestBackendResync();
+                AbortBackendSession();
+                onFailed?.Invoke("Ödül eşitleniyor...");
+                yield break;
+            }
+
+            // ── Apply authoritative wallet immediately (no local spend). ──
+            ctx.ApplyBackendWallet(response.newVpBalance);
+
+            _rolledSkin = skin;
+            // The backend response carries no vpSpent field. Derive it from the
+            // selected case price (same source the local path uses, incl. shop
+            // discounts). This is cosmetic-stat only — the authoritative wallet is
+            // response.newVpBalance, already applied above.
+            _vpSpent = ctx.Shop != null ? ctx.Shop.GetDiscountedPrice(caseDef) : caseDef.VpPrice;
+
+            Debug.Log($"[FLOW] Backend open OK — case='{caseDef.CaseId}' skin='{skin.SkinName}' " +
+                      $"vpSpent={_vpSpent} newBalance={response.newVpBalance}");
+
+            // ── Now reveal the spin overlay and animate toward the server skin. ──
+            onSpinStarting?.Invoke();
+            spinController.BeginSpin(caseDef, skin, OnSpinFinishedBackend);
+        }
+
+        // Clears in-flight backend state when no spin will run. Unlocks the session
+        // (re-enables back/open) without touching VP or inventory.
+        void AbortBackendSession()
+        {
+            _sessionActive = false;
+            _backendMode = false;
+            _activeCase = null;
+            _rolledSkin = null;
+            _vpSpent = 0;
+        }
+
+        void OnSpinFinishedBackend(SkinDefinitionSO skin)
+        {
+            var caseDef = _activeCase;
+            var vpSpent = _vpSpent;
+
+            _sessionActive = false;
+
+            if (skin == null) skin = _rolledSkin;
+            Debug.Log($"[FLOW] OnSpinFinishedBackend — finalSkin='{skin?.SkinName ?? "NULL"}'");
+
+            var ctx = GameContext.Instance;
+            if (ctx != null && caseDef != null && skin != null)
+            {
+                // Backend already spent VP + granted the skin. Cache-only completion:
+                // no VP mutation, no re-spend, no double-grant.
+                ctx.CaseOpening.CompleteOpenFromBackend(caseDef, skin, vpSpent);
+                ctx.Statistics?.RecalculateInventoryStats(ctx.Inventory, ctx.Content);
+                ctx.Save?.Save();
+            }
+
+            // Clear AFTER persistence — TryForceComplete detects non-null == incomplete.
+            _activeCase = null;
+            _rolledSkin = null;
+            _vpSpent = 0;
+            _backendMode = false;
         }
 
         void OnSpinFinished(SkinDefinitionSO skin)
@@ -74,15 +200,22 @@ namespace ValoCase.CaseOpening
             var skin    = _rolledSkin;
             var caseDef = _activeCase;
             var vpSpent = _vpSpent;
+            var backend = _backendMode;
 
             _activeCase = null;
             _rolledSkin = null;
             _vpSpent    = 0;
+            _backendMode = false;
 
             var ctx = GameContext.Instance;
             if (ctx != null && caseDef != null)
             {
-                ctx.CaseOpening.CompleteOpen(caseDef, skin, vpSpent);
+                // Mirror the normal completion path for the active mode so the
+                // watchdog fallback never double-spends or double-grants.
+                if (backend)
+                    ctx.CaseOpening.CompleteOpenFromBackend(caseDef, skin, vpSpent);
+                else
+                    ctx.CaseOpening.CompleteOpen(caseDef, skin, vpSpent);
                 ctx.Statistics?.RecalculateInventoryStats(ctx.Inventory, ctx.Content);
                 ctx.Save?.Save();
             }

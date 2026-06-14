@@ -419,24 +419,6 @@ namespace ValoCase.UI.Screens
         {
             if (openButton == null) return;
 
-            {
-                var ctx     = GameContext.Instance;
-                var price   = _selected != null ? (ctx?.Shop?.GetDiscountedPrice(_selected) ?? _selected.VpPrice) : -1;
-                var balance = ctx?.Vp?.Balance ?? -1;
-                var canOpenDbg = _selected != null && (flow == null || !flow.SessionActive) && ctx?.CaseOpening?.CanOpen(_selected) == true;
-
-                Debug.Log("[OPEN_BTN_DEBUG] RefreshOpenButton");
-                Debug.Log("[OPEN_BTN_DEBUG] selected null=" + (_selected == null));
-                Debug.Log("[OPEN_BTN_DEBUG] selected id=" + (_selected != null ? _selected.CaseId : "NULL"));
-                Debug.Log("[OPEN_BTN_DEBUG] selected name=" + (_selected != null ? _selected.DisplayName : "NULL"));
-                Debug.Log("[OPEN_BTN_DEBUG] flow active=" + (flow != null && flow.SessionActive));
-                Debug.Log("[OPEN_BTN_DEBUG] balance=" + balance);
-                Debug.Log("[OPEN_BTN_DEBUG] price=" + price);
-                Debug.Log("[OPEN_BTN_DEBUG] canOpen=" + canOpenDbg);
-                Debug.Log("[OPEN_BTN_DEBUG] button active=" + openButton.gameObject.activeInHierarchy);
-                Debug.Log("[OPEN_BTN_DEBUG] button interactable before=" + openButton.interactable);
-            }
-
             bool sessionBusy = flow != null && flow.SessionActive;
             bool canOpen      = GameContext.Instance?.CaseOpening?.CanOpen(_selected) == true;
             bool insufficient = _selected != null && !sessionBusy && !canOpen;
@@ -446,9 +428,6 @@ namespace ValoCase.UI.Screens
             var btnLabel = openButton.GetComponentInChildren<TextMeshProUGUI>(true);
             if (btnLabel != null)
                 btnLabel.text = insufficient ? "YETERSİZ VP" : "KASAYI AÇ";
-
-            Debug.Log($"[CASE_OPEN_BTN] selected={(_selected != null ? _selected.CaseId : "NULL")} " +
-                      $"sessionBusy={sessionBusy} canOpen={canOpen} interactable={openButton.interactable}");
         }
 
         // ── Drop List ─────────────────────────────────────────────────────────
@@ -939,6 +918,36 @@ namespace ValoCase.UI.Screens
             _showingResult = false;
             if (openButton != null) openButton.interactable = false;
             HideSkipButton();
+
+            // ── Backend mode: wait for the server BEFORE showing the spin. ──────
+            // The button is already disabled (in-flight state); the back button is
+            // blocked by flow.SessionActive. The spin overlay + watchdog start only
+            // once the server result arrives. On failure nothing spins.
+            if (GameContext.Instance?.BackendEnabled == true)
+            {
+                Debug.Log("[CASE_OPEN_CLICK] backend mode — requesting server open");
+                // The disabled button is the in-flight state. We deliberately do NOT
+                // retitle it here — the shared reveal/confirm path re-enables the button
+                // without resetting its label, so a transient title would get stuck.
+                flow.StartOpeningBackend(_selected,
+                    onSpinStarting: () =>
+                    {
+                        ShowSpinOverlay(true);
+                        StartCoroutine(SpinEndWatchdog());
+                    },
+                    onFailed: msg =>
+                    {
+                        ShowSpinOverlay(false);
+                        EnsureInteractive();
+                        RefreshOpenButton();
+                        RefreshWallet();
+                        if (!string.IsNullOrEmpty(msg)) GameEvents.RaiseToast(msg);
+                    });
+                return;
+            }
+
+            // ── Local mode (unchanged) ─────────────────────────────────────────
+            Debug.Log("[CASE_OPEN_CLICK] starting spin");
             ShowSpinOverlay(true);
             flow.StartOpening(_selected);
             StartCoroutine(SpinEndWatchdog());

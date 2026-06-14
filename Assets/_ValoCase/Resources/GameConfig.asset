@@ -22,3 +22,6 @@ MonoBehaviour:
   onlineCountMin: 4200
   onlineCountMax: 12800
   casesOpenedPerUnlockTier: 15
+  useBackend: 1
+  backendBaseUrl: http://localhost:8080
+  requestTimeoutSeconds: 15

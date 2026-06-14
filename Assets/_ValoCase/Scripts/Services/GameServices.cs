@@ -646,6 +646,21 @@ namespace ValoCase.Services
             GameEvents.RaiseCaseOpened(caseDef, skin);
         }
 
+        // Backend-mode completion (see ICaseOpeningService). The server already spent
+        // VP and granted the skin, so we DO NOT call TrySpend and we add the skin with
+        // grantDuplicateBonus:false — that path mutates ZERO VP. Cosmetic stats and
+        // progression mirror the local path; the authoritative wallet is applied by
+        // the caller via the server's newVpBalance.
+        public void CompleteOpenFromBackend(CaseDefinitionSO caseDef, SkinDefinitionSO skin, int vpSpent)
+        {
+            if (caseDef == null || skin == null) return;
+
+            _inventory.AddSkin(skin, out _, grantDuplicateBonus: false);
+            _statistics.RecordCaseOpened(caseDef, skin, vpSpent);
+            _progression.OnCaseOpened();
+            GameEvents.RaiseCaseOpened(caseDef, skin);
+        }
+
         public bool TryOpenCaseInstant(CaseDefinitionSO caseDef, out SkinDefinitionSO result)
         {
             if (!TryBeginOpen(caseDef, out result, out var spent)) return false;

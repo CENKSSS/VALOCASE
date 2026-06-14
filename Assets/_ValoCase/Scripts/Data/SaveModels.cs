@@ -85,6 +85,12 @@ namespace ValoCase.Save
         public string playerName = "Agent";
         public int vpBalance;
         public bool adminVpGrantApplied;   // true after the one-time 500 000 VP grant
+
+        // ── Backend (Spring Boot) ─────────────────────────────────────────────
+        // Server-issued guest identity. Empty/null in local mode and on fresh saves.
+        // Additive fields: old saves load fine (JsonUtility defaults them to null).
+        public string guestToken;
+        public string guestAccountId;
         public List<OwnedSkinSaveEntry> inventory = new();
         public PlayerStatisticsSave statistics = new();
         public DailyRewardSave dailyReward = new();

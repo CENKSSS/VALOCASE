@@ -79,6 +79,16 @@ namespace ValoCase.Services
         bool CanOpen(CaseDefinitionSO caseDef);
         bool TryBeginOpen(CaseDefinitionSO caseDef, out SkinDefinitionSO rolled, out int vpSpent);
         void CompleteOpen(CaseDefinitionSO caseDef, SkinDefinitionSO skin, int vpSpent);
+
+        /// <summary>
+        /// Backend-mode completion. The Spring Boot server has ALREADY spent VP and
+        /// granted the skin authoritatively; this only updates the local CACHE:
+        /// adds the skin WITHOUT the duplicate-VP bonus (no local VP mutation) and
+        /// records the same cosmetic stats/progression as the local path. Wallet is
+        /// applied separately from the server's authoritative newVpBalance.
+        /// </summary>
+        void CompleteOpenFromBackend(CaseDefinitionSO caseDef, SkinDefinitionSO skin, int vpSpent);
+
         bool TryOpenCaseInstant(CaseDefinitionSO caseDef, out SkinDefinitionSO result);
         SkinDefinitionSO RollSkin(CaseDefinitionSO caseDef);
     }
