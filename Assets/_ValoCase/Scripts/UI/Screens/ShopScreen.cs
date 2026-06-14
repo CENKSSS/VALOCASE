@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -30,9 +31,9 @@ namespace ValoCase.UI.Screens
         static readonly Color TextDim    = new Color(1f,     1f,     1f,     0.38f);
 
         // ── Grid constants ────────────────────────────────────────────────────
-        const int   DefaultColumns = 3;
+        const int   DefaultColumns = 2;
         const float MinCellWidth   = 80f;   // fallback to 2 columns if narrower
-        const float CellAspect     = 1.65f; // height = width × CellAspect  (~3:5)
+        const float CellAspect     = 1.2f;  // height = width × CellAspect (2-column portrait)
         const float HPad           = 8f;    // grid left & right padding
         const float Gap            = 8f;    // spacing between cells
 
@@ -164,23 +165,27 @@ namespace ValoCase.UI.Screens
                 t.gameObject.SetActive(false);
         }
 
-        // ── 3-column grid ─────────────────────────────────────────────────────
+        // ── 2-column grid ─────────────────────────────────────────────────────
 
         void BuildGrid(GameContext ctx)
         {
             // Shared section background (cover image, aspect preserved)
             FullscreenBackground.AttachShared(gameObject);
 
-            // Compute column count & cell dimensions from actual screen width
-            float scrollW  = Screen.width - 32f; // 16 px margin each side
-            int   cols     = DefaultColumns;
-            float cellW    = (scrollW - HPad * 2f - Gap * (cols - 1)) / cols;
-            if (cellW < MinCellWidth)
-            {
-                cols  = 2;
-                cellW = (scrollW - HPad * 2f - Gap * (cols - 1)) / cols;
-            }
-            float cellH = cellW * CellAspect;
+            // Load cases first so row count is known before computing cellH.
+            var allCases = ctx.Content?.Cases;
+            Debug.Log("[SHOP_GRID] total cases from content=" + (allCases?.Count ?? 0));
+            var sortedCases = (allCases ?? Enumerable.Empty<CaseDefinitionSO>())
+                .Where(c => c != null)
+                .OrderBy(c => c.VpPrice)
+                .ToList();
+            Debug.Log("[SHOP_GRID] vandal featured cases=" + sortedCases.Count +
+                      " columns=" + DefaultColumns);
+
+            // Column count is fixed for portrait; the cell dimensions are applied
+            // later by SizeGridToViewport() once the Viewport rect is valid (see
+            // coroutine), so we never rely on the unreliable Awake-time selfRt.rect.
+            int cols = DefaultColumns;
 
             // ── ScrollRect ────────────────────────────────────────────────────
             var scrollGo = new GameObject("CaseGrid_Scroll", typeof(RectTransform));
@@ -222,11 +227,11 @@ namespace ValoCase.UI.Screens
             // GridLayoutGroup — fixed column count, rows grow downward
             var grid = ctGo.AddComponent<GridLayoutGroup>();
             grid.padding         = new RectOffset((int)HPad, (int)HPad, 10, 10);
-            grid.cellSize        = new Vector2(cellW, cellH);
+            grid.cellSize        = new Vector2(200f, 260f); // placeholder; SizeGridToViewport overwrites next frame
             grid.spacing         = new Vector2(Gap, Gap);
             grid.startCorner     = GridLayoutGroup.Corner.UpperLeft;
             grid.startAxis       = GridLayoutGroup.Axis.Horizontal;
-            grid.childAlignment  = TextAnchor.UpperLeft;
+            grid.childAlignment  = TextAnchor.UpperCenter;
             grid.constraint      = GridLayoutGroup.Constraint.FixedColumnCount;
             grid.constraintCount = cols;
 
@@ -235,18 +240,6 @@ namespace ValoCase.UI.Screens
             csf.verticalFit   = ContentSizeFitter.FitMode.PreferredSize;
 
             // ── Populate cards ─────────────────────────────────────────────────
-            // Use Content.Cases (full DB) instead of Shop.AllPurchasableCases
-            // so the shop rotation never hides any of the 5 Vandal cases.
-            var allCases = ctx.Content?.Cases;
-            Debug.Log("[SHOP_GRID] total cases from content=" + (allCases?.Count ?? 0));
-
-            var sortedCases = (allCases ?? Enumerable.Empty<CaseDefinitionSO>())
-                .Where(c => c != null)
-                .OrderBy(c => c.VpPrice)
-                .ToList();
-
-            Debug.Log("[SHOP_GRID] vandal featured cases=" + sortedCases.Count + " columns=" + cols);
-
             for (var i = 0; i < sortedCases.Count; i++)
             {
                 var caseDef = sortedCases[i];
@@ -264,6 +257,46 @@ namespace ValoCase.UI.Screens
                           " display=" + (caseDef?.DisplayName ?? "(null)"));
                 BuildCard(ctGo.transform, caseDef);
             }
+
+            // Size the grid from the REAL Viewport rect after layout settles next
+            // frame — avoids the unreliable Awake-time rect read and the 1600f
+            // fallback, and guarantees the grid fills the bar-to-nav viewport.
+            StartCoroutine(SizeGridToViewport(grid, vpRt, ctRt, sortedCases.Count, cols));
+        }
+
+        // Computes cellSize from the actual Viewport rect one frame after the grid is
+        // built, when the Canvas layout is valid. The viewport height is the true space
+        // between the TopProfileBar and the BottomNavBar, so rows are scaled to fill it
+        // instead of clustering at the top.
+        IEnumerator SizeGridToViewport(GridLayoutGroup grid, RectTransform vpRt,
+                                       RectTransform ctRt, int cardCount, int cols)
+        {
+            // Let the freshly-built hierarchy run at least one layout pass, then wait
+            // until the Viewport actually has a size (guards a late layout frame).
+            yield return null;
+            for (int i = 0; i < 8 && (vpRt == null || vpRt.rect.width < 1f); i++)
+                yield return null;
+            if (grid == null || vpRt == null) yield break;
+
+            float vpW = vpRt.rect.width;
+            float vpH = vpRt.rect.height;
+
+            // 2-column width straight from the viewport — no selfRt / fallback math.
+            float cellW = (vpW - HPad * 2f - Gap * (cols - 1)) / cols;
+
+            // Scale cell height so the rows fill the viewport vertically. Clamped to a
+            // sane aspect range so a single short row can't produce a giant card.
+            int   rows   = Mathf.Max(1, Mathf.CeilToInt(cardCount / (float)cols));
+            float availH = vpH - 20f - Gap * Mathf.Max(0, rows - 1); // 20 = grid top+bottom padding
+            float cellH  = Mathf.Clamp(availH / rows, cellW * 0.9f, cellW * 1.8f);
+
+            grid.cellSize = new Vector2(cellW, cellH);
+            Debug.Log("[SHOP_GRID] sized grid vpW=" + vpW + " vpH=" + vpH +
+                      " cols=" + cols + " rows=" + rows + " cellW=" + cellW + " cellH=" + cellH);
+
+            // Apply the new Content height immediately so ScrollRect bounds are correct.
+            if (ctRt != null)
+                LayoutRebuilder.ForceRebuildLayoutImmediate(ctRt);
         }
 
         // ── Portrait case card ─────────────────────────────────────────────────
