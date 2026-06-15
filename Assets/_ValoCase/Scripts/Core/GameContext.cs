@@ -315,6 +315,104 @@ namespace ValoCase.Core
             onSold?.Invoke(response.soldCount, response.totalVpGained);
         }
 
+        // ── Backend daily rewards (server-authoritative) ────────────────────────
+        // Fetch returns the status to the UI; claim applies the authoritative wallet
+        // (no local VP add) and returns the claim payload. Failures surface a message
+        // and never mutate local VP.
+
+        public void RefreshDailyBackend(Action<DailyStatusResponse> onDone, Action<string> onFailed)
+        {
+            if (!BackendEnabled) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
+            StartCoroutine(RefreshDailyRoutine(onDone, onFailed));
+        }
+
+        IEnumerator RefreshDailyRoutine(Action<DailyStatusResponse> onDone, Action<string> onFailed)
+        {
+            DailyStatusResponse res = null;
+            BackendError error = null;
+            yield return Backend.GetDailyStatus(r => res = r, e => error = e);
+
+            if (error != null || res == null)
+            {
+                Debug.LogWarning("[Backend] Daily status failed — " + (error?.ToString() ?? "null response"));
+                onFailed?.Invoke("Günlük ödül durumu alınamadı.");
+                yield break;
+            }
+            onDone?.Invoke(res);
+        }
+
+        public void ClaimDailyBackend(Action<DailyClaimResponse> onDone, Action<string> onFailed)
+        {
+            if (!BackendEnabled) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
+            StartCoroutine(ClaimDailyRoutine(onDone, onFailed));
+        }
+
+        IEnumerator ClaimDailyRoutine(Action<DailyClaimResponse> onDone, Action<string> onFailed)
+        {
+            DailyClaimResponse res = null;
+            BackendError error = null;
+            yield return Backend.ClaimDailyReward(r => res = r, e => error = e);
+
+            if (error != null || res == null)
+            {
+                Debug.LogWarning("[Backend] Daily claim failed — " + (error?.ToString() ?? "null response"));
+                onFailed?.Invoke("Ödül alınamadı. Lütfen tekrar deneyin.");
+                yield break;
+            }
+
+            ApplyBackendWallet(res.newVpBalance);   // authoritative; no local Add
+            Debug.Log($"[Backend] Daily claimed — rewardVp={res.rewardVp} streak={res.currentStreak} newBalance={res.newVpBalance}");
+            onDone?.Invoke(res);
+        }
+
+        // ── Backend missions (server-authoritative) ─────────────────────────────
+
+        public void RefreshMissionsBackend(Action<MissionResponse[]> onDone, Action<string> onFailed)
+        {
+            if (!BackendEnabled) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
+            StartCoroutine(RefreshMissionsRoutine(onDone, onFailed));
+        }
+
+        IEnumerator RefreshMissionsRoutine(Action<MissionResponse[]> onDone, Action<string> onFailed)
+        {
+            MissionListResponse res = null;
+            BackendError error = null;
+            yield return Backend.GetMissions(r => res = r, e => error = e);
+
+            if (error != null || res == null)
+            {
+                Debug.LogWarning("[Backend] Missions fetch failed — " + (error?.ToString() ?? "null response"));
+                onFailed?.Invoke("Görevler alınamadı.");
+                yield break;
+            }
+            onDone?.Invoke(res.missions ?? Array.Empty<MissionResponse>());
+        }
+
+        public void ClaimMissionBackend(string missionId, Action<MissionClaimResponse> onDone, Action<string> onFailed)
+        {
+            if (!BackendEnabled) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
+            if (string.IsNullOrEmpty(missionId)) { onFailed?.Invoke("Geçersiz görev."); return; }
+            StartCoroutine(ClaimMissionRoutine(missionId, onDone, onFailed));
+        }
+
+        IEnumerator ClaimMissionRoutine(string missionId, Action<MissionClaimResponse> onDone, Action<string> onFailed)
+        {
+            MissionClaimResponse res = null;
+            BackendError error = null;
+            yield return Backend.ClaimMissionReward(missionId, r => res = r, e => error = e);
+
+            if (error != null || res == null)
+            {
+                Debug.LogWarning("[Backend] Mission claim failed — " + (error?.ToString() ?? "null response"));
+                onFailed?.Invoke("Görev ödülü alınamadı. Lütfen tekrar deneyin.");
+                yield break;
+            }
+
+            ApplyBackendWallet(res.newVpBalance);   // authoritative; no local Add
+            Debug.Log($"[Backend] Mission claimed — missionId={missionId} rewardVp={res.rewardVp} newBalance={res.newVpBalance} status={res.status}");
+            onDone?.Invoke(res);
+        }
+
         // ── Backend upgrade (server-authoritative) ──────────────────────────────
         // Resolves the selected input skins to REAL backend itemIds (never skinIds),
         // posts the upgrade, and returns the server's decision. The backend consumes

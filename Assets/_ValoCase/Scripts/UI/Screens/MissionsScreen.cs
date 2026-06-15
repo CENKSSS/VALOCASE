@@ -1,7 +1,9 @@
+using System.Collections;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 using ValoCase.Core;
+using ValoCase.Services.Backend;
 using ValoCase.Systems;
 
 namespace ValoCase.UI.Screens
@@ -46,6 +48,12 @@ namespace ValoCase.UI.Screens
         float         _cellW;
         float         _cellH;
 
+        // Backend mode (runtime only). In local mode these stay empty and every card
+        // accessor delegates to the local MissionSystem exactly as before.
+        bool              _backend;
+        MissionResponse[] _backendMissions;
+        bool[]            _claimInFlight;
+
         // ── Public API ────────────────────────────────────────────────────────
         public void Init(MissionSystem system)
         {
@@ -62,12 +70,88 @@ namespace ValoCase.UI.Screens
         public void Show()
         {
             gameObject.SetActive(true);
+
+            // Backend mode: pull the authoritative mission list first, then build/refresh
+            // the same card grid from it. Local mode is unchanged.
+            if (GameContext.Instance != null && GameContext.Instance.BackendEnabled)
+            {
+                _backend = true;
+                StartCoroutine(ShowBackendRoutine());
+                return;
+            }
+
             BuildOnce();
             SortCards();
             Refresh();
         }
 
+        IEnumerator ShowBackendRoutine()
+        {
+            bool done = false, ok = false;
+            GameContext.Instance.RefreshMissionsBackend(
+                missions => { _backendMissions = missions; ok = true; done = true; },
+                err => { if (!string.IsNullOrEmpty(err)) GameEvents.RaiseToast(err); done = true; });
+
+            while (!done) yield return null;
+            if (!ok || _backendMissions == null) yield break;
+
+            // Build the grid for the backend mission count on first show; reuse it after.
+            if (!_built) BuildOnce();
+            if (_claimInFlight == null || _claimInFlight.Length != _cards.Length)
+                _claimInFlight = new bool[_cards.Length];
+
+            SortCards();
+            Refresh();
+        }
+
         public void Hide() => gameObject.SetActive(false);
+
+        // ── Card data accessors (local MissionSystem or backend list) ───────────
+        // Local impls reproduce the exact values used before, so local visuals/behavior
+        // are unchanged. Backend impls read the fetched list with bounds safety.
+        int CardCount => _backend ? (_backendMissions != null ? _backendMissions.Length : 0)
+                                   : MissionSystem.MissionCount;
+
+        bool BackendIndexValid(int i) => _backendMissions != null && i >= 0 && i < _backendMissions.Length && _backendMissions[i] != null;
+
+        string CardTitle(int i)
+        {
+            if (_backend) return BackendIndexValid(i) ? (_backendMissions[i].title ?? "") : "";
+            return _system.GetDef(i).Title;
+        }
+
+        int CardReward(int i)
+        {
+            if (_backend) return BackendIndexValid(i) ? _backendMissions[i].rewardVp : 0;
+            return _system.GetDef(i).RewardVp;
+        }
+
+        int CardCurrent(int i)
+        {
+            if (_backend) return BackendIndexValid(i) ? _backendMissions[i].progress : 0;
+            return _system.GetEntry(i).currentAmount;
+        }
+
+        int CardTarget(int i)
+        {
+            if (_backend) return BackendIndexValid(i) ? Mathf.Max(1, _backendMissions[i].targetCount) : 1;
+            return _system.GetDef(i).TargetAmount;
+        }
+
+        bool CardClaimed(int i)
+        {
+            if (_backend) return BackendIndexValid(i) && _backendMissions[i].status == "CLAIMED";
+            return _system.GetEntry(i).claimed;
+        }
+
+        int CardClaimOrder(int i)
+        {
+            if (_backend) return i;
+            return _system.GetEntry(i).claimOrder;
+        }
+
+        bool CardClaimInFlight(int i)
+            => _backend && _claimInFlight != null && i >= 0 && i < _claimInFlight.Length && _claimInFlight[i];
 
         // ── Build (once) ──────────────────────────────────────────────────────
         void BuildOnce()
@@ -164,7 +248,7 @@ namespace ValoCase.UI.Screens
             var viewportGo = NewGo("Viewport", scrollGo.transform, typeof(RectMask2D));
             Stretch(viewportGo);
 
-            int   count  = MissionSystem.MissionCount;
+            int   count  = CardCount;
             int   rows   = Mathf.CeilToInt(count / 3f);
             float totalH = 8f + rows * cellH + (rows - 1) * rowGap + 16f;
 
@@ -201,8 +285,6 @@ namespace ValoCase.UI.Screens
         void BuildCard(int index, RectTransform parent,
                        float xPos, float yPos, float cardW, float cardH, Sprite circle)
         {
-            var def = _system.GetDef(index);
-
             // Card root
             var card   = NewGo("Card_" + index, parent, typeof(Image), typeof(Outline));
             var cardRt = (RectTransform)card.transform;
@@ -229,7 +311,7 @@ namespace ValoCase.UI.Screens
 
             // Mission title
             float titleH = Mathf.Round(cardH * 0.175f);
-            var titleTmp = MakeTmp(card.transform, "Title", def.Title,
+            var titleTmp = MakeTmp(card.transform, "Title", CardTitle(index),
                 11f, FontStyles.Bold, TextBright);
             titleTmp.enableWordWrapping = true;
             titleTmp.alignment          = TextAlignmentOptions.Center;
@@ -295,7 +377,7 @@ namespace ValoCase.UI.Screens
 
             // ── Reward row ────────────────────────────────────────────────────
             float rewardY = ringTopY + ringSize + Mathf.Round(cardH * 0.05f);
-            var rewTmp = MakeTmp(card.transform, "Reward", $"+{def.RewardVp} VP",
+            var rewTmp = MakeTmp(card.transform, "Reward", $"+{CardReward(index)} VP",
                 10f, FontStyles.Bold, GoldColor);
             rewTmp.alignment     = TextAlignmentOptions.Center;
             rewTmp.raycastTarget = false;
@@ -348,15 +430,15 @@ namespace ValoCase.UI.Screens
         void SortCards()
         {
             if (!_built || _cards == null) return;
-            int count = MissionSystem.MissionCount;
+            int count = _cards.Length;
             var order = new int[count];
             for (int i = 0; i < count; i++) order[i] = i;
             System.Array.Sort(order, (a, b) =>
             {
-                var ea = _system.GetEntry(a);
-                var eb = _system.GetEntry(b);
-                if (ea.claimed != eb.claimed) return ea.claimed ? 1 : -1;
-                if (ea.claimed)              return eb.claimOrder.CompareTo(ea.claimOrder);
+                bool ca = CardClaimed(a);
+                bool cb = CardClaimed(b);
+                if (ca != cb) return ca ? 1 : -1;
+                if (ca)       return CardClaimOrder(b).CompareTo(CardClaimOrder(a));
                 return a.CompareTo(b);
             });
             const float colGap = 8f;
@@ -376,19 +458,20 @@ namespace ValoCase.UI.Screens
         void Refresh()
         {
             if (!_built || _cards == null) return;
-            for (int i = 0; i < MissionSystem.MissionCount; i++)
+            for (int i = 0; i < _cards.Length; i++)
                 RefreshCard(i);
         }
 
         void RefreshCard(int i)
         {
-            var def   = _system.GetDef(i);
-            var entry = _system.GetEntry(i);
-            bool  done    = entry.currentAmount >= def.TargetAmount;
-            bool  claimed = entry.claimed;
-            int   remain  = Mathf.Max(0, def.TargetAmount - entry.currentAmount);
-            float pct     = def.TargetAmount > 0
-                ? Mathf.Clamp01((float)entry.currentAmount / def.TargetAmount)
+            int   current = CardCurrent(i);
+            int   target  = CardTarget(i);
+            bool  done    = current >= target;
+            bool  claimed = CardClaimed(i);
+            bool  inFlight = CardClaimInFlight(i);
+            int   remain  = Mathf.Max(0, target - current);
+            float pct     = target > 0
+                ? Mathf.Clamp01((float)current / target)
                 : 0f;
 
             ref var c = ref _cards[i];
@@ -398,7 +481,7 @@ namespace ValoCase.UI.Screens
             c.RingFill.color      = done ? GreenFull : (pct > 0f ? GreenDim : GreenDim);
 
             c.PctText.text       = Mathf.RoundToInt(pct * 100f) + "%";
-            c.ProgressText.text  = $"{entry.currentAmount}/{def.TargetAmount}";
+            c.ProgressText.text  = $"{current}/{target}";
             c.RemainingText.text = claimed ? "DONE"
                                  : remain > 0 ? $"{remain} left"
                                  : "READY!";
@@ -418,9 +501,9 @@ namespace ValoCase.UI.Screens
             else if (done)
             {
                 c.BtnImage.color   = NeonRed;
-                c.BtnText.text     = "CLAIM REWARD";
+                c.BtnText.text     = inFlight ? "CLAIMING…" : "CLAIM REWARD";
                 c.BtnText.color    = Color.white;
-                c.Btn.interactable = true;
+                c.Btn.interactable = !inFlight;   // disabled while a backend claim is pending
             }
             else
             {
@@ -434,6 +517,9 @@ namespace ValoCase.UI.Screens
         // ── Claim ─────────────────────────────────────────────────────────────
         void OnClaimClicked(int index)
         {
+            if (_backend) { OnClaimClickedBackend(index); return; }
+
+            // ── Local mode (unchanged) ──
             var ctx = GameContext.Instance;
             if (ctx?.Economy == null)
             {
@@ -445,6 +531,41 @@ namespace ValoCase.UI.Screens
             // totalVpEarned and persisted consistently with every other VP grant.
             ctx.Economy.GrantReward(reward, "mission");
             GameEvents.RaiseToast($"+{reward} VP reward claimed!");
+        }
+
+        // Backend claim: server validates + grants VP + returns the new balance. Unity
+        // never grants VP locally; the button is disabled until the response lands.
+        void OnClaimClickedBackend(int index)
+        {
+            if (!BackendIndexValid(index)) return;
+            var mission = _backendMissions[index];
+            if (mission.status == "CLAIMED") return;
+            if (CardClaimInFlight(index)) return;
+
+            var ctx = GameContext.Instance;
+            if (ctx == null) return;
+
+            _claimInFlight[index] = true;
+            RefreshCard(index);   // disable + show CLAIMING…
+
+            ctx.ClaimMissionBackend(mission.missionId,
+                res =>
+                {
+                    _claimInFlight[index] = false;
+                    // Wallet already applied by the helper. Mark this mission claimed
+                    // from the authoritative status so it cannot be claimed again.
+                    mission.status = res != null && !string.IsNullOrEmpty(res.status) ? res.status : "CLAIMED";
+                    int reward = res != null ? res.rewardVp : mission.rewardVp;
+                    GameEvents.RaiseToast($"+{reward} VP reward claimed!");
+                    SortCards();
+                    Refresh();
+                },
+                err =>
+                {
+                    _claimInFlight[index] = false;
+                    if (!string.IsNullOrEmpty(err)) GameEvents.RaiseToast(err);
+                    RefreshCard(index);
+                });
         }
 
         // ── Circle sprite: built-in Knob or procedural fallback ───────────────

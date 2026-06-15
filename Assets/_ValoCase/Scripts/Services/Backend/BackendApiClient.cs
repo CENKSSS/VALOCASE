@@ -37,7 +37,7 @@ namespace ValoCase.Services.Backend
 
         public BackendApiClient(string baseUrl, int timeoutSeconds, string guestToken = null)
         {
-            _baseUrl = string.IsNullOrEmpty(baseUrl) ? "http://localhost:8080" : baseUrl.TrimEnd('/');
+            _baseUrl = string.IsNullOrEmpty(baseUrl) ? "https://valocase-backend-production.up.railway.app" : baseUrl.TrimEnd('/');
             _timeoutSeconds = timeoutSeconds > 0 ? timeoutSeconds : 15;
             GuestToken = guestToken;
         }
@@ -97,6 +97,22 @@ namespace ValoCase.Services.Backend
                         rounds = rounds,
                         participantCount = participantCount
                     }),
+                    auth: true, onSuccess, onError);
+
+        // ── Daily rewards (server-authoritative) ────────────────────────────────
+        public IEnumerator GetDailyStatus(Action<DailyStatusResponse> onSuccess, Action<BackendError> onError)
+            => Send("GET", ApiPrefix + "/daily", null, auth: true, onSuccess, onError);
+
+        public IEnumerator ClaimDailyReward(Action<DailyClaimResponse> onSuccess, Action<BackendError> onError)
+            => Send("POST", ApiPrefix + "/daily/claim", "{}", auth: true, onSuccess, onError);
+
+        // ── Missions (server-authoritative) ─────────────────────────────────────
+        // GET returns a bare array; wrap it under "missions" so JsonUtility can map it.
+        public IEnumerator GetMissions(Action<MissionListResponse> onSuccess, Action<BackendError> onError)
+            => Send("GET", ApiPrefix + "/missions", null, auth: true, onSuccess, onError, wrapArrayKey: "missions");
+
+        public IEnumerator ClaimMissionReward(string missionId, Action<MissionClaimResponse> onSuccess, Action<BackendError> onError)
+            => Send("POST", ApiPrefix + "/missions/" + UnityWebRequest.EscapeURL(missionId) + "/claim", "{}",
                     auth: true, onSuccess, onError);
 
         // ── Core request pipeline ───────────────────────────────────────────────
@@ -373,6 +389,58 @@ namespace ValoCase.Services.Backend
         public bool userWon;
         public string[] grantedInventoryItemIds; // informational; Unity resyncs inventory
         public BotBattleParticipantResponse[] participants;
+    }
+
+    // ── Daily reward DTOs ───────────────────────────────────────────────────────
+
+    [Serializable]
+    public sealed class DailyStatusResponse
+    {
+        public bool claimable;
+        public int currentStreak;
+        public int nextRewardVp;
+        public string lastClaimDate;
+        public string nextClaimDate;
+        public long secondsUntilNextClaim;
+    }
+
+    [Serializable]
+    public sealed class DailyClaimResponse
+    {
+        public int rewardVp;
+        public int currentStreak;
+        public int newVpBalance;       // authoritative wallet AFTER the claim
+        public string claimDate;
+    }
+
+    // ── Mission DTOs ────────────────────────────────────────────────────────────
+
+    [Serializable]
+    public sealed class MissionResponse
+    {
+        public string missionId;
+        public string code;
+        public string title;
+        public string description;
+        public string eventType;
+        public int targetCount;
+        public int progress;
+        public int rewardVp;
+        public string status;          // IN_PROGRESS | CLAIMABLE | CLAIMED
+    }
+
+    [Serializable]
+    public sealed class MissionListResponse
+    {
+        public MissionResponse[] missions;
+    }
+
+    [Serializable]
+    public sealed class MissionClaimResponse
+    {
+        public int rewardVp;
+        public int newVpBalance;       // authoritative wallet AFTER the claim
+        public string status;
     }
 
     [Serializable]
