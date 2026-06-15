@@ -12,15 +12,43 @@ namespace ValoCase.UI
         [SerializeField] TextMeshProUGUI skinNameLabel;
         [SerializeField] TextMeshProUGUI weaponLabel;
 
+        // Bumped on every Bind so an async icon load that resolves AFTER this card was
+        // reused/rebound for a different skin is ignored (prevents wrong-icon flashes).
+        int _iconToken;
+
         public void Bind(SkinDefinitionSO skin, RarityVisualSO visuals)
         {
             if (skin == null) return;
 
             if (skinIcon != null)
             {
-                skinIcon.sprite = skin.Icon;
-                skinIcon.enabled = skin.Icon != null;
                 skinIcon.preserveAspect = true;
+
+                // Invalidate any icon load still in flight for the previous skin.
+                _iconToken++;
+                int token = _iconToken;
+
+                if (skin.TryGetCachedIcon(out var cached))
+                {
+                    // Already resolved (or serialized / nothing to load) → instant.
+                    skinIcon.sprite  = cached;
+                    skinIcon.enabled = cached != null;
+                }
+                else
+                {
+                    // Show a placeholder immediately, then stream the real sprite in.
+                    skinIcon.sprite  = SkinIconLoader.Placeholder;
+                    skinIcon.enabled = true;
+
+                    var target = skinIcon;
+                    SkinIconLoader.Request(skin, sprite =>
+                    {
+                        // Card was rebound to another skin (or destroyed) — drop the result.
+                        if (token != _iconToken || target == null) return;
+                        target.sprite  = sprite;
+                        target.enabled = sprite != null;
+                    });
+                }
             }
 
             if (skinNameLabel != null) skinNameLabel.text = skin.SkinName;

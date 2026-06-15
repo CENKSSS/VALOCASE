@@ -49,6 +49,30 @@ namespace ValoCase.Data
         public string CollectionName => collectionName;
         public Color AccentColor => accentColor;
 
+        // ── Non-blocking icon access (for high-volume card grids) ──────────────
+        // Resources key used for the lazy load (null/empty when there is nothing to
+        // load, e.g. an editor-authored SO with a serialized sprite).
+        public string IconResourceKey => iconResourceKey;
+
+        // Returns the already-resolved sprite WITHOUT triggering a synchronous load.
+        // Returns true when no async load is needed: the sprite is already cached, a
+        // previous attempt finished (even if it failed), or there is no resource key.
+        // Returns false (sprite = null) when an async load should be kicked off.
+        public bool TryGetCachedIcon(out Sprite sprite)
+        {
+            sprite = icon;
+            return icon != null || _iconResolveAttempted || string.IsNullOrEmpty(iconResourceKey);
+        }
+
+        // Caches a sprite resolved asynchronously (by SkinIconLoader), mirroring the
+        // sync getter's caching so every later access — sync or async — is instant.
+        // Marks the attempt complete even on failure so a missing sprite is never reloaded.
+        public void SetResolvedIcon(Sprite sprite)
+        {
+            icon = sprite;
+            _iconResolveAttempted = true;
+        }
+
         // Populates all fields from filesystem loader at runtime (eager sprite).
         // Not called for SO assets created in the Editor.
         public void InitializeRuntime(string id, string displayName, string weapon,

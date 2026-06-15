@@ -1,7 +1,9 @@
+using System;
 using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
+using ValoCase.Core;
 using ValoCase.Systems;
 
 namespace ValoCase.UI.Screens
@@ -41,18 +43,70 @@ namespace ValoCase.UI.Screens
             if (_built) EnsureMissionsPanel();
         }
 
-        void EnsureMissionsPanel()
+        // Builds the MissionsScreen panel on demand. No longer depends on CompositionRoot
+        // having injected the MissionSystem first: if injection was missed or late (the
+        // Android symptom), it resolves a MissionSystem itself so the panel is always
+        // available. Returns true when _missionsPanel is ready to Show().
+        bool EnsureMissionsPanel()
         {
-            if (_missionsPanel != null || _missionSystem == null) return;
-            var rt    = (RectTransform)transform;
-            var msnGo = new GameObject("MissionsPanel", typeof(RectTransform));
-            msnGo.transform.SetParent(rt, false);
-            var mRt   = (RectTransform)msnGo.transform;
-            mRt.anchorMin = Vector2.zero; mRt.anchorMax = Vector2.one;
-            mRt.offsetMin = mRt.offsetMax = Vector2.zero;
-            _missionsPanel = msnGo.AddComponent<MissionsScreen>();
-            _missionsPanel.Init(_missionSystem);
-            msnGo.SetActive(false);
+            if (_missionsPanel != null) return true;
+
+            var system = ResolveMissionSystem();
+            if (system == null)
+            {
+                Debug.LogWarning("[ToolsScreen] MissionSystem unavailable — cannot build MissionsScreen yet.");
+                return false;
+            }
+
+            try
+            {
+                var rt    = (RectTransform)transform;
+                var msnGo = new GameObject("MissionsPanel", typeof(RectTransform));
+                msnGo.transform.SetParent(rt, false);
+                var mRt   = (RectTransform)msnGo.transform;
+                mRt.anchorMin = Vector2.zero; mRt.anchorMax = Vector2.one;
+                mRt.offsetMin = mRt.offsetMax = Vector2.zero;
+                _missionsPanel = msnGo.AddComponent<MissionsScreen>();
+                _missionsPanel.Init(system);
+                msnGo.SetActive(false);
+                return true;
+            }
+            catch (Exception e)
+            {
+                Debug.LogError("[ToolsScreen] Failed to create MissionsScreen: " + e);
+                _missionsPanel = null;
+                return false;
+            }
+        }
+
+        // Prefers the injected MissionSystem; if it was never injected (Android build
+        // showed Coming Soon because of this), lazily constructs one from GameContext so
+        // the screen is never blocked by a missed/late injection. Mission backend logic
+        // is untouched — this only obtains the same system CompositionRoot would have.
+        MissionSystem ResolveMissionSystem()
+        {
+            if (_missionSystem != null) return _missionSystem;
+
+            var ctx = GameContext.Instance;
+            if (ctx == null || ctx.Save == null)
+            {
+                Debug.LogWarning("[ToolsScreen] GameContext/Save not ready — cannot resolve MissionSystem.");
+                return null;
+            }
+
+            try
+            {
+                var ms = new MissionSystem(ctx.Save);
+                ms.Initialize();
+                _missionSystem = ms;
+                Debug.Log("[ToolsScreen] MissionSystem resolved lazily (injection was missing/late).");
+                return _missionSystem;
+            }
+            catch (Exception e)
+            {
+                Debug.LogError("[ToolsScreen] Failed to construct MissionSystem: " + e);
+                return null;
+            }
         }
 
         // ── Lifecycle ─────────────────────────────────────────────────────────
@@ -143,8 +197,19 @@ namespace ValoCase.UI.Screens
 
             BuildRow(content.transform, "GOREVLER", AccentMsn, () =>
             {
-                if (_missionsPanel != null) _missionsPanel.Show();
-                else ShowComingSoon("GOREVLER");
+                // Build the panel on demand (no longer depends on prior injection), then
+                // open it. In backend mode we never fall back to Coming Soon for Görevler.
+                if (EnsureMissionsPanel() && _missionsPanel != null)
+                {
+                    _missionsPanel.Show();
+                    return;
+                }
+
+                bool backend = GameContext.Instance != null && GameContext.Instance.BackendEnabled;
+                if (backend)
+                    Debug.LogError("[ToolsScreen] Görevler could not open: MissionsScreen unavailable in backend mode.");
+                else
+                    ShowComingSoon("GOREVLER");
             });
 
             // Coming Soon overlay (hidden until needed)
