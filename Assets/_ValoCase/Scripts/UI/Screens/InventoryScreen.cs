@@ -34,6 +34,7 @@ namespace ValoCase.UI.Screens
         Button _sellButton;
         bool _headerBuilt;
         bool _priceDescending = true; // default: highest value first (Price ↓)
+        bool _bulkSellInFlight;       // guards backend bulk sells against double-fire
 
         // Scroll-panel insets (px, 1080×1920 ref). Top is larger than the prefab's 240
         // so the grid sits below the Price / SELL row; bottom is lowered from 176 into
@@ -77,8 +78,8 @@ namespace ValoCase.UI.Screens
             var canvas = GetComponentInParent<Canvas>();
             var root = canvas != null ? canvas.rootCanvas.transform : transform;
             _sellFlow = new SellFlow(root,
-                onSellAll:   () => SellMatching(null),
-                onSellBelow: threshold => SellMatching(s => s.VpValue <= threshold));
+                onSellAll:   HandleSellAll,
+                onSellBelow: HandleSellBelow);
         }
 
         void BuildHeaderControls()
@@ -176,6 +177,72 @@ namespace ValoCase.UI.Screens
         }
 
         // ── Selling ────────────────────────────────────────────────────────────
+        // Both bulk actions route through these handlers, which pick the backend or
+        // local path. Backend mode is server-authoritative (no local VP/inventory
+        // mutation); local mode keeps the exact Phase-4 behavior.
+
+        void HandleSellAll()
+        {
+            var ctx = GameContext.Instance;
+            if (ctx == null) return;
+
+            if (ctx.BackendEnabled) { SellAllBackend(); return; }
+            SellMatching(null);
+        }
+
+        void HandleSellBelow(int threshold)
+        {
+            var ctx = GameContext.Instance;
+            if (ctx == null) return;
+
+            if (ctx.BackendEnabled) { SellBelowBackend(threshold); return; }
+            SellMatching(s => s.VpValue <= threshold);
+        }
+
+        // ── Backend bulk sells (server-authoritative) ───────────────────────────
+        void SellAllBackend()
+        {
+            var ctx = GameContext.Instance;
+            if (ctx == null || _bulkSellInFlight) return;
+
+            _bulkSellInFlight = true;
+            SetSellInteractable(false);
+            ctx.SellAllBackend(OnBackendBulkSold, OnBackendBulkFailed);
+        }
+
+        void SellBelowBackend(int threshold)
+        {
+            var ctx = GameContext.Instance;
+            if (ctx == null || _bulkSellInFlight) return;
+
+            _bulkSellInFlight = true;
+            SetSellInteractable(false);
+            ctx.SellBelowValueBackend(threshold, OnBackendBulkSold, OnBackendBulkFailed);
+        }
+
+        void OnBackendBulkSold(int soldCount, int totalVpGained)
+        {
+            _bulkSellInFlight = false;
+            SetSellInteractable(true);
+            if (soldCount > 0) SoundManager.Instance?.Play(SoundId.SellSkin);
+            // Inventory + wallet already refreshed via GameContext's authoritative
+            // sync (RaiseInventoryChanged → Refresh). Refresh again is harmless.
+            Refresh();
+        }
+
+        void OnBackendBulkFailed(string msg)
+        {
+            _bulkSellInFlight = false;
+            SetSellInteractable(true);
+            if (!string.IsNullOrEmpty(msg)) GameEvents.RaiseToast(msg);
+        }
+
+        void SetSellInteractable(bool value)
+        {
+            if (_sellButton != null) _sellButton.interactable = value;
+        }
+
+        // ── Local bulk sell (unchanged Phase-4 path) ────────────────────────────
         // predicate == null  → sell every skin.
         void SellMatching(Func<SkinDefinitionSO, bool> predicate)
         {

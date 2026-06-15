@@ -56,6 +56,49 @@ namespace ValoCase.Services.Backend
         public IEnumerator OpenCase(string caseId, Action<OpenCaseResultResponse> onSuccess, Action<BackendError> onError)
             => Send("POST", ApiPrefix + "/cases/" + UnityWebRequest.EscapeURL(caseId) + "/open", "{}", auth: true, onSuccess, onError);
 
+        // ── Inventory selling (server-authoritative) ────────────────────────────
+        // Backend validates ownership, removes inventory, credits VP, writes the
+        // transaction, and returns the authoritative wallet. Unity never mutates VP
+        // or inventory before these succeed.
+
+        public IEnumerator SellOne(string skinId, Action<SellOneResponse> onSuccess, Action<BackendError> onError)
+            => Send("POST", ApiPrefix + "/inventory/sell",
+                    JsonUtility.ToJson(new SellOneRequest { skinId = skinId }),
+                    auth: true, onSuccess, onError);
+
+        public IEnumerator SellAll(Action<SellBulkResponse> onSuccess, Action<BackendError> onError)
+            => Send("POST", ApiPrefix + "/inventory/sell-all", "{}", auth: true, onSuccess, onError);
+
+        public IEnumerator SellBelowValue(int maxVpValue, Action<SellBulkResponse> onSuccess, Action<BackendError> onError)
+            => Send("POST", ApiPrefix + "/inventory/sell-below-value",
+                    JsonUtility.ToJson(new SellBelowValueRequest { maxVpValue = maxVpValue }),
+                    auth: true, onSuccess, onError);
+
+        // ── Upgrade (server-authoritative) ──────────────────────────────────────
+        // Backend consumes the given per-instance itemIds, decides success/failure,
+        // and grants the target only on success. Unity sends real itemIds (never
+        // skinIds) and never consumes or grants locally.
+        public IEnumerator Upgrade(string[] inputItemIds, string targetSkinId,
+                                   Action<UpgradeResponse> onSuccess, Action<BackendError> onError)
+            => Send("POST", ApiPrefix + "/upgrade",
+                    JsonUtility.ToJson(new UpgradeRequest { inputItemIds = inputItemIds, targetSkinId = targetSkinId }),
+                    auth: true, onSuccess, onError);
+
+        // ── Case Battle (server-authoritative, bots) ────────────────────────────
+        // Backend charges entry cost, rolls every participant's rounds, decides the
+        // winner, grants rewards, and returns the full result + authoritative wallet.
+        // Unity only presents the result and refreshes local state.
+        public IEnumerator CreateBotBattle(string caseId, int rounds, int participantCount,
+                                           Action<BotBattleResponse> onSuccess, Action<BackendError> onError)
+            => Send("POST", ApiPrefix + "/battles/bot",
+                    JsonUtility.ToJson(new BotBattleRequest
+                    {
+                        caseId = caseId,
+                        rounds = rounds,
+                        participantCount = participantCount
+                    }),
+                    auth: true, onSuccess, onError);
+
         // ── Core request pipeline ───────────────────────────────────────────────
 
         IEnumerator Send<T>(string method, string path, string body, bool auth,
@@ -77,6 +120,12 @@ namespace ValoCase.Services.Backend
             req.SetRequestHeader("Accept", "application/json");
             if (auth && !string.IsNullOrEmpty(GuestToken))
                 req.SetRequestHeader("X-Guest-Token", GuestToken);
+
+            // Verification log: the exact token sent on each authenticated call
+            // (covers GET /wallet and POST /cases/{id}/open).
+            if (auth)
+                Debug.Log($"[BackendAuth] -> {method} {path} | X-Guest-Token=" +
+                          (string.IsNullOrEmpty(GuestToken) ? "<none>" : GuestToken));
 
             yield return req.SendWebRequest();
 
@@ -151,22 +200,55 @@ namespace ValoCase.Services.Backend
     [Serializable]
     public sealed class GuestRegisterResponse
     {
+        // Field names mirror the backend guest JSON. The wallet endpoint uses
+        // "accountId" (confirmed), so the guest endpoint is expected to as well.
+        // Token aliases are declared so whichever key the server emits is captured;
+        // in the Phase-1 no-JWT guest model the token can BE the account UUID, so
+        // accountId is the final fallback. Read the effective token via ResolveToken().
+        public string accountId;
         public string guestToken;
-        public string guestAccountId;
+        public string token;
         public int vpBalance;        // server may include the starting wallet here
+
+        public string ResolveToken()
+        {
+            if (!string.IsNullOrEmpty(guestToken)) return guestToken;
+            if (!string.IsNullOrEmpty(token))      return token;
+            return accountId;        // no-JWT guest: the token is the account UUID
+        }
     }
 
     [Serializable]
     public sealed class WalletResponse
     {
+        public string accountId;     // for same-account verification across boots
         public int vpBalance;
     }
 
     [Serializable]
     public sealed class InventoryItemResponse
     {
+        // Backend inventory is PER-INSTANCE: one object per owned item, identified by
+        // itemId, with no aggregated quantity. The fields below mirror that shape.
+        // skinId is the only one Unity needs for the local cache; the rest are kept so
+        // JsonUtility maps cleanly and future displays can use them without re-fetching.
+        public string itemId;
         public string skinId;
+        public string displayName;
+        public string weapon;
+        public string rarity;
+        public int vpValue;
+        public string imageRef;
+        public string source;
+        public string acquiredAt;
+
+        // Optional legacy aggregate. Backend per-instance items omit this, so it stays
+        // 0; ApplyInventoryFromBackend treats a missing/zero quantity as 1 (one instance).
         public int quantity;
+
+        // Each backend object represents one owned unit. If a quantity is present and
+        // positive (legacy aggregate shape) honor it; otherwise count the instance as 1.
+        public int EffectiveQuantity => quantity > 0 ? quantity : 1;
     }
 
     [Serializable]
@@ -196,6 +278,101 @@ namespace ValoCase.Services.Backend
         public string inventoryItemId;
         // NOTE: the backend does not return a vpSpent field. The amount spent is
         // derived caller-side from the selected case price (see CaseOpeningFlowController).
+    }
+
+    // ── Sell request/response DTOs ──────────────────────────────────────────────
+
+    [Serializable]
+    public sealed class SellOneRequest
+    {
+        public string skinId;
+    }
+
+    [Serializable]
+    public sealed class SellBelowValueRequest
+    {
+        public int maxVpValue;
+    }
+
+    [Serializable]
+    public sealed class SellOneResponse
+    {
+        public string skinId;
+        public int vpGained;
+        public int newVpBalance;   // authoritative wallet balance AFTER the sale
+    }
+
+    [Serializable]
+    public sealed class SellBulkResponse
+    {
+        public int soldCount;
+        public int totalVpGained;
+        public int newVpBalance;   // authoritative wallet balance AFTER the sale
+    }
+
+    // ── Upgrade request/response DTOs ───────────────────────────────────────────
+
+    [Serializable]
+    public sealed class UpgradeRequest
+    {
+        public string[] inputItemIds;
+        public string targetSkinId;
+    }
+
+    [Serializable]
+    public sealed class UpgradeResponse
+    {
+        public string upgradeId;
+        public bool success;
+        public float chance;
+        public string[] consumedItemIds;
+        public string targetSkinId;
+        public string grantedInventoryItemId;   // informational for now (null on failure)
+    }
+
+    // ── Case Battle request/response DTOs ───────────────────────────────────────
+
+    [Serializable]
+    public sealed class BotBattleRequest
+    {
+        public string caseId;
+        public int rounds;
+        public int participantCount;
+    }
+
+    [Serializable]
+    public sealed class BotBattleRoundResponse
+    {
+        public string skinId;
+        public string displayName;
+        public string weapon;
+        public string rarity;
+        public int vpValue;
+        public string imageRef;
+    }
+
+    [Serializable]
+    public sealed class BotBattleParticipantResponse
+    {
+        public int index;
+        public bool isUser;
+        public string name;
+        public int totalVp;
+        public BotBattleRoundResponse[] rounds;
+    }
+
+    [Serializable]
+    public sealed class BotBattleResponse
+    {
+        public string battleId;
+        public string caseId;
+        public int rounds;
+        public int entryCost;
+        public int newVpBalance;                 // authoritative wallet AFTER the battle
+        public int winnerIndex;
+        public bool userWon;
+        public string[] grantedInventoryItemIds; // informational; Unity resyncs inventory
+        public BotBattleParticipantResponse[] participants;
     }
 
     [Serializable]

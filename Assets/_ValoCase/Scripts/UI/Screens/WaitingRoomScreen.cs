@@ -44,8 +44,10 @@ namespace ValoCase.UI.Screens
         TextMeshProUGUI              _statusLbl;
         GameObject                   _resultOverlay;
         bool                         _panelsStaged;
-        bool                         _costDeducted;
-        bool                         _rewardsDistributed;
+
+        // Battle authority seam (economy / result generation / rewards / stats / save).
+        // The screen no longer spends VP or grants skins directly — it calls this.
+        IBattleService               _battleService;
 
         // Battle entry cost = Case Price × Round Count, already baked into WagerVP
         // when the lobby is created (see LobbyListScreen.MakeBotLobby).
@@ -59,9 +61,9 @@ namespace ValoCase.UI.Screens
             _result = null;
             _panels.Clear();
             _panelsStaged = false;
-            _costDeducted = false;
-            _rewardsDistributed = false;
             DismissResultPopup();
+
+            EnsureBattleService();
 
             gameObject.SetActive(true);
             transform.SetAsLastSibling();
@@ -318,59 +320,85 @@ namespace ValoCase.UI.Screens
             }
         }
 
+        void EnsureBattleService()
+        {
+            if (_battleService == null)
+                _battleService = BattleServiceFactory.Create(GameContext.Instance);
+        }
+
         void StartBattle()
         {
-            var engine = BattleOpeningEngine.FromGameContext();
-            _result = engine.Generate(_lobby);
-
-            if (_result == null || !_result.IsValid)
+            EnsureBattleService();
+            if (_battleService == null)
             {
-                _state = RoomState.Finished;
+                // No services available — mirror the old missing-wallet path (stay Ready).
+                return;
+            }
+
+            // Backend (async) is the default when enabled: call the server before any
+            // animation. Flip to Running immediately so the CTA can't be re-pressed
+            // during the network call; revert to Ready on failure.
+            if (_battleService.IsAsync)
+            {
+                if (_state != RoomState.Ready) return;
+                _state = RoomState.Running;
+                UpdateCta();
+                StartCoroutine(StartBattleRoutine());
+                return;
+            }
+
+            // ── Local fallback (unchanged sync path) ──
+            var start = _battleService.TryStartBattle(_lobby);
+            ApplyStartResult(start);
+        }
+
+        // Drives the async backend start: await the result, then either run the
+        // animation (success) or surface a safe message and stay usable (failure).
+        IEnumerator StartBattleRoutine()
+        {
+            BattleStartResult start = null;
+            yield return _battleService.BeginBattle(_lobby, r => start = r);
+            ApplyStartResult(start);
+        }
+
+        // Shared handling of a start result for both paths. The screen reproduces the
+        // same observable outcomes; on backend failure it shows a toast and returns to
+        // the Ready state without starting any animation.
+        void ApplyStartResult(BattleStartResult start)
+        {
+            if (start == null || start.Status == BattleStartStatus.BackendError)
+            {
+                GameEvents.RaiseToast("Battle could not start. Please try again.");
+                _state = RoomState.Ready;
                 UpdateCta();
                 return;
             }
 
-            // Deduct the entry cost exactly once. If the player can no longer
-            // afford it, abort the start and stay in the Ready state.
-            if (!ChargeEntryCost())
+            switch (start.Status)
             {
-                _result = null;
-                return;
+                case BattleStartStatus.InvalidConfig:
+                    _result = null;
+                    _state  = RoomState.Finished;
+                    UpdateCta();
+                    return;
+
+                case BattleStartStatus.InsufficientFunds:
+                    GameEvents.RaiseToast("Not enough VP to join this battle");
+                    _state = RoomState.Ready;
+                    UpdateCta();
+                    return;
+
+                case BattleStartStatus.ServiceUnavailable:
+                    _state = RoomState.Ready;
+                    UpdateCta();
+                    return;
             }
 
-            _state = RoomState.Running;
+            _result = start.Battle;
+            _state  = RoomState.Running;
             UpdateCta();
 
             StartCoroutine(RunBattle());
-        }
-
-        // Removes the battle entry cost from the player's balance a single time and
-        // persists the new balance immediately. Returns false (and shows a message)
-        // when the player cannot afford the cost.
-        bool ChargeEntryCost()
-        {
-            if (_costDeducted) return true;
-
-            int cost = EntryCost;
-            if (cost <= 0)
-            {
-                _costDeducted = true;
-                return true;
-            }
-
-            var ctx = GameContext.Instance;
-            var vp  = ctx?.Vp;
-            if (vp == null) return false;
-
-            if (!vp.TrySpend(cost))
-            {
-                GameEvents.RaiseToast("Not enough VP to join this battle");
-                return false;
-            }
-
-            _costDeducted = true;
-            ctx.Save?.Save();
-            return true;
         }
 
         void BuildBattleArea(RectTransform rt)
@@ -585,8 +613,9 @@ namespace ValoCase.UI.Screens
 
             SetRoomStatus("BATTLE FINISHED!", ColorPalette.GoldAccent);
 
-            DistributeRewards();
-            RecordStatistics();
+            // Service owns rewards (inventory grant) + statistics + saves, in the same
+            // order as before. The screen no longer touches VP or inventory directly.
+            _battleService?.Settle(_result);
 
             _state = RoomState.Finished;
             UpdateCta();
@@ -600,40 +629,6 @@ namespace ValoCase.UI.Screens
             if (_statusLbl == null) return;
             _statusLbl.text  = text;
             _statusLbl.color = color;
-        }
-
-        void DistributeRewards()
-        {
-            // Win  → award every skin from every participant's result list.
-            // Lose → nothing is awarded and no VP is refunded; the entry cost is lost.
-            if (_rewardsDistributed) return;
-            if (_result == null || !_result.UserWon) return;
-
-            var ctx = GameContext.Instance;
-            var inventory = ctx != null ? ctx.Inventory : null;
-            if (inventory == null) return;
-
-            // Award the skins only. grantDuplicateBonus:false guarantees no skin
-            // value is ever converted into VP balance (no VP reward from a battle).
-            foreach (var skin in _result.AllSkins)
-                inventory.AddSkin(skin, out _, grantDuplicateBonus: false);
-
-            _rewardsDistributed = true;
-            ctx.Save?.Save();
-        }
-
-        void RecordStatistics()
-        {
-            if (_result == null) return;
-
-            var stats = GameContext.Instance != null ? GameContext.Instance.Statistics : null;
-            if (stats == null) return;
-
-            var outcome = _result.UserWon ? BattleOutcome.PlayerWins : BattleOutcome.OpponentWins;
-            int earnings = _result.UserWon ? _result.TotalPotVp - _result.Players[0].TotalVp : 0;
-
-            stats.RecordBattleResult(outcome, earnings);
-            GameContext.Instance.Save?.Save();
         }
 
         void ShowResultPopup()

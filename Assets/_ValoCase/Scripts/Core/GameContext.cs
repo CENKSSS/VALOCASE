@@ -1,4 +1,6 @@
+using System;
 using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 using ValoCase.Data;
 using ValoCase.Profile;
@@ -36,6 +38,12 @@ namespace ValoCase.Core
         // Exposed so a future Step-2 remote case-opening path can reuse the client.
         public BackendApiClient Backend { get; private set; }
         public bool BackendEnabled => gameConfig != null && gameConfig.UseBackend && Backend != null;
+
+        // Runtime-only per-instance view of the backend inventory (itemId identity that
+        // the quantity/skinId save cache aggregates away). Rebuilt on every inventory
+        // sync; empty in local mode. Never persisted. Used by future itemId-based
+        // systems (Upgrade, Trade, Market, gifting, item history).
+        public BackendInventoryCache BackendInventory { get; } = new BackendInventoryCache();
 
         void Awake()
         {
@@ -146,12 +154,22 @@ namespace ValoCase.Core
                 yield return Backend.RegisterGuest(
                     res =>
                     {
+                        var token = res.ResolveToken();
+                        if (string.IsNullOrEmpty(token))
+                        {
+                            // Registration succeeded but no usable token was parsed — do NOT
+                            // persist an empty token (that caused endless re-registration and
+                            // token-less, 0-balance requests). Treat as failure.
+                            Debug.LogError("[BackendAuth] Guest registration returned no usable token " +
+                                           "(check backend JSON field names). Aborting sync.");
+                            return;
+                        }
                         registered = true;
-                        Save.Data.guestToken = res.guestToken;
-                        Save.Data.guestAccountId = res.guestAccountId;
-                        Backend.GuestToken = res.guestToken;
+                        Save.Data.guestToken = token;
+                        Save.Data.guestAccountId = res.accountId;
+                        Backend.GuestToken = token;
                         Save.Save();
-                        Debug.Log("[Backend] Guest registered — accountId=" + res.guestAccountId);
+                        Debug.Log($"[BackendAuth] guest registered — accountId={res.accountId} token={token}");
                     },
                     err => Debug.LogWarning("[Backend] Guest registration failed — staying on local cache. " + err));
 
@@ -164,6 +182,7 @@ namespace ValoCase.Core
             else
             {
                 Backend.GuestToken = Save.Data.guestToken;
+                Debug.Log($"[BackendAuth] reusing saved token — accountId={Save.Data.guestAccountId} token={Save.Data.guestToken}");
             }
 
             // 2) Wallet — backend is authoritative; overwrite the local cached balance.
@@ -172,7 +191,7 @@ namespace ValoCase.Core
                 {
                     Vp?.SetBalance(res.vpBalance);
                     Save.Save();
-                    Debug.Log("[Backend] Wallet synced — vp=" + res.vpBalance);
+                    Debug.Log($"[BackendAuth] wallet synced — accountId={res.accountId} vp={res.vpBalance}");
                 },
                 err => Debug.LogWarning("[Backend] Wallet sync failed — keeping cached balance. " + err));
 
@@ -215,6 +234,207 @@ namespace ValoCase.Core
                 err => Debug.LogWarning("[Backend] Inventory re-sync failed — keeping cached inventory. " + err));
         }
 
+        // ── Backend selling (server-authoritative) ──────────────────────────────
+        // The backend validates ownership, removes inventory, credits VP, writes the
+        // transaction, and returns the authoritative wallet. Unity never adds VP or
+        // removes inventory locally — on success it applies the returned balance and
+        // re-pulls inventory so the local cache mirrors the server. On any failure the
+        // local cache is left untouched and the UI re-enables via the onFailed callback.
+
+        // Sell one unit of one skin. onSold receives the VP gained for that unit.
+        public void SellOneBackend(string skinId, Action<int> onSold, Action<string> onFailed)
+        {
+            if (!BackendEnabled) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
+            if (string.IsNullOrEmpty(skinId)) { onFailed?.Invoke("Geçersiz skin."); return; }
+            StartCoroutine(SellOneRoutine(skinId, onSold, onFailed));
+        }
+
+        IEnumerator SellOneRoutine(string skinId, Action<int> onSold, Action<string> onFailed)
+        {
+            SellOneResponse response = null;
+            BackendError error = null;
+
+            yield return Backend.SellOne(skinId, r => response = r, e => error = e);
+
+            if (error != null || response == null)
+            {
+                Debug.LogWarning("[Backend] Sell one failed — " + (error?.ToString() ?? "null response"));
+                // Ambiguous transport failure (status 0) may have committed server-side:
+                // reconcile so the local cache reflects whatever the server actually did.
+                if (error == null || error.HttpStatus == 0) RequestBackendResync();
+                onFailed?.Invoke("Satış başarısız. Lütfen tekrar deneyin.");
+                yield break;
+            }
+
+            ApplyBackendWallet(response.newVpBalance);   // authoritative; no local Add
+            yield return SyncInventoryFromBackend();      // reconcile the sold unit
+            Debug.Log($"[Backend] Sold one — skinId={response.skinId} vpGained={response.vpGained} newBalance={response.newVpBalance}");
+            onSold?.Invoke(response.vpGained);
+        }
+
+        // Sell every owned skin. onSold receives (soldCount, totalVpGained).
+        public void SellAllBackend(Action<int, int> onSold, Action<string> onFailed)
+        {
+            if (!BackendEnabled) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
+            StartCoroutine(SellBulkRoutine(
+                run: (ok, err) => Backend.SellAll(ok, err),
+                onSold, onFailed, label: "sell all"));
+        }
+
+        // Sell every owned skin valued at or below maxVpValue.
+        public void SellBelowValueBackend(int maxVpValue, Action<int, int> onSold, Action<string> onFailed)
+        {
+            if (!BackendEnabled) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
+            StartCoroutine(SellBulkRoutine(
+                run: (ok, err) => Backend.SellBelowValue(maxVpValue, ok, err),
+                onSold, onFailed, label: "sell below value"));
+        }
+
+        // Shared bulk-sell driver: runs the supplied endpoint, applies the authoritative
+        // wallet, then re-pulls inventory (Option B — robust for many-item deltas).
+        IEnumerator SellBulkRoutine(
+            Func<Action<SellBulkResponse>, Action<BackendError>, IEnumerator> run,
+            Action<int, int> onSold, Action<string> onFailed, string label)
+        {
+            SellBulkResponse response = null;
+            BackendError error = null;
+
+            yield return run(r => response = r, e => error = e);
+
+            if (error != null || response == null)
+            {
+                Debug.LogWarning($"[Backend] Bulk {label} failed — " + (error?.ToString() ?? "null response"));
+                if (error == null || error.HttpStatus == 0) RequestBackendResync();
+                onFailed?.Invoke("Satış başarısız. Lütfen tekrar deneyin.");
+                yield break;
+            }
+
+            ApplyBackendWallet(response.newVpBalance);   // authoritative; no local Add
+            yield return SyncInventoryFromBackend();      // reconcile removed items
+            Debug.Log($"[Backend] Bulk {label} OK — soldCount={response.soldCount} totalVpGained={response.totalVpGained} newBalance={response.newVpBalance}");
+            onSold?.Invoke(response.soldCount, response.totalVpGained);
+        }
+
+        // ── Backend upgrade (server-authoritative) ──────────────────────────────
+        // Resolves the selected input skins to REAL backend itemIds (never skinIds),
+        // posts the upgrade, and returns the server's decision. The backend consumes
+        // the inputs and grants the target; Unity never mutates inventory locally here.
+        // The caller (UpgradeScreen) plays the existing animation against the returned
+        // success, then calls RequestBackendResync() once the result UI is shown so the
+        // inventory reconciles. On any failure this resyncs (when state may be stale)
+        // and surfaces a safe message — no spin, no local consume, no local grant.
+        public IEnumerator UpgradeBackendRoutine(
+            List<SkinDefinitionSO> inputs, SkinDefinitionSO target, Action<UpgradeBackendResult> onResult)
+        {
+            var result = new UpgradeBackendResult { Target = target };
+
+            if (!BackendEnabled)
+            {
+                result.Error = "Sunucu kullanılamıyor.";
+                onResult?.Invoke(result);
+                yield break;
+            }
+            if (inputs == null || inputs.Count == 0 || target == null)
+            {
+                result.Error = "Geçersiz seçim.";
+                onResult?.Invoke(result);
+                yield break;
+            }
+
+            // Map the selected input skins to owned backend instance itemIds.
+            if (!TryResolveUpgradeItemIds(inputs, out var itemIds, out var resolveError))
+            {
+                Debug.LogWarning("[Backend] Upgrade itemId resolution failed — " + resolveError);
+                RequestBackendResync();   // local cache may be stale vs the server
+                result.Error = resolveError;
+                onResult?.Invoke(result);
+                yield break;
+            }
+
+            UpgradeResponse response = null;
+            BackendError error = null;
+            yield return Backend.Upgrade(itemIds.ToArray(), target.SkinId,
+                r => response = r,
+                e => error = e);
+
+            if (error != null || response == null)
+            {
+                Debug.LogWarning("[Backend] Upgrade failed — " + (error?.ToString() ?? "null response"));
+                // Ambiguous transport failure (status 0) may have committed server-side.
+                if (error == null || error.HttpStatus == 0) RequestBackendResync();
+                result.Error = "Yükseltme başarısız. Lütfen tekrar deneyin.";
+                onResult?.Invoke(result);
+                yield break;
+            }
+
+            // Resolve the target from the backend's authoritative targetSkinId.
+            var resolvedTarget = !string.IsNullOrEmpty(response.targetSkinId) && Content != null
+                ? Content.GetSkin(response.targetSkinId)
+                : null;
+            if (resolvedTarget != null) result.Target = resolvedTarget;
+
+            if (result.Target == null)
+            {
+                // Server committed but the target isn't in the local catalog — reconcile
+                // and show a safe message rather than animating an unknown skin.
+                Debug.LogError("[Backend] Upgrade target not resolvable locally: " + response.targetSkinId);
+                RequestBackendResync();
+                result.Error = "Sonuç eşitleniyor...";
+                onResult?.Invoke(result);
+                yield break;
+            }
+
+            result.Ok = true;
+            result.Success = response.success;
+            result.Chance = response.chance;
+            Debug.Log($"[Backend] Upgrade OK — success={response.success} chance={response.chance} " +
+                      $"consumed={(response.consumedItemIds != null ? response.consumedItemIds.Length : 0)} " +
+                      $"target={response.targetSkinId} granted={response.grantedInventoryItemId ?? "<none>"}");
+            onResult?.Invoke(result);
+        }
+
+        // Translate the selected input skins into real backend instance itemIds. Inputs
+        // are grouped by skinId and that many candidate instances are pulled from the
+        // runtime BackendInventoryCache. Returns false (with a user-facing message) if
+        // any skin lacks enough owned instances — the caller then resyncs and aborts,
+        // so Unity never sends faked itemIds.
+        bool TryResolveUpgradeItemIds(List<SkinDefinitionSO> inputs, out List<string> itemIds, out string error)
+        {
+            itemIds = new List<string>();
+            error = null;
+
+            var need = new Dictionary<string, int>();
+            foreach (var skin in inputs)
+            {
+                if (skin == null || string.IsNullOrEmpty(skin.SkinId))
+                {
+                    error = "Geçersiz skin seçimi.";
+                    return false;
+                }
+                need[skin.SkinId] = need.TryGetValue(skin.SkinId, out var c) ? c + 1 : 1;
+            }
+
+            foreach (var kv in need)
+            {
+                if (!BackendInventory.TryConsumeCandidatesForSkin(kv.Key, kv.Value, out var ids))
+                {
+                    error = "Bu skin için yeterli envanter bulunamadı.";
+                    return false;
+                }
+                itemIds.AddRange(ids);
+            }
+            return true;
+        }
+
+        // Inventory-only pull used after a successful sale. Sequenced (yielded) so the
+        // caller's onSold fires only after the local cache mirrors the server.
+        IEnumerator SyncInventoryFromBackend()
+        {
+            yield return Backend.GetInventory(
+                ApplyInventoryFromBackend,
+                err => Debug.LogWarning("[Backend] Inventory sync after sale failed — keeping cached inventory. " + err));
+        }
+
         // Server-authoritative inventory replace. The backend is the source of truth,
         // so the local list is rebuilt from the response rather than merged — this is
         // what makes repeated syncs idempotent (no double-grant). Unknown skin IDs are
@@ -228,23 +448,53 @@ namespace ValoCase.Core
                 return;
             }
 
-            var now = TimeUtil.NowUnix();
-            var list = Save.Data.inventory;
-            list.Clear();
+            // Preserve full per-instance identity (itemId, source, acquiredAt) in the
+            // runtime instance cache BEFORE aggregating. This keeps backend item identity
+            // available for itemId-based systems without changing the save format or the
+            // quantity-based UI below. Rebuild is idempotent (clears + repopulates).
+            BackendInventory.Rebuild(res.items);
 
+            var now = TimeUtil.NowUnix();
+
+            // Backend inventory is per-instance (one object per owned unit, no aggregate
+            // quantity). Aggregate by skinId so the local cache stays quantity-based:
+            // N backend instances of a skinId collapse into one local entry of quantity N.
+            // Using a dictionary keyed by skinId makes the rebuild idempotent and avoids
+            // duplicate entries for the same skin.
+            var counts = new System.Collections.Generic.Dictionary<string, int>();
+            var order  = new System.Collections.Generic.List<string>();
+
+            int received = res.items.Length;
             int unknown = 0;
+
             foreach (var item in res.items)
             {
-                if (item == null || string.IsNullOrEmpty(item.skinId) || item.quantity <= 0) continue;
-                if (contentDatabase != null && contentDatabase.GetSkin(item.skinId) == null)
+                if (item == null || string.IsNullOrEmpty(item.skinId)) continue;
+
+                if (!counts.ContainsKey(item.skinId))
                 {
-                    unknown++;
-                    Debug.LogWarning("[Backend] Inventory skinId not in local catalog (kept): " + item.skinId);
+                    order.Add(item.skinId);
+                    counts[item.skinId] = 0;
+
+                    if (contentDatabase != null && contentDatabase.GetSkin(item.skinId) == null)
+                    {
+                        unknown++;
+                        Debug.LogWarning("[Backend] Inventory skinId not in local catalog (kept): " + item.skinId);
+                    }
                 }
+
+                counts[item.skinId] += item.EffectiveQuantity; // missing/zero quantity counts as 1
+            }
+
+            // Rebuild the cache wholesale from the aggregated counts.
+            var list = Save.Data.inventory;
+            list.Clear();
+            foreach (var skinId in order)
+            {
                 list.Add(new OwnedSkinSaveEntry
                 {
-                    skinId = item.skinId,
-                    quantity = item.quantity,
+                    skinId = skinId,
+                    quantity = counts[skinId],
                     obtainedUnix = now
                 });
             }
@@ -252,12 +502,29 @@ namespace ValoCase.Core
             Statistics?.RecalculateInventoryStats(Inventory, contentDatabase, notify: false);
             Save.Save();
             GameEvents.RaiseInventoryChanged();
-            Debug.Log($"[Backend] Inventory synced — {list.Count} entries ({unknown} unknown to local catalog).");
+            Debug.Log($"[Backend] Inventory sync received {received} backend items, rebuilt {list.Count} local entries " +
+                      $"({unknown} unknown to local catalog); {BackendInventory.Count} instances cached.");
         }
 
         public void Persist() => Save?.Save();
 
         void OnApplicationPause(bool pause) { if (pause) Persist(); }
         void OnApplicationQuit() => Persist();
+    }
+
+    /// <summary>
+    /// Outcome of a server-authoritative upgrade, returned by
+    /// <see cref="GameContext.UpgradeBackendRoutine"/> to the UpgradeScreen.
+    /// When <see cref="Ok"/> is false, <see cref="Error"/> holds a user-facing message
+    /// and no spin should play. When true, <see cref="Success"/> is the backend's
+    /// decision and <see cref="Target"/> is the resolved target skin to reveal.
+    /// </summary>
+    public sealed class UpgradeBackendResult
+    {
+        public bool Ok;                  // request + itemId resolution + target resolve succeeded
+        public bool Success;             // backend upgrade success/fail
+        public float Chance;             // backend-reported chance (for log/display)
+        public SkinDefinitionSO Target;  // resolved target skin
+        public string Error;             // user-facing message when Ok == false
     }
 }

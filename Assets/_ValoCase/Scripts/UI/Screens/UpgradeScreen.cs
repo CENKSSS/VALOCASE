@@ -1365,6 +1365,15 @@ namespace ValoCase.UI.Screens
             float chance = ctx.Upgrade.ComputeValueChance(total, target.VpValue);
             _spinAnimator?.SetChance(chance);
 
+            // Backend mode: the server decides + commits. Play the existing animation
+            // against the server result, then resync inventory. Local mode below is
+            // left exactly as it was.
+            if (ctx.BackendEnabled)
+            {
+                yield return BackendUpgradeSequence(ctx, inputs, target, chance);
+                yield break;
+            }
+
             // Suppress reactive rebuilds while the upgrade resolves and animates.
             // TryUpgradeMulti's ConsumeOne/AddSkin raise OnInventoryChanged synchronously;
             // letting HandleInventoryChanged run mid-sequence would wipe the selection,
@@ -1412,6 +1421,73 @@ namespace ValoCase.UI.Screens
             RefreshInputSummary();
             UpdateTargetPanel(_selectedTarget);   // keep target preview
             RebuildGrid();                          // lists refresh from real inventory data
+            RefreshChance();
+        }
+
+        // ── Backend-authoritative upgrade ───────────────────────────────────────
+        // Mirrors the local sequence's UI choreography (freeze selection → animate →
+        // result → reconcile) but the decision and the consume/grant happen server-side.
+        // Unity sends real backend itemIds, never calls TryUpgradeMulti, and reconciles
+        // by resyncing inventory after the result is shown.
+        IEnumerator BackendUpgradeSequence(GameContext ctx, List<SkinDefinitionSO> inputs,
+            SkinDefinitionSO target, float localChance)
+        {
+            // Freeze on-screen selection/preview through the request + animation, exactly
+            // like the local path, so the win/lose flow renders against stable state.
+            GameEvents.OnInventoryChanged -= HandleInventoryChanged;
+
+            UpgradeBackendResult result = null;
+            yield return ctx.UpgradeBackendRoutine(inputs, target, r => result = r);
+
+            // ── Failure: no spin. Re-enable UI; the routine already resynced when the
+            //    local cache may be stale. Keep the popup/selection usable. ──
+            if (result == null || !result.Ok)
+            {
+                GameEvents.OnInventoryChanged += HandleInventoryChanged;
+                _isUpgrading = false;
+                _spinAnimator?.ResetNeedle();
+                if (!string.IsNullOrEmpty(result?.Error)) GameEvents.RaiseToast(result.Error);
+                RefreshInputSummary();
+                UpdateTargetPanel(_selectedTarget);
+                RebuildGrid();
+                RefreshChance();
+                yield break;
+            }
+
+            bool success = result.Success;
+            var resolvedTarget = result.Target != null ? result.Target : target;
+
+            // Needle uses the same local estimate the player already saw before clicking
+            // (avoids any chance-scale mismatch); the server chance is logged in GameContext.
+            _spinAnimator?.SetChance(localChance);
+            yield return StartCoroutine(_spinAnimator.AnimateSpin(localChance, success, null));
+            SoundManager.Instance?.Play(success ? SoundId.CaseReveal : SoundId.UiBack);
+            yield return StartCoroutine(PlayResultFlash(success));
+
+            if (success)
+            {
+                var popup = ValoCase.UI.SkinWinPopup.EnsureExists();
+                if (popup != null) popup.Show(resolvedTarget, null);
+                else GameEvents.RaiseToast("Tebrikler! " + resolvedTarget.SkinName + " kazanildi");
+            }
+            else
+            {
+                GameEvents.RaiseToast("BASARISIZ — skinler kaybedildi");
+            }
+
+            // ── Reconcile with authoritative backend inventory. The resync raises
+            //    OnInventoryChanged asynchronously; HandleInventoryChanged (re-subscribed)
+            //    then drops the consumed inputs. We also clear locally for an immediate UI. ──
+            GameEvents.OnInventoryChanged += HandleInventoryChanged;
+            ctx.RequestBackendResync();
+
+            _selectedInputs.Clear();
+            _isUpgrading = false;
+            _spinAnimator?.ResetNeedle();
+
+            RefreshInputSummary();
+            UpdateTargetPanel(_selectedTarget);   // keep target preview
+            RebuildGrid();
             RefreshChance();
         }
 

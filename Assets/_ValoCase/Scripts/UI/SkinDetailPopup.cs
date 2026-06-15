@@ -22,6 +22,7 @@ namespace ValoCase.UI
         [SerializeField] Button closeButton;
 
         string _skinId;
+        bool _sellInFlight;   // guards against double-sell while a backend call is pending
 
         void Awake()
         {
@@ -38,6 +39,10 @@ namespace ValoCase.UI
             if (skin == null) return;
 
             _skinId = skinId;
+            // Reset the in-flight guard each time the popup opens so a previous
+            // backend sale (which disabled the button) never leaves it stuck.
+            _sellInFlight = false;
+            if (sellButton != null) sellButton.interactable = true;
             if (root != null) root.SetActive(true);
 
             if (icon != null)
@@ -65,8 +70,34 @@ namespace ValoCase.UI
         void Sell()
         {
             var ctx = GameContext.Instance;
-            // Phase-4: one economy call (TrySell + RecordVpEarned + recalc + save).
-            if (ctx?.Economy != null && ctx.Economy.SellOne(_skinId, out _))
+            if (ctx == null) return;
+
+            // ── Backend mode: server is authoritative. No local VP add, no local
+            //    inventory remove. Disable the button until the response lands. ──
+            if (ctx.BackendEnabled)
+            {
+                if (_sellInFlight) return;
+                _sellInFlight = true;
+                if (sellButton != null) sellButton.interactable = false;
+
+                ctx.SellOneBackend(_skinId,
+                    onSold: _ =>
+                    {
+                        _sellInFlight = false;
+                        SoundManager.Instance?.Play(SoundId.SellSkin);
+                        Hide();   // Show() re-enables the button next time it opens
+                    },
+                    onFailed: msg =>
+                    {
+                        _sellInFlight = false;
+                        if (sellButton != null) sellButton.interactable = true;
+                        if (!string.IsNullOrEmpty(msg)) GameEvents.RaiseToast(msg);
+                    });
+                return;
+            }
+
+            // ── Local mode (unchanged): one economy call (TrySell + record + save). ──
+            if (ctx.Economy != null && ctx.Economy.SellOne(_skinId, out _))
             {
                 SoundManager.Instance?.Play(SoundId.SellSkin);
                 Hide();
