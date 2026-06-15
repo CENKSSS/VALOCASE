@@ -45,6 +45,12 @@ namespace ValoCase.UI.Screens
         GameObject                   _resultOverlay;
         bool                         _panelsStaged;
 
+        // Optimistic warmup state (backend async path only). _warmupRunning gates the
+        // in-flight warmup coroutine; _warmupShown records that the reels were already
+        // revealed + spinning so RunBattle skips its own waiting→reel transition.
+        bool                         _warmupRunning;
+        bool                         _warmupShown;
+
         // Battle authority seam (economy / result generation / rewards / stats / save).
         // The screen no longer spends VP or grants skins directly — it calls this.
         IBattleService               _battleService;
@@ -61,6 +67,8 @@ namespace ValoCase.UI.Screens
             _result = null;
             _panels.Clear();
             _panelsStaged = false;
+            _warmupRunning = false;
+            _warmupShown   = false;
             DismissResultPopup();
 
             EnsureBattleService();
@@ -180,6 +188,7 @@ namespace ValoCase.UI.Screens
             // its roulette reel only when START BATTLE is pressed.
             _panels.Clear();
             _panelsStaged = false;
+            _warmupShown  = false;
             StartCoroutine(StageBattlePanels());
         }
 
@@ -335,9 +344,10 @@ namespace ValoCase.UI.Screens
                 return;
             }
 
-            // Backend (async) is the default when enabled: call the server before any
-            // animation. Flip to Running immediately so the CTA can't be re-pressed
-            // during the network call; revert to Ready on failure.
+            // Backend (async) is the default when enabled: start the reel warmup
+            // INSTANTLY and call the server in parallel. Flip to Running immediately so
+            // the CTA can't be re-pressed during the network call; revert to Ready on
+            // failure. The reels only LAND on the authoritative server rolls/winner.
             if (_battleService.IsAsync)
             {
                 if (_state != RoomState.Ready) return;
@@ -352,13 +362,80 @@ namespace ValoCase.UI.Screens
             ApplyStartResult(start);
         }
 
-        // Drives the async backend start: await the result, then either run the
-        // animation (success) or surface a safe message and stay usable (failure).
+        // Drives the async backend start: kick off the warmup immediately, run the
+        // request in parallel, then stop the warmup and either run the determined
+        // animation (success) or revert to a usable Ready room (failure).
         IEnumerator StartBattleRoutine()
         {
+            StartCoroutine(BattleWarmupRoutine());
+
             BattleStartResult start = null;
             yield return _battleService.BeginBattle(_lobby, r => start = r);
+
+            StopBattleWarmup();
             ApplyStartResult(start);
+        }
+
+        // Instant feedback: transition the staged panels into spinning reels and free-
+        // scroll filler while the server decides. No winner, rewards, VP, or inventory
+        // are touched here — this is purely the loading/reel animation.
+        IEnumerator BattleWarmupRoutine()
+        {
+            _warmupRunning = true;
+
+            while (!_panelsStaged) yield return null;
+            if (!_warmupRunning) yield break;   // resolved/failed before staging finished
+
+            var pool  = ResolveWarmupPool();
+            int count = _panels.Count;
+
+            SetRoomStatus("OPENING CASES…", ColorPalette.ActiveRed);
+            for (int i = 0; i < count; i++)
+            {
+                if (pool != null) _panels[i].SetReelPool(pool);
+                StartCoroutine(_panels[i].HideWaiting(0.25f));
+                _panels[i].SetStatus("PLAYING", ColorPalette.ActiveRed);
+            }
+            _warmupShown = true;   // reels are now revealed — RunBattle won't redo this
+
+            yield return new WaitForSecondsRealtime(0.28f);
+            if (!_warmupRunning) yield break;
+
+            for (int i = 0; i < count; i++)
+                _panels[i].BeginWarmupSpin(pool);
+        }
+
+        void StopBattleWarmup()
+        {
+            _warmupRunning = false;
+            foreach (var p in _panels)
+                p?.StopWarmupSpin();
+        }
+
+        // Resolves the case's drop-table skins for warmup filler — the same pool the
+        // backend result will carry (BuildReelPool), available locally at tap time.
+        IReadOnlyList<SkinDefinitionSO> ResolveWarmupPool()
+        {
+            var ctx = GameContext.Instance;
+            if (ctx?.Content == null) return null;
+
+            var caseDef = new BattleOpeningEngine(ctx.Content, ctx.CaseOpening).ResolveCase(_lobby);
+            if (caseDef?.DropTable?.PossibleDrops == null) return null;
+
+            var pool = new List<SkinDefinitionSO>();
+            foreach (var drop in caseDef.DropTable.PossibleDrops)
+                if (drop?.skin != null) pool.Add(drop.skin);
+            return pool.Count > 0 ? pool : null;
+        }
+
+        // Returns the reels to the pre-battle waiting presentation after a failed start
+        // that had already begun the optimistic warmup.
+        void RevertPanelsToWaiting()
+        {
+            foreach (var p in _panels)
+                p?.ShowWaiting();
+            _warmupShown = false;
+            SetRoomStatus("WAITING TO START", ColorPalette.TextDim);
         }
 
         // Shared handling of a start result for both paths. The screen reproduces the
@@ -369,6 +446,7 @@ namespace ValoCase.UI.Screens
             if (start == null || start.Status == BattleStartStatus.BackendError)
             {
                 GameEvents.RaiseToast("Battle could not start. Please try again.");
+                RevertPanelsToWaiting();
                 _state = RoomState.Ready;
                 UpdateCta();
                 return;
@@ -384,11 +462,13 @@ namespace ValoCase.UI.Screens
 
                 case BattleStartStatus.InsufficientFunds:
                     GameEvents.RaiseToast("Not enough VP to join this battle");
+                    RevertPanelsToWaiting();
                     _state = RoomState.Ready;
                     UpdateCta();
                     return;
 
                 case BattleStartStatus.ServiceUnavailable:
+                    RevertPanelsToWaiting();
                     _state = RoomState.Ready;
                     UpdateCta();
                     return;
@@ -531,19 +611,24 @@ namespace ValoCase.UI.Screens
 
             int count = Mathf.Min(_result.PlayerCount, _panels.Count);
 
-            // Transition each staged panel out of its waiting presentation and into
-            // the roulette reel — same panels, same battle area.
+            // Always apply the authoritative reel pool from the result.
             for (int i = 0; i < count; i++)
-            {
                 _panels[i].SetReelPool(_result.ReelPool);
-                StartCoroutine(_panels[i].HideWaiting(0.25f));
+
+            // Transition staged panels into the reel — UNLESS the optimistic warmup
+            // already revealed and spun them, in which case we flow straight into the
+            // determined rounds with no extra delay or flash.
+            if (!_warmupShown)
+            {
+                for (int i = 0; i < count; i++)
+                    StartCoroutine(_panels[i].HideWaiting(0.25f));
+
+                yield return new WaitForSecondsRealtime(0.35f);
+
+                SetRoomStatus("OPENING CASES…", ColorPalette.ActiveRed);
+                for (int i = 0; i < count; i++)
+                    _panels[i].SetStatus("PLAYING", ColorPalette.ActiveRed);
             }
-
-            yield return new WaitForSecondsRealtime(0.35f);
-
-            SetRoomStatus("OPENING CASES…", ColorPalette.ActiveRed);
-            for (int i = 0; i < count; i++)
-                _panels[i].SetStatus("PLAYING", ColorPalette.ActiveRed);
 
             const float baseDur = 1.9f;
 

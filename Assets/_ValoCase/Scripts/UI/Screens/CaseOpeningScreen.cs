@@ -46,6 +46,7 @@ namespace ValoCase.UI.Screens
         CaseDefinitionSO _selected;
         bool _buttonReady;
         bool _showingResult;
+        Coroutine _spinWatchdog;
         bool _backBtnCreated;
         GameObject _runtimeBackBtn;
 
@@ -933,10 +934,13 @@ namespace ValoCase.UI.Screens
                     onSpinStarting: () =>
                     {
                         ShowSpinOverlay(true);
-                        StartCoroutine(SpinEndWatchdog());
+                        _spinWatchdog = StartCoroutine(SpinEndWatchdog());
                     },
                     onFailed: msg =>
                     {
+                        // Stop the watchdog so the in-flight warmup never resolves into
+                        // a bogus reveal — the open was rejected, nothing was granted.
+                        if (_spinWatchdog != null) { StopCoroutine(_spinWatchdog); _spinWatchdog = null; }
                         ShowSpinOverlay(false);
                         EnsureInteractive();
                         RefreshOpenButton();
@@ -957,7 +961,10 @@ namespace ValoCase.UI.Screens
         // Fallback: if OnCaseOpened event never fired, completes manually.
         IEnumerator SpinEndWatchdog()
         {
-            const float extra = 10f;
+            // Backend mode adds an optimistic warmup that can legitimately run for the
+            // network round-trip (up to the request timeout) before the reel lands, so
+            // the safety-net limit must clear that window or it would fire mid-spin.
+            var extra   = GameContext.Instance?.BackendEnabled == true ? 25f : 10f;
             var limit   = GameConstants.CaseSpinDurationSeconds + extra;
             var elapsed = 0f;
 

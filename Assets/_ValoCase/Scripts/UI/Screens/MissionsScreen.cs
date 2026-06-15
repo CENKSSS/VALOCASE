@@ -39,6 +39,8 @@ namespace ValoCase.UI.Screens
             public Button           Btn;
             public TextMeshProUGUI  BtnText;
             public Outline          CardOutline;
+            public TextMeshProUGUI  TitleText;
+            public TextMeshProUGUI  RewardText;
         }
 
         MissionSystem _system;
@@ -47,6 +49,12 @@ namespace ValoCase.UI.Screens
         RectTransform _contentRt;
         float         _cellW;
         float         _cellH;
+
+        // Centered "loading / empty" label shown inside the scroll area while there are
+        // no cards (backend mode, before the first response or on an empty list). It is
+        // the only thing shown when no backend data is available — never local missions.
+        GameObject      _loadingGo;
+        TextMeshProUGUI _loadingLbl;
 
         // Backend mode (runtime only). In local mode these stay empty and every card
         // accessor delegates to the local MissionSystem exactly as before.
@@ -71,16 +79,37 @@ namespace ValoCase.UI.Screens
         {
             gameObject.SetActive(true);
 
-            // Backend mode: pull the authoritative mission list first, then build/refresh
-            // the same card grid from it. Local mode is unchanged.
+            // Backend mode: open INSTANTLY and stay fully backend-authoritative. Build
+            // the screen frame immediately, then show the grid sized to backend data
+            // only — the cached backend list if we have one from a previous open,
+            // otherwise a loading state (NEVER local missions). The authoritative list
+            // is fetched in parallel and the grid is resized to it on arrival.
             if (GameContext.Instance != null && GameContext.Instance.BackendEnabled)
             {
                 _backend = true;
+                BuildChrome();
+
+                if (_backendMissions != null && _backendMissions.Length > 0)
+                {
+                    EnsureCards(_backendMissions.Length);   // cached backend missions
+                    SetLoading(false);
+                    SortCards();
+                    Refresh();
+                }
+                else
+                {
+                    EnsureCards(0);                         // no cache yet
+                    SetLoading(true, "LOADING…");           // frame + loading, no locals
+                }
+
                 StartCoroutine(ShowBackendRoutine());
                 return;
             }
 
-            BuildOnce();
+            // Local / offline mode — unchanged: the full local mission set.
+            BuildChrome();
+            EnsureCards(MissionSystem.MissionCount);
+            SetLoading(false);
             SortCards();
             Refresh();
         }
@@ -93,24 +122,100 @@ namespace ValoCase.UI.Screens
                 err => { if (!string.IsNullOrEmpty(err)) GameEvents.RaiseToast(err); done = true; });
 
             while (!done) yield return null;
-            if (!ok || _backendMissions == null) yield break;
 
-            // Build the grid for the backend mission count on first show; reuse it after.
-            if (!_built) BuildOnce();
-            if (_claimInFlight == null || _claimInFlight.Length != _cards.Length)
-                _claimInFlight = new bool[_cards.Length];
+            // On failure keep the screen open with whatever it is already showing
+            // (cached backend list, or the loading state); the err callback surfaced the
+            // message. Never fall back to local missions here.
+            if (!ok || _backendMissions == null)
+            {
+                if (_cards == null || _cards.Length == 0)
+                    SetLoading(true, "MISSIONS UNAVAILABLE");
+                yield break;
+            }
 
+            // Authoritative data arrived — resize the grid to EXACTLY the backend count
+            // (adds missing cards, removes surplus) and bind it.
+            int count = _backendMissions.Length;
+            EnsureCards(count);
+            SetLoading(count == 0, "NO MISSIONS");
             SortCards();
             Refresh();
         }
 
+        void EnsureClaimInFlight()
+        {
+            int len = _cards != null ? _cards.Length : 0;
+            if (_claimInFlight == null || _claimInFlight.Length != len)
+                _claimInFlight = new bool[len];
+        }
+
+        // ── Loading / empty state ─────────────────────────────────────────────
+        void SetLoading(bool show, string text = null)
+        {
+            if (_loadingGo == null) return;
+            if (show && _loadingLbl != null && !string.IsNullOrEmpty(text))
+                _loadingLbl.text = text;
+            _loadingGo.SetActive(show);
+        }
+
+        // Creates/destroys cards so the grid holds EXACTLY `count` cards, and resizes the
+        // scroll content to match. The single source of truth for how many missions
+        // render: in backend mode the caller always passes the backend list length.
+        void EnsureCards(int count)
+        {
+            if (_contentRt == null) return;
+            count = Mathf.Max(0, count);
+
+            if (_cards == null) _cards = new CardRefs[0];
+            int old = _cards.Length;
+
+            if (count > old)
+            {
+                var arr = new CardRefs[count];
+                System.Array.Copy(_cards, arr, old);
+                _cards = arr;
+                var circle = GetCircleSprite();
+                for (int i = old; i < count; i++)
+                {
+                    int   col  = i % 3;
+                    int   row  = i / 3;
+                    float xPos = col * (_cellW + 8f);
+                    float yPos = 8f + row * (_cellH + 16f);
+                    BuildCard(i, _contentRt, xPos, yPos, _cellW, _cellH, circle);
+                }
+            }
+            else if (count < old)
+            {
+                for (int i = count; i < old; i++)
+                    if (_cards[i].CardRt != null) Destroy(_cards[i].CardRt.gameObject);
+                var arr = new CardRefs[count];
+                System.Array.Copy(_cards, arr, count);
+                _cards = arr;
+            }
+
+            ResizeContent(count);
+            EnsureClaimInFlight();
+        }
+
+        void ResizeContent(int count)
+        {
+            if (_contentRt == null) return;
+            int rows = count <= 0 ? 0 : Mathf.CeilToInt(count / 3f);
+            float totalH = count <= 0 ? 0f : 8f + rows * _cellH + (rows - 1) * 16f + 16f;
+            _contentRt.sizeDelta = new Vector2(0f, totalH);
+        }
+
         public void Hide() => gameObject.SetActive(false);
 
-        // ── Card data accessors (local MissionSystem or backend list) ───────────
-        // Local impls reproduce the exact values used before, so local visuals/behavior
-        // are unchanged. Backend impls read the fetched list with bounds safety.
-        int CardCount => _backend ? (_backendMissions != null ? _backendMissions.Length : 0)
-                                   : MissionSystem.MissionCount;
+        // ── Card data accessors (backend list OR local MissionSystem) ───────────
+        // In BACKEND mode every accessor reads only the authoritative backend list and
+        // returns a neutral default for an invalid index — it never reads local mission
+        // data, so ghost cards are impossible. In LOCAL mode it reads the local system
+        // exactly as before. The grid is always sized to CardCount, so invalid indices
+        // are not rendered in normal operation; the guards are pure safety.
+        int CardCount => _backend
+            ? (_backendMissions != null ? _backendMissions.Length : 0)
+            : MissionSystem.MissionCount;
 
         bool BackendIndexValid(int i) => _backendMissions != null && i >= 0 && i < _backendMissions.Length && _backendMissions[i] != null;
 
@@ -153,8 +258,11 @@ namespace ValoCase.UI.Screens
         bool CardClaimInFlight(int i)
             => _backend && _claimInFlight != null && i >= 0 && i < _claimInFlight.Length && _claimInFlight[i];
 
-        // ── Build (once) ──────────────────────────────────────────────────────
-        void BuildOnce()
+        // ── Build screen frame (once) ─────────────────────────────────────────
+        // Builds the chrome only — background, header, back button, scroll view, the
+        // (initially empty) content container, and the loading label. Cards are created
+        // separately by EnsureCards so the grid can be sized to the backend list.
+        void BuildChrome()
         {
             if (_built) return;
             _built = true;
@@ -168,13 +276,10 @@ namespace ValoCase.UI.Screens
                 panelW = (cRt != null && cRt.rect.width > 0f) ? cRt.rect.width : 390f;
             }
 
-            var circle = GetCircleSprite();
-
             const float topPad  = 110f;
             const float botPad  = 110f;
             const float sidePad =  12f;
             const float colGap  =   8f;
-            const float rowGap  =  16f;
             float usableW = panelW - 2f * sidePad;
             float cellW   = (usableW - 2f * colGap) / 3f;
             float cellH   = Mathf.Round(cellW * 1.75f);
@@ -248,17 +353,14 @@ namespace ValoCase.UI.Screens
             var viewportGo = NewGo("Viewport", scrollGo.transform, typeof(RectMask2D));
             Stretch(viewportGo);
 
-            int   count  = CardCount;
-            int   rows   = Mathf.CeilToInt(count / 3f);
-            float totalH = 8f + rows * cellH + (rows - 1) * rowGap + 16f;
-
+            // Content starts empty (no cards, zero height). EnsureCards fills + sizes it.
             var contentGo = NewGo("Content", viewportGo.transform);
             _contentRt = (RectTransform)contentGo.transform;
             _contentRt.anchorMin        = new Vector2(0f, 1f);
             _contentRt.anchorMax        = new Vector2(1f, 1f);
             _contentRt.pivot            = new Vector2(0.5f, 1f);
             _contentRt.anchoredPosition = Vector2.zero;
-            _contentRt.sizeDelta        = new Vector2(0f, totalH);
+            _contentRt.sizeDelta        = new Vector2(0f, 0f);
 
             var sr = scrollGo.GetComponent<ScrollRect>();
             sr.content           = _contentRt;
@@ -268,16 +370,22 @@ namespace ValoCase.UI.Screens
             sr.scrollSensitivity = 30f;
             sr.movementType      = ScrollRect.MovementType.Elastic;
 
-            // ── Build 8 cards in 3-column grid ────────────────────────────────
-            _cards = new CardRefs[count];
-            for (int i = 0; i < count; i++)
-            {
-                int   col  = i % 3;
-                int   row  = i / 3;
-                float xPos = col * (cellW + colGap);
-                float yPos = 8f + row * (cellH + rowGap);
-                BuildCard(i, _contentRt, xPos, yPos, cellW, cellH, circle);
-            }
+            _cards = new CardRefs[0];
+
+            // ── Loading / empty label (centered in the scroll area, hidden by default) ──
+            _loadingGo = NewGo("LoadingState", scrollGo.transform, typeof(Image));
+            Stretch(_loadingGo);
+            _loadingGo.GetComponent<Image>().color = Color.clear;
+            _loadingGo.GetComponent<Image>().raycastTarget = false;
+            _loadingLbl = MakeTmp(_loadingGo.transform, "Lbl", "LOADING…",
+                13f, FontStyles.Bold, TextDim);
+            _loadingLbl.alignment        = TextAlignmentOptions.Center;
+            _loadingLbl.characterSpacing = 3f;
+            _loadingLbl.raycastTarget    = false;
+            var llRt = _loadingLbl.rectTransform;
+            llRt.anchorMin = Vector2.zero; llRt.anchorMax = Vector2.one;
+            llRt.offsetMin = llRt.offsetMax = Vector2.zero;
+            _loadingGo.SetActive(false);
 
             backGo.transform.SetAsLastSibling();
         }
@@ -423,6 +531,8 @@ namespace ValoCase.UI.Screens
                 Btn           = btn,
                 BtnText       = btnLbl,
                 CardOutline   = ol,
+                TitleText     = titleTmp,
+                RewardText    = rewTmp,
             };
         }
 
@@ -475,6 +585,11 @@ namespace ValoCase.UI.Screens
                 : 0f;
 
             ref var c = ref _cards[i];
+
+            // Static fields are data-driven too, so when the authoritative list lands it
+            // cleanly replaces the temporary placeholder (title + reward included).
+            if (c.TitleText  != null) c.TitleText.text  = CardTitle(i);
+            if (c.RewardText != null) c.RewardText.text = $"+{CardReward(i)} VP";
 
             // Ring fill: green-dim for partial, green-full for done
             c.RingFill.fillAmount = pct;

@@ -43,13 +43,15 @@ namespace ValoCase.CaseOpening
             spinController.BeginSpin(caseDef, _rolledSkin, OnSpinFinished);
         }
 
-        // ── Backend-authoritative open ──────────────────────────────────────────
-        // Used only when GameContext.BackendEnabled is true. Waits for the server to
-        // decide + commit (spend VP, grant skin) BEFORE any spin starts. The session
-        // is marked active immediately so the back button stays blocked during the
-        // in-flight request. onSpinStarting fires once the server result is in and the
-        // spin is about to begin (the screen uses it to reveal the spin overlay +
-        // start its watchdog). onFailed fires when no spin should start at all.
+        // ── Backend-authoritative open (optimistic spin) ────────────────────────
+        // Used only when GameContext.BackendEnabled is true. The reel starts the
+        // instant the player taps (onSpinStarting + warmup spin), and the network
+        // request runs in parallel. The reward stays 100% backend-authoritative: the
+        // server still decides + commits (spend VP, grant skin), and the reel only
+        // LANDS once that result arrives (ResolveWinner). Nothing is revealed or
+        // granted on a guess. The session is marked active immediately so the back
+        // button stays blocked and double taps are ignored. onFailed fires when the
+        // server rejects the open — the warmup is stopped gracefully and no grant runs.
         public void StartOpeningBackend(CaseDefinitionSO caseDef, Action onSpinStarting, Action<string> onFailed)
         {
             if (_sessionActive || caseDef == null) return;
@@ -60,13 +62,20 @@ namespace ValoCase.CaseOpening
                 return;
             }
 
-            _activeCase = caseDef;
+            _activeCase    = caseDef;
             _sessionActive = true;
-            _backendMode = true;
-            StartCoroutine(BackendOpenRoutine(caseDef, onSpinStarting, onFailed));
+            _backendMode   = true;
+            _rolledSkin    = null;
+
+            // Instant feedback — reveal overlay + start the free-scrolling reel NOW,
+            // before the network call. The winner is filled in by the server result.
+            onSpinStarting?.Invoke();
+            spinController.BeginWarmupSpin(caseDef);
+
+            StartCoroutine(BackendOpenRoutine(caseDef, onFailed));
         }
 
-        IEnumerator BackendOpenRoutine(CaseDefinitionSO caseDef, Action onSpinStarting, Action<string> onFailed)
+        IEnumerator BackendOpenRoutine(CaseDefinitionSO caseDef, Action<string> onFailed)
         {
             var ctx = GameContext.Instance;
 
@@ -77,10 +86,11 @@ namespace ValoCase.CaseOpening
                 r => response = r,
                 e => error = e);
 
-            // ── Request failed BEFORE any local commit — no spin, no spend, no grant.
+            // ── Request failed BEFORE any local commit — stop the reel, no spend/grant.
             if (error != null || response == null)
             {
                 Debug.LogWarning("[FLOW] Backend open failed — " + (error?.ToString() ?? "null response"));
+                spinController.CancelSpin();
                 // Ambiguous transport failure (status 0) may have committed server-side:
                 // reconcile wallet + inventory before we surface anything.
                 if (error == null || error.HttpStatus == 0)
@@ -97,10 +107,11 @@ namespace ValoCase.CaseOpening
             if (skin == null)
             {
                 // Server committed but we cannot resolve the skin locally. Do NOT
-                // fake-grant or refund. Apply the authoritative wallet, reconcile
-                // inventory from the server, and show a safe message.
+                // fake-grant or refund. Stop the reel, apply the authoritative wallet,
+                // reconcile inventory from the server, and show a safe message.
                 Debug.LogError("[FLOW] Backend won skinId not resolvable locally: " +
                                (response.wonSkin != null ? response.wonSkin.skinId : "null"));
+                spinController.CancelSpin();
                 ctx.ApplyBackendWallet(response.newVpBalance);
                 ctx.RequestBackendResync();
                 AbortBackendSession();
@@ -121,9 +132,8 @@ namespace ValoCase.CaseOpening
             Debug.Log($"[FLOW] Backend open OK — case='{caseDef.CaseId}' skin='{skin.SkinName}' " +
                       $"vpSpent={_vpSpent} newBalance={response.newVpBalance}");
 
-            // ── Now reveal the spin overlay and animate toward the server skin. ──
-            onSpinStarting?.Invoke();
-            spinController.BeginSpin(caseDef, skin, OnSpinFinishedBackend);
+            // ── Lock the reel to the server skin and let it decelerate onto it. ──
+            spinController.ResolveWinner(caseDef, skin, OnSpinFinishedBackend);
         }
 
         // Clears in-flight backend state when no spin will run. Unlocks the session

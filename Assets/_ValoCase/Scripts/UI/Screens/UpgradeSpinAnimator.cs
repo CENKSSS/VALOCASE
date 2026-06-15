@@ -180,6 +180,83 @@ namespace ValoCase.UI.Screens
             onComplete?.Invoke();
         }
 
+        // ── Optimistic deferred spin (backend-authoritative upgrade) ─────────────
+        // The needle starts spinning the instant the player taps, before the server
+        // result is known, and keeps spinning until ProvideResult supplies the
+        // authoritative success/fail — then it decelerates onto the matching zone.
+        // Success/fail is NEVER guessed: the wheel just spins until the server answers.
+        bool  _hasResult;
+        bool  _resultSuccess;
+        float _resultChance;
+
+        /// <summary>Supplies the authoritative result so a deferred spin can land.</summary>
+        public void ProvideResult(bool success, float chance)
+        {
+            _resultSuccess = success;
+            _resultChance  = chance;
+            _hasResult     = true;
+        }
+
+        /// <summary>
+        /// Spins continuously until ProvideResult is called, then decelerates onto the
+        /// backend success/fail zone and flashes the result. previewChance only colors
+        /// the arc while waiting; the landing uses the provided result chance.
+        /// </summary>
+        public IEnumerator SpinUntilResolved(float previewChance, Action<bool> onComplete)
+        {
+            _hasResult = false;
+            SetChance(previewChance);
+
+            if (_needlePivot == null)
+            {
+                while (!_hasResult) yield return null;
+                onComplete?.Invoke(_resultSuccess);
+                yield break;
+            }
+
+            const float speed   = 720f;  // steady angular velocity, deg/sec (CW)
+            const float spinUp   = 0.35f; // brief ramp so the start feels natural
+            float angle = 0f;
+
+            for (float t = 0f; t < spinUp; t += Time.unscaledDeltaTime)
+            {
+                angle -= Mathf.Lerp(0f, speed, t / spinUp) * Time.unscaledDeltaTime;
+                _needlePivot.localEulerAngles = new Vector3(0f, 0f, angle);
+                yield return null;
+            }
+
+            // Free-spin until the server result is in (covers the network wait).
+            while (!_hasResult)
+            {
+                angle -= speed * Time.unscaledDeltaTime;
+                _needlePivot.localEulerAngles = new Vector3(0f, 0f, angle);
+                yield return null;
+            }
+
+            // Decelerate from the current angle onto the result zone. The final angle
+            // must be ≡ -landingDeg (mod 360) and at least a few more revolutions CW.
+            SetChance(_resultChance);
+            float landingDeg = ComputeLandingAngle(_resultChance, _resultSuccess);
+            float landingMod = -landingDeg;
+            float candidate  = angle - 1080f;  // ≥ 3 extra revolutions
+            float final      = candidate - Mathf.Repeat(candidate - landingMod, 360f);
+
+            const float decel = 2.4f;
+            float start = angle;
+            for (float t = 0f; t < decel; t += Time.unscaledDeltaTime)
+            {
+                float eased = EaseOutQuint(Mathf.Clamp01(t / decel));
+                _needlePivot.localEulerAngles = new Vector3(0f, 0f, Mathf.Lerp(start, final, eased));
+                yield return null;
+            }
+            _needlePivot.localEulerAngles = new Vector3(0f, 0f, final);
+
+            yield return new WaitForSecondsRealtime(0.35f);
+            yield return StartCoroutine(FlashResultColor(_resultSuccess));
+
+            onComplete?.Invoke(_resultSuccess);
+        }
+
         // ─────────────────────────────────────────────────────────────────────
         // INTERNAL
         // ─────────────────────────────────────────────────────────────────────

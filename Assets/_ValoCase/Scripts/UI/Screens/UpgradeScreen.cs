@@ -1424,11 +1424,11 @@ namespace ValoCase.UI.Screens
             RefreshChance();
         }
 
-        // ── Backend-authoritative upgrade ───────────────────────────────────────
-        // Mirrors the local sequence's UI choreography (freeze selection → animate →
-        // result → reconcile) but the decision and the consume/grant happen server-side.
-        // Unity sends real backend itemIds, never calls TryUpgradeMulti, and reconciles
-        // by resyncing inventory after the result is shown.
+        // ── Backend-authoritative upgrade (optimistic spin) ─────────────────────
+        // The needle starts spinning the instant the player taps; the backend request
+        // runs in parallel. The decision and the consume/grant still happen server-side
+        // — Unity never calls TryUpgradeMulti and never guesses success/fail. The wheel
+        // free-spins until the server answers, then lands on the authoritative result.
         IEnumerator BackendUpgradeSequence(GameContext ctx, List<SkinDefinitionSO> inputs,
             SkinDefinitionSO target, float localChance)
         {
@@ -1436,13 +1436,23 @@ namespace ValoCase.UI.Screens
             // like the local path, so the win/lose flow renders against stable state.
             GameEvents.OnInventoryChanged -= HandleInventoryChanged;
 
+            // Start the spin NOW (instant feedback) and fire the request in parallel.
             UpgradeBackendResult result = null;
-            yield return ctx.UpgradeBackendRoutine(inputs, target, r => result = r);
+            bool requestDone = false;
+            StartCoroutine(RequestUpgrade(ctx, inputs, target, r => { result = r; requestDone = true; }));
 
-            // ── Failure: no spin. Re-enable UI; the routine already resynced when the
-            //    local cache may be stale. Keep the popup/selection usable. ──
+            bool spinFinished = false;
+            var spinCo = StartCoroutine(
+                _spinAnimator.SpinUntilResolved(localChance, _ => spinFinished = true));
+
+            // Wait for the authoritative server result (the wheel keeps spinning).
+            while (!requestDone) yield return null;
+
+            // ── Failure: stop the spin gracefully, re-enable UI. The routine already
+            //    resynced when the local cache may be stale. Keep selection usable. ──
             if (result == null || !result.Ok)
             {
+                if (spinCo != null) StopCoroutine(spinCo);
                 GameEvents.OnInventoryChanged += HandleInventoryChanged;
                 _isUpgrading = false;
                 _spinAnimator?.ResetNeedle();
@@ -1457,10 +1467,13 @@ namespace ValoCase.UI.Screens
             bool success = result.Success;
             var resolvedTarget = result.Target != null ? result.Target : target;
 
-            // Needle uses the same local estimate the player already saw before clicking
-            // (avoids any chance-scale mismatch); the server chance is logged in GameContext.
-            _spinAnimator?.SetChance(localChance);
-            yield return StartCoroutine(_spinAnimator.AnimateSpin(localChance, success, null));
+            // Hand the authoritative result to the wheel so it decelerates onto it.
+            // The chance keeps the same local estimate the player saw before clicking.
+            _spinAnimator.ProvideResult(success, localChance);
+
+            // Wait for the spin + arc flash to finish on the real result.
+            while (!spinFinished) yield return null;
+
             SoundManager.Instance?.Play(success ? SoundId.CaseReveal : SoundId.UiBack);
             yield return StartCoroutine(PlayResultFlash(success));
 
@@ -1489,6 +1502,15 @@ namespace ValoCase.UI.Screens
             UpdateTargetPanel(_selectedTarget);   // keep target preview
             RebuildGrid();
             RefreshChance();
+        }
+
+        // Runs the backend upgrade request to completion and reports the result.
+        IEnumerator RequestUpgrade(GameContext ctx, List<SkinDefinitionSO> inputs,
+            SkinDefinitionSO target, Action<UpgradeBackendResult> onDone)
+        {
+            UpgradeBackendResult r = null;
+            yield return ctx.UpgradeBackendRoutine(inputs, target, x => r = x);
+            onDone?.Invoke(r);
         }
 
         // ─────────────────────────────────────────────────────────────────────

@@ -490,6 +490,73 @@ namespace ValoCase.UI
             if (pool != null && pool.Count > 0) _pool = pool;
         }
 
+        // ── Optimistic warmup spin (backend-authoritative battle) ────────────────
+        // Reveals the reel and free-scrolls random filler the instant the player taps,
+        // before the server result is known. StopWarmupSpin halts it; the real
+        // per-round SpinRound (which sets its own start position + bindings) then takes
+        // over. No outcome is shown — warmup is pure filler motion.
+        bool _warmupActive;
+        Coroutine _warmupCo;
+        readonly List<SkinDefinitionSO> _warmupBind = new List<SkinDefinitionSO>();
+
+        public void BeginWarmupSpin(IReadOnlyList<SkinDefinitionSO> pool)
+        {
+            if (pool != null && pool.Count > 0) _pool = pool;
+            if (_reelContent == null || _cards.Count == 0) return;
+
+            if (_reelWindow != null)
+            {
+                _reelWindow.gameObject.SetActive(true);
+                if (_reelCg != null) _reelCg.alpha = 1f;
+            }
+
+            _warmupBind.Clear();
+            for (int i = 0; i < _cards.Count; i++)
+            {
+                var s = RandomFiller();
+                _warmupBind.Add(s);
+                BindCard(_cards[i], s);
+            }
+            ResetReelStyle();
+            _reelContent.anchoredPosition = Vector2.zero;
+
+            _warmupActive = true;
+            if (_warmupCo != null) StopCoroutine(_warmupCo);
+            _warmupCo = StartCoroutine(WarmupLoop());
+        }
+
+        // Seamless infinite scroll: slides the content down by up to one card, then
+        // wraps back up while rotating the card bindings down one slot (card 0 gets a
+        // fresh filler). The wrap+rotate is visually identical, so it loops forever.
+        IEnumerator WarmupLoop()
+        {
+            float speed = _cardH * 9f;
+            float aY    = 0f;
+
+            while (_warmupActive)
+            {
+                aY -= speed * Time.unscaledDeltaTime;
+                while (aY <= -_cardH)
+                {
+                    aY += _cardH;
+                    for (int i = _cards.Count - 1; i > 0; i--)
+                        _warmupBind[i] = _warmupBind[i - 1];
+                    _warmupBind[0] = RandomFiller();
+                    for (int i = 0; i < _cards.Count; i++)
+                        BindCard(_cards[i], _warmupBind[i]);
+                }
+                _reelContent.anchoredPosition = new Vector2(0f, aY);
+                yield return null;
+            }
+        }
+
+        public void StopWarmupSpin()
+        {
+            _warmupActive = false;
+            if (_warmupCo != null) { StopCoroutine(_warmupCo); _warmupCo = null; }
+            if (_reelContent != null) _reelContent.anchoredPosition = Vector2.zero;
+        }
+
         public void ShowWaiting()
         {
             if (_reelWindow != null)
