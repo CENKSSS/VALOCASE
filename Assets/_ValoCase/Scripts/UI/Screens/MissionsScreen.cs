@@ -666,6 +666,10 @@ namespace ValoCase.UI.Screens
             ctx.ClaimMissionBackend(mission.missionId,
                 res =>
                 {
+                    // Guard: runs from the persistent GameContext; may fire after this
+                    // screen was destroyed by navigation. (mission.status was already
+                    // committed server-side; only the UI mutation is skipped.)
+                    if (this == null) return;
                     _claimInFlight[index] = false;
                     // Wallet already applied by the helper. Mark this mission claimed
                     // from the authoritative status so it cannot be claimed again.
@@ -677,6 +681,7 @@ namespace ValoCase.UI.Screens
                 },
                 err =>
                 {
+                    if (this == null) return;
                     _claimInFlight[index] = false;
                     if (!string.IsNullOrEmpty(err)) GameEvents.RaiseToast(err);
                     RefreshCard(index);

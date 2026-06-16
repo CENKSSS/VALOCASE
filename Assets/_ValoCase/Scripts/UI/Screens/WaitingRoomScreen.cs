@@ -7,6 +7,7 @@ using UnityEngine.UI;
 using ValoCase.Battle;
 using ValoCase.Core;
 using ValoCase.Data;
+using ValoCase.Services.Backend;
 using ValoCase.UI;
 using static ValoCase.UI.UIBuild;
 
@@ -51,6 +52,10 @@ namespace ValoCase.UI.Screens
         bool                         _warmupRunning;
         bool                         _warmupShown;
 
+        // True once this battle's result has been settled (rewards/stats), so leaving
+        // mid-animation cannot leave VP spent without settlement, and cannot double-settle.
+        bool                         _resultSettled;
+
         // Battle authority seam (economy / result generation / rewards / stats / save).
         // The screen no longer spends VP or grants skins directly — it calls this.
         IBattleService               _battleService;
@@ -69,6 +74,7 @@ namespace ValoCase.UI.Screens
             _panelsStaged = false;
             _warmupRunning = false;
             _warmupShown   = false;
+            _resultSettled = false;
             DismissResultPopup();
 
             EnsureBattleService();
@@ -85,9 +91,26 @@ namespace ValoCase.UI.Screens
 
         public void Hide()
         {
+            ForceSettleIfNeeded();
             StopAllCoroutines();
             DismissResultPopup();
             gameObject.SetActive(false);
+        }
+
+        // Safety net for leaving/disabling mid-battle: if a battle is running and its
+        // result is already known but not yet settled, settle it ONCE before the running
+        // coroutine is killed by StopAllCoroutines — otherwise local mode would have
+        // spent the entry cost with no reward/stat settlement. Idempotent via
+        // _resultSettled and the service's own distributed/recorded guards. If the
+        // result is not known yet (e.g. a backend battle still awaiting the server), we
+        // do NOT settle — no rewards are invented.
+        void ForceSettleIfNeeded()
+        {
+            if (_resultSettled) return;
+            if (_state != RoomState.Running) return;
+            if (_result == null) return;
+            _battleService?.Settle(_result);
+            _resultSettled = true;
         }
 
         void DismissResultPopup()
@@ -96,7 +119,11 @@ namespace ValoCase.UI.Screens
             _resultOverlay = null;
         }
 
-        void OnDisable() => StopAllCoroutines();
+        void OnDisable()
+        {
+            ForceSettleIfNeeded();
+            StopAllCoroutines();
+        }
 
         void BuildOnce()
         {
@@ -351,6 +378,14 @@ namespace ValoCase.UI.Screens
             if (_battleService.IsAsync)
             {
                 if (_state != RoomState.Ready) return;
+
+                // Offline pre-check: stay Ready, restore CTA, no warmup, no spend.
+                if (BackendErrorMapper.IsOffline)
+                {
+                    GameEvents.RaiseToast(BackendErrorMapper.Offline);
+                    return;
+                }
+
                 _state = RoomState.Running;
                 UpdateCta();
                 StartCoroutine(StartBattleRoutine());
@@ -445,7 +480,9 @@ namespace ValoCase.UI.Screens
         {
             if (start == null || start.Status == BattleStartStatus.BackendError)
             {
-                GameEvents.RaiseToast("Battle could not start. Please try again.");
+                GameEvents.RaiseToast(!string.IsNullOrEmpty(start?.Message)
+                    ? start.Message
+                    : BackendErrorMapper.Generic);
                 RevertPanelsToWaiting();
                 _state = RoomState.Ready;
                 UpdateCta();
@@ -700,7 +737,13 @@ namespace ValoCase.UI.Screens
 
             // Service owns rewards (inventory grant) + statistics + saves, in the same
             // order as before. The screen no longer touches VP or inventory directly.
-            _battleService?.Settle(_result);
+            // Guarded by _resultSettled so a leave-triggered force-settle and this normal
+            // settle never both run (and the service's own guards back this up).
+            if (!_resultSettled)
+            {
+                _battleService?.Settle(_result);
+                _resultSettled = true;
+            }
 
             _state = RoomState.Finished;
             UpdateCta();

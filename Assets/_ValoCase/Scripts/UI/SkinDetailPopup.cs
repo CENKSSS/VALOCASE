@@ -83,12 +83,16 @@ namespace ValoCase.UI
                 ctx.SellOneBackend(_skinId,
                     onSold: _ =>
                     {
+                        // Guard: this callback runs from the persistent GameContext and may
+                        // fire after the popup was destroyed by navigation.
+                        if (this == null) return;
                         _sellInFlight = false;
                         SoundManager.Instance?.Play(SoundId.SellSkin);
                         Hide();   // Show() re-enables the button next time it opens
                     },
                     onFailed: msg =>
                     {
+                        if (this == null) return;
                         _sellInFlight = false;
                         if (sellButton != null) sellButton.interactable = true;
                         if (!string.IsNullOrEmpty(msg)) GameEvents.RaiseToast(msg);

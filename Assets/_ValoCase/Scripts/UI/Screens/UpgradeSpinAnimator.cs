@@ -160,10 +160,11 @@ namespace ValoCase.UI.Screens
                 yield break;
             }
 
-            float landingDeg  = ComputeLandingAngle(chance, success);
+            // Land at euler-z ≡ ComputeLandingZ (negative = clockwise, matching the
+            // clockwise green fill), after several full clockwise revolutions.
+            float targetZ     = ComputeLandingZ(chance, success);
             int   revolutions = UnityEngine.Random.Range(5, 8);
-            float totalDeg    = revolutions * 360f + landingDeg;
-            float endZ        = -totalDeg;   // clockwise on screen = negative Z
+            float endZ        = -(revolutions * 360f) + targetZ;
 
             const float duration = 4.5f;
             for (float elapsed = 0f; elapsed < duration; elapsed += Time.unscaledDeltaTime)
@@ -234,10 +235,9 @@ namespace ValoCase.UI.Screens
             }
 
             // Decelerate from the current angle onto the result zone. The final angle
-            // must be ≡ -landingDeg (mod 360) and at least a few more revolutions CW.
+            // must be ≡ ComputeLandingZ (mod 360) and at least a few more revolutions CW.
             SetChance(_resultChance);
-            float landingDeg = ComputeLandingAngle(_resultChance, _resultSuccess);
-            float landingMod = -landingDeg;
+            float landingMod = ComputeLandingZ(_resultChance, _resultSuccess);
             float candidate  = angle - 1080f;  // ≥ 3 extra revolutions
             float final      = candidate - Mathf.Repeat(candidate - landingMod, 360f);
 
@@ -333,6 +333,28 @@ namespace ValoCase.UI.Screens
                 _successArc.color = _chanceColor;
             }
         }
+
+        // ── Landing math: SINGLE SOURCE OF TRUTH (do not flip signs casually) ──────
+        // CONVENTION, derived once so AnimateSpin and SpinUntilResolved can never drift:
+        //   • The success arc is a Radial360 Image with fillOrigin = Top and
+        //     fillClockwise = true, fillAmount = chance. So the GREEN success wedge
+        //     sweeps CLOCKWISE from 12-o'clock and spans [0 .. chance*360] degrees;
+        //     the remaining [chance*360 .. 360] is the dark fail wedge.
+        //   • The marker rides _needlePivot. Unity UI z-rotation is COUNTER-clockwise
+        //     for positive z, so a NEGATIVE euler-z moves the marker CLOCKWISE. A
+        //     landing angle of L degrees clockwise-from-top is therefore reached by
+        //     setting euler-z = -L  (that is exactly ComputeLandingZ).
+        //   • ComputeLandingAngle returns L inside the success wedge on success and
+        //     inside the fail wedge on failure (10% pad off each edge), so the marker
+        //     visually lands in the matching colour for every chance.
+        // VALIDATION:
+        //   chance 0.8 → success L∈[28.8,259.2] (within the 288° green); fail
+        //                L∈[295.2,352.8] (within the remaining 72° dark).
+        //   chance 0.2 → success L∈[7.2,64.8]   (within the 72° green);  fail
+        //                L∈[100.8,331.2] (within the remaining 288° dark).
+        // Both animation paths MUST stop at euler-z ≡ ComputeLandingZ(chance, success).
+        public static float ComputeLandingZ(float chance, bool success)
+            => -ComputeLandingAngle(chance, success);
 
         /// <summary>
         /// Landing angle (degrees CW from 12-o'clock) inside the correct zone,

@@ -28,6 +28,7 @@ namespace ValoCase.Battle
         public BattleStartStatus Status;
         public BattleResult Battle;   // non-null only on Success
         public int EntryCost;
+        public string Message;        // safe, player-facing Turkish message on failure (optional)
 
         public bool IsSuccess => Status == BattleStartStatus.Success;
 
@@ -39,8 +40,8 @@ namespace ValoCase.Battle
             => new BattleStartResult { Status = BattleStartStatus.InsufficientFunds };
         public static BattleStartResult Unavailable()
             => new BattleStartResult { Status = BattleStartStatus.ServiceUnavailable };
-        public static BattleStartResult BackendFailed()
-            => new BattleStartResult { Status = BattleStartStatus.BackendError };
+        public static BattleStartResult BackendFailed(string message = null)
+            => new BattleStartResult { Status = BattleStartStatus.BackendError, Message = message };
     }
 
     /// <summary>
@@ -178,9 +179,16 @@ namespace ValoCase.Battle
 
         public IEnumerator BeginBattle(BattleLobbyData lobby, Action<BattleStartResult> onResult)
         {
-            if (_ctx == null || !_ctx.BackendEnabled || _ctx.Backend == null)
+            if (_ctx == null || !_ctx.BackendReady)
             {
-                onResult?.Invoke(BattleStartResult.Unavailable());
+                onResult?.Invoke(BattleStartResult.BackendFailed("Sunucu kullanılamıyor."));
+                yield break;
+            }
+
+            // Offline pre-check: no entry-cost spend, no battle creation when offline.
+            if (BackendErrorMapper.IsOffline)
+            {
+                onResult?.Invoke(BattleStartResult.BackendFailed(BackendErrorMapper.Offline));
                 yield break;
             }
 
@@ -205,7 +213,7 @@ namespace ValoCase.Battle
             if (error != null || response == null)
             {
                 Debug.LogWarning("[Backend] Bot battle failed — " + (error?.ToString() ?? "null response"));
-                onResult?.Invoke(BattleStartResult.BackendFailed());
+                onResult?.Invoke(BattleStartResult.BackendFailed(BackendErrorMapper.Map(error)));
                 yield break;
             }
 

@@ -9,6 +9,7 @@ using ValoCase.Audio;
 using ValoCase.Core;
 using ValoCase.Data;
 using ValoCase.Services;
+using ValoCase.Services.Backend;
 
 namespace ValoCase.UI.Screens
 {
@@ -1352,6 +1353,15 @@ namespace ValoCase.UI.Screens
             if (_isUpgrading || !CanUpgradeNow()) return;
             var ctx = GameContext.Instance;
             if (ctx?.Upgrade == null) return;
+
+            // Offline pre-check (backend mode only): do not start the spin or lock the
+            // button when offline — no skins removed, no VP change, no target grant.
+            if (ctx.BackendEnabled && BackendErrorMapper.IsOffline)
+            {
+                GameEvents.RaiseToast(BackendErrorMapper.Offline);
+                return;
+            }
+
             _isUpgrading = true;
             SoundManager.Instance?.Play(SoundId.UiClick);
             RefreshChance();

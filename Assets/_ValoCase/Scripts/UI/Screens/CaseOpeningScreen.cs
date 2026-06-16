@@ -933,11 +933,15 @@ namespace ValoCase.UI.Screens
                 flow.StartOpeningBackend(_selected,
                     onSpinStarting: () =>
                     {
+                        // Guard: invoked from the flow controller's coroutine; skip if the
+                        // screen was destroyed by navigation before the server replied.
+                        if (this == null) return;
                         ShowSpinOverlay(true);
                         _spinWatchdog = StartCoroutine(SpinEndWatchdog());
                     },
                     onFailed: msg =>
                     {
+                        if (this == null) return;
                         // Stop the watchdog so the in-flight warmup never resolves into
                         // a bogus reveal — the open was rejected, nothing was granted.
                         if (_spinWatchdog != null) { StopCoroutine(_spinWatchdog); _spinWatchdog = null; }
@@ -982,6 +986,21 @@ namespace ValoCase.UI.Screens
             var forced = flow?.TryForceComplete();
             if (skin == null) skin = forced;
 
+            // Never force a reveal with no resolved skin. In backend mode the open may
+            // still be pending/timed-out/failed (RolledSkin null while SessionActive),
+            // and revealing null produces a blank panel that blocks the real reveal.
+            // The flow's own failure path surfaces the mapped message; here we just make
+            // sure the screen is not left stuck, and we never invent a result.
+            if (skin == null)
+            {
+                Debug.LogWarning("[CASE] Watchdog fired with no resolved skin — skipping reveal, restoring UI.");
+                ShowSpinOverlay(false);
+                EnsureInteractive();
+                RefreshOpenButton();
+                RefreshWallet();
+                yield break;
+            }
+
             StartRevealSequence(skin);
         }
 
@@ -1001,6 +1020,19 @@ namespace ValoCase.UI.Screens
         void StartRevealSequence(SkinDefinitionSO skin)
         {
             if (_showingResult) return;
+
+            // Defense-in-depth: never show a blank result panel. A null skin means the
+            // backend open is not actually ready (pending/failed) — restore safe UI and
+            // wait for the real result/failure path instead of locking into a blank reveal.
+            if (skin == null)
+            {
+                Debug.LogWarning("[CASE] StartRevealSequence called with null skin — ignoring (no blank reveal).");
+                ShowSpinOverlay(false);
+                EnsureInteractive();
+                RefreshOpenButton();
+                return;
+            }
+
             _showingResult = true;
             StartCoroutine(RevealCoroutine(skin));
         }

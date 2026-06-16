@@ -56,9 +56,17 @@ namespace ValoCase.CaseOpening
         {
             if (_sessionActive || caseDef == null) return;
             var ctx = GameContext.Instance;
-            if (ctx == null || !ctx.BackendEnabled || ctx.Backend == null)
+            if (ctx == null || !ctx.BackendReady)
             {
                 onFailed?.Invoke("Sunucu kullanılamıyor.");
+                return;
+            }
+
+            // Offline pre-check: do not start the warmup spin or any spend/grant logic
+            // when there is no connectivity — surface the offline message and bail.
+            if (BackendErrorMapper.IsOffline)
+            {
+                onFailed?.Invoke(BackendErrorMapper.Offline);
                 return;
             }
 
@@ -96,7 +104,7 @@ namespace ValoCase.CaseOpening
                 if (error == null || error.HttpStatus == 0)
                     ctx.RequestBackendResync();
                 AbortBackendSession();
-                onFailed?.Invoke("Kasa açılamadı. Lütfen tekrar deneyin.");
+                onFailed?.Invoke(BackendErrorMapper.Map(error));
                 yield break;
             }
 

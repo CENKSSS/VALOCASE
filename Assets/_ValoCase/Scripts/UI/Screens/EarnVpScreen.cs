@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -71,6 +72,24 @@ namespace ValoCase.UI.Screens
         float      _fracCarry;             // sub-1 VP not yet credited to the int wallet
         int        _shownMultCents = -1;   // label refresh throttle
 
+        // Backend Earn VP session: server is authoritative for granted VP.
+        const float ClaimIdleSeconds     = 1f;
+        const float ClaimSafetySeconds   = 20f;
+        const float RetryCooldownSeconds = 3f;
+        int    _pendingTaps;
+        long   _sessionStartMs;
+        float  _pendingEstimateVp;
+        readonly List<int> _pendingOffsetsMs = new List<int>(64);
+        float  _claimTimer;
+        float  _retryCooldown;
+        bool   _claimInFlight;
+        bool   _hasInflight;
+        int    _inflightTaps;
+        long   _inflightDurationMs;
+        string _inflightSessionId;
+        int[]  _inflightOffsetsMs;
+        int    _inflightEstimateVp;
+
         // Animation timers (Update-driven, no coroutines)
         float _punchT      = 99f;
         float _glowKick;                   // extra glow alpha, relaxes to 0
@@ -95,6 +114,12 @@ namespace ValoCase.UI.Screens
         RectTransform   _floatRoot;
         RectTransform   _particleRoot;
         RectTransform   _balanceRt;
+        TextMeshProUGUI _walletCaption;
+        TextMeshProUGUI _flyLabel;
+        RectTransform   _flyRt;
+        bool    _flyActive;
+        float   _flyT;
+        Vector2 _flyStart, _flyTarget;
 
         static readonly string[] Tips =
         {
@@ -167,12 +192,20 @@ namespace ValoCase.UI.Screens
             RefreshComboLabel();
             if (_tipLabel != null) _tipLabel.text = Tips[0];
 
+            _claimTimer    = 0f;
+            _retryCooldown = 0f;
+            _flyActive     = false;
+            if (_flyLabel != null) _flyLabel.gameObject.SetActive(false);
+            RefreshPendingLabel();
+
             GameEvents.OnVpChanged += HandleVpChanged;
         }
 
         protected override void OnHidden()
         {
             GameEvents.OnVpChanged -= HandleVpChanged;
+
+            TryFlushClaim();
 
             // Kill transient visuals so nothing lingers on next show
             for (int i = 0; i < _floats.Length; i++)
@@ -181,21 +214,37 @@ namespace ValoCase.UI.Screens
                 if (_particles[i].active) { _particles[i].active = false; _particles[i].rt.gameObject.SetActive(false); }
             _punchT = _flashT = _walletPunchT = 99f;
             _glowKick = 0f;
+            _flyActive = false;
+            if (_flyLabel != null) _flyLabel.gameObject.SetActive(false);
         }
 
         void HandleVpChanged(int _, int __)
         {
             RefreshBalance();
-            _walletPunchT = 0f;
+            if (!IsBackendEarnVp()) _walletPunchT = 0f;
+        }
+
+        static bool IsBackendEarnVp()
+        {
+            var ctx = GameContext.Instance;
+            return ctx != null && !ctx.CanUseLocalEconomy;
         }
 
         void RefreshBalance()
         {
             int bal = GameContext.Instance?.Vp?.Balance ?? 0;
-            if (_balanceLabel != null)
-                _balanceLabel.text = $"{bal:N0} <color=#FF4655>VP</color>";
             if (walletLabel != null)
                 walletLabel.text = $"{bal:N0} VP";
+
+            if (IsBackendEarnVp())
+            {
+                RefreshPendingLabel();
+                return;
+            }
+
+            if (_walletCaption != null) _walletCaption.text = "WALLET";
+            if (_balanceLabel != null)
+                _balanceLabel.text = $"{bal:N0} <color=#FF4655>VP</color>";
         }
 
         // ═════════════════════════════════════════════════════════════════════
@@ -204,23 +253,34 @@ namespace ValoCase.UI.Screens
 
         void OnTap()
         {
+            var ctx = GameContext.Instance;
+            if (ctx == null) return;
+
             float prevMult = _multiplier;
 
             float rewardVp = BaseReward * _multiplier;
             bool crit = Random.value < CritChance;
             if (crit) rewardVp *= 2f;
 
-            // The wallet only stores whole VP (IVpCurrencyService is int-based).
-            // Credit the integer part now and carry the fraction into the next
-            // tap, so the long-run total is exactly BaseReward × multiplier.
-            _fracCarry += rewardVp;
-            int grant = Mathf.FloorToInt(_fracCarry);
-            _fracCarry -= grant;
-            if (grant > 0)
+            if (ctx.CanUseLocalEconomy)
             {
-                // Phase-4: single economy entry point. save:false preserves the existing
-                // no-save-per-tap behavior (VP persists on app pause/quit as before).
-                GameContext.Instance?.Economy?.GrantReward(grant, "earn_vp", save: false);
+                // The wallet only stores whole VP; carry the fraction to the next tap.
+                _fracCarry += rewardVp;
+                int grant = Mathf.FloorToInt(_fracCarry);
+                _fracCarry -= grant;
+                if (grant > 0)
+                    ctx.Economy?.GrantReward(grant, "earn_vp", save: false);
+            }
+            else
+            {
+                // Backend-required: record tap timing only; the server grants VP on claim.
+                if (_pendingTaps == 0) _sessionStartMs = NowMs();
+                long offset = NowMs() - _sessionStartMs;
+                if (offset < 0) offset = 0;
+                _pendingOffsetsMs.Add((int)offset);
+                _pendingTaps++;
+                _pendingEstimateVp += rewardVp;
+                RefreshPendingLabel();
             }
 
             _combo++;
@@ -246,6 +306,103 @@ namespace ValoCase.UI.Screens
 
             RefreshMultiplierUi();
             RefreshComboLabel();
+        }
+
+        static long NowMs() => System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        // Sends one backend claim at a time. A failed claim keeps the same clientSessionId
+        // and retries on the next tick (server dedup makes it idempotent); a successful
+        // claim discards the session id. New taps accumulate into the next session.
+        void TryFlushClaim()
+        {
+            var ctx = GameContext.Instance;
+            if (ctx == null || ctx.CanUseLocalEconomy) return;
+            if (_claimInFlight) return;
+
+            if (!_hasInflight)
+            {
+                if (_pendingTaps <= 0) return;
+                long dur = NowMs() - _sessionStartMs;
+                if (dur < 0) dur = 0;
+                if (dur > 240000) dur = 240000;
+                _inflightTaps       = _pendingTaps;
+                _inflightDurationMs = dur;
+                _inflightOffsetsMs  = _pendingOffsetsMs.ToArray();
+                _inflightEstimateVp = Mathf.RoundToInt(_pendingEstimateVp);
+                _inflightSessionId  = System.Guid.NewGuid().ToString();
+                _pendingTaps        = 0;
+                _pendingOffsetsMs.Clear();
+                _pendingEstimateVp  = 0f;
+                _hasInflight        = true;
+            }
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            Debug.Log($"[EarnVp] TryFlushClaim sending — taps={_inflightTaps} durMs={_inflightDurationMs} offsets={(_inflightOffsetsMs != null ? _inflightOffsetsMs.Length : 0)} sessionId={_inflightSessionId}");
+#endif
+            _claimInFlight = true;
+            ctx.ClaimEarnVpSession(_inflightTaps, _inflightDurationMs, _inflightSessionId, _inflightOffsetsMs,
+                res =>
+                {
+                    if (this == null) return;
+                    _claimInFlight = false;
+                    _hasInflight   = false;
+                    _inflightEstimateVp = 0;
+                    int granted = res != null ? res.vpGranted : 0;
+                    if (granted > 0) StartFly(granted);
+                    RefreshPendingLabel();
+                    RefreshBalance();
+                },
+                msg =>
+                {
+                    if (this == null) return;
+                    _claimInFlight = false;
+                    _retryCooldown = RetryCooldownSeconds;
+                    RefreshPendingLabel();
+                    if (!string.IsNullOrEmpty(msg)) GameEvents.RaiseToast(msg);
+                });
+        }
+
+        void UpdateBackendClaim(float dt)
+        {
+            if (_hasInflight && !_claimInFlight)
+            {
+                _retryCooldown -= dt;
+                if (_retryCooldown <= 0f) TryFlushClaim();
+                return;
+            }
+            if (_claimInFlight) return;
+            if (_pendingTaps <= 0) { _claimTimer = 0f; return; }
+
+            _claimTimer += dt;
+            float idle = Time.time - _lastTapTime;
+            if (idle >= ClaimIdleSeconds || _multiplier <= 1.0001f || _claimTimer >= ClaimSafetySeconds)
+                TryFlushClaim();
+        }
+
+        void RefreshPendingLabel()
+        {
+            if (_balanceLabel == null || !IsBackendEarnVp()) return;
+            if (_walletCaption != null) _walletCaption.text = "SESSION VP";
+            int shown = Mathf.RoundToInt(_pendingEstimateVp) + (_hasInflight ? _inflightEstimateVp : 0);
+            _balanceLabel.text = shown > 0
+                ? $"+{shown} <color=#FF4655>VP</color>"
+                : $"0 <color=#FF4655>VP</color>";
+        }
+
+        void StartFly(int amount)
+        {
+            if (_flyLabel == null) return;
+            var rootRect = ((RectTransform)transform).rect;
+            _flyStart  = new Vector2(0f, rootRect.height * 0.5f - 150f);
+            _flyTarget = new Vector2(rootRect.width * 0.5f - 70f, rootRect.height * 0.5f - 60f);
+            _flyLabel.text  = $"+{amount} <color=#FF4655>VP</color>";
+            _flyLabel.color = CritGold;
+            _flyRt.anchoredPosition = _flyStart;
+            _flyRt.localScale       = Vector3.one;
+            _flyLabel.gameObject.SetActive(true);
+            _flyRt.SetAsLastSibling();
+            _flyActive = true;
+            _flyT      = 0f;
         }
 
         void ShowMilestoneFlash(float milestone)
@@ -325,6 +482,10 @@ namespace ValoCase.UI.Screens
             if (!IsVisible) return;
             float dt = Time.deltaTime;
 
+            var ctx = GameContext.Instance;
+            if (ctx != null && !ctx.CanUseLocalEconomy)
+                UpdateBackendClaim(dt);
+
             // ── Multiplier decay — starts immediately, ramps up while idle ────
             if (_multiplier > 1f)
             {
@@ -384,6 +545,25 @@ namespace ValoCase.UI.Screens
                 _walletPunchT += dt / 0.15f;
                 float s = Mathf.Lerp(1.08f, 1f, Mathf.Clamp01(_walletPunchT));
                 _balanceRt.localScale = new Vector3(s, s, 1f);
+            }
+
+            // ── Pending VP fly-to-wallet ──────────────────────────────────────
+            if (_flyActive && _flyRt != null)
+            {
+                _flyT += dt / 0.6f;
+                float p = Mathf.Clamp01(_flyT);
+                float ease = 1f - (1f - p) * (1f - p);
+                _flyRt.anchoredPosition = Vector2.LerpUnclamped(_flyStart, _flyTarget, ease);
+                float s = Mathf.Lerp(1f, 0.6f, p);
+                _flyRt.localScale = new Vector3(s, s, 1f);
+                float a = p < 0.7f ? 1f : Mathf.Lerp(1f, 0f, (p - 0.7f) / 0.3f);
+                var c = _flyLabel.color;
+                _flyLabel.color = new Color(c.r, c.g, c.b, a);
+                if (p >= 1f)
+                {
+                    _flyActive = false;
+                    _flyLabel.gameObject.SetActive(false);
+                }
             }
 
             // ── Milestone flash ───────────────────────────────────────────────
@@ -557,6 +737,18 @@ namespace ValoCase.UI.Screens
             flashRt.sizeDelta        = new Vector2(560f, 48f);
             _flashLabel.gameObject.SetActive(false);
 
+            // Fly-to-wallet chip (parented to root so it can travel to the corner)
+            _flyLabel = CreateTmp(rt, "FlyVp", "",
+                30f, FontStyles.Bold, TextAlignmentOptions.Center, CritGold);
+            _flyLabel.richText = true;
+            _flyRt = _flyLabel.rectTransform;
+            _flyRt.anchorMin = _flyRt.anchorMax = _flyRt.pivot = new Vector2(0.5f, 0.5f);
+            _flyRt.sizeDelta = new Vector2(220f, 48f);
+            var flyOl = _flyLabel.gameObject.AddComponent<Outline>();
+            flyOl.effectColor    = new Color(0f, 0f, 0f, 0.6f);
+            flyOl.effectDistance = new Vector2(1.5f, -1.5f);
+            _flyLabel.gameObject.SetActive(false);
+
             // ── Bottom: rotating tip ──────────────────────────────────────────
             _tipLabel = CreateTmp(rt, "Tip", Tips[0],
                 13f, FontStyles.Normal, TextAlignmentOptions.Center, TextSub);
@@ -579,10 +771,10 @@ namespace ValoCase.UI.Screens
         // ── Wallet block: large, premium, centered ───────────────────────────
         void BuildWalletBlock(RectTransform rt)
         {
-            var caption = CreateTmp(rt, "WalletCaption", "WALLET",
+            _walletCaption = CreateTmp(rt, "WalletCaption", "WALLET",
                 12f, FontStyles.Bold, TextAlignmentOptions.Center, TextSub);
-            caption.characterSpacing = 6f;
-            var capRt = caption.rectTransform;
+            _walletCaption.characterSpacing = 6f;
+            var capRt = _walletCaption.rectTransform;
             capRt.anchorMin        = new Vector2(0f, 1f);
             capRt.anchorMax        = new Vector2(1f, 1f);
             capRt.pivot            = new Vector2(0.5f, 1f);

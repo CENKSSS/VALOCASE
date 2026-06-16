@@ -34,10 +34,32 @@ namespace ValoCase.Core
         public IUpgradeService Upgrade { get; private set; }
         public IEconomyService Economy { get; private set; }
 
-        // Backend (Spring Boot). Non-null only when GameConfig.UseBackend is true.
-        // Exposed so a future Step-2 remote case-opening path can reuse the client.
+        // Backend (Spring Boot). Exposed so flows can reuse the client.
         public BackendApiClient Backend { get; private set; }
-        public bool BackendEnabled => gameConfig != null && gameConfig.UseBackend && Backend != null;
+
+        // SECURITY: local-authoritative economy is allowed ONLY in the editor or an
+        // explicit offline-demo build, and only when the asset opts out of backend.
+        // Release/player builds always fail closed — never local rewards/VP.
+        public bool CanUseLocalEconomy
+        {
+            get
+            {
+#if UNITY_EDITOR || OFFLINE_DEMO
+                return gameConfig == null || !gameConfig.UseBackend;
+#else
+                return false;
+#endif
+            }
+        }
+
+        // Routing flag every screen branches on. True for all release/player builds and
+        // for any editor session that opted into backend; false only for an allowed
+        // local-economy editor/demo session. Independent of whether the client is ready,
+        // so an unavailable backend fails closed instead of falling back to local.
+        public bool BackendEnabled => !CanUseLocalEconomy;
+
+        // Backend client is constructed and ready to send requests.
+        public bool BackendReady => Backend != null;
 
         // Runtime-only per-instance view of the backend inventory (itemId identity that
         // the quantity/skinId save cache aggregates away). Rebuilt on every inventory
@@ -88,30 +110,11 @@ namespace ValoCase.Core
             Upgrade = services.Upgrade;
             Economy = services.Economy;
 
-            // ── Admin VP grant (one-time) ─────────────────────────────────────
-            // Gives 500 000 VP exactly once, keyed on the adminVpGrantApplied flag
-            // in SaveDataRoot.  After the flag is set, restarts keep whatever
-            // balance the player has saved — even if it dropped below 500 000.
-            var savePath = System.IO.Path.Combine(
-                UnityEngine.Application.persistentDataPath, GameConstants.SaveFileName);
-            Debug.Log("[VP_FIX] save path=" + savePath);
-            Debug.Log("[VP_FIX] balance loaded=" + (Vp?.Balance ?? -1));
-            Debug.Log("[VP_FIX] grantApplied=" + (Save?.Data?.adminVpGrantApplied ?? false));
-
-            if (Vp != null && Save?.Data != null && !Save.Data.adminVpGrantApplied)
-            {
-                Debug.Log("[VP_FIX] applying admin grant");
-                Vp.SetBalance(500000);
-                Save.Data.adminVpGrantApplied = true;
-                Save.Save();
-                Debug.Log("[VP_FIX] first grant applied, balance=" + Vp.Balance);
-                Debug.Log("[VP_FIX] save written");
-            }
-            else
-            {
-                Debug.Log("[VP_FIX] grant already applied, keeping saved balance=" + (Vp?.Balance ?? -1));
-            }
-            // ─────────────────────────────────────────────────────────────────
+            // Starting/loaded balance comes from the normal save flow (and, in backend
+            // mode, is overwritten by the authoritative wallet during BackendBootSync).
+            // No client-side starter/admin grant is applied here. The legacy
+            // adminVpGrantApplied save field is intentionally left untouched and unused
+            // so old saves still load.
 
             if (Vp != null)
                 GameEvents.RaiseVpChanged(Vp.Balance, Vp.Balance);
@@ -121,8 +124,11 @@ namespace ValoCase.Core
             // Boot profile system — loads FaceCards + restores PlayerPrefs once
             ProfileManager.EnsureInitialized();
 
-            // Backend mode (opt-in via GameConfig.useBackend). Local mode skips this
-            // entirely and behaves exactly as before.
+#if (DEVELOPMENT_BUILD && !UNITY_EDITOR)
+            if (gameConfig != null && !gameConfig.UseBackend)
+                Debug.LogWarning("[ValoCase] Local economy mode is disabled in player builds.");
+#endif
+
             TryStartBackendSync();
         }
 
@@ -132,7 +138,10 @@ namespace ValoCase.Core
         // Any failure leaves the cached local state intact — never faked as success.
         void TryStartBackendSync()
         {
-            if (gameConfig == null || !gameConfig.UseBackend) return;
+            if (gameConfig == null) return;
+            // Boot the backend client when the asset opts in OR when backend is mandatory
+            // (release/player builds), so a misconfigured useBackend=false still connects.
+            if (!gameConfig.UseBackend && CanUseLocalEconomy) return;
             if (Save?.Data == null) return;
 
             Backend = new BackendApiClient(
@@ -169,7 +178,7 @@ namespace ValoCase.Core
                         Save.Data.guestAccountId = res.accountId;
                         Backend.GuestToken = token;
                         Save.Save();
-                        Debug.Log($"[BackendAuth] guest registered — accountId={res.accountId} token={token}");
+                        Debug.Log("[BackendAuth] Guest registered and token resolved.");
                     },
                     err => Debug.LogWarning("[Backend] Guest registration failed — staying on local cache. " + err));
 
@@ -182,7 +191,7 @@ namespace ValoCase.Core
             else
             {
                 Backend.GuestToken = Save.Data.guestToken;
-                Debug.Log($"[BackendAuth] reusing saved token — accountId={Save.Data.guestAccountId} token={Save.Data.guestToken}");
+                Debug.Log("[BackendAuth] Reusing saved guest token.");
             }
 
             // 2) Wallet — backend is authoritative; overwrite the local cached balance.
@@ -191,7 +200,7 @@ namespace ValoCase.Core
                 {
                     Vp?.SetBalance(res.vpBalance);
                     Save.Save();
-                    Debug.Log($"[BackendAuth] wallet synced — accountId={res.accountId} vp={res.vpBalance}");
+                    Debug.Log($"[BackendAuth] Wallet synced — vp={res.vpBalance}");
                 },
                 err => Debug.LogWarning("[Backend] Wallet sync failed — keeping cached balance. " + err));
 
@@ -219,7 +228,7 @@ namespace ValoCase.Core
         // local cache reconciles to the authoritative server state.
         public void RequestBackendResync()
         {
-            if (!BackendEnabled) return;
+            if (!BackendReady) return;
             StartCoroutine(ResyncWalletAndInventory());
         }
 
@@ -244,7 +253,7 @@ namespace ValoCase.Core
         // Sell one unit of one skin. onSold receives the VP gained for that unit.
         public void SellOneBackend(string skinId, Action<int> onSold, Action<string> onFailed)
         {
-            if (!BackendEnabled) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
+            if (!BackendReady) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
             if (string.IsNullOrEmpty(skinId)) { onFailed?.Invoke("Geçersiz skin."); return; }
             StartCoroutine(SellOneRoutine(skinId, onSold, onFailed));
         }
@@ -262,7 +271,7 @@ namespace ValoCase.Core
                 // Ambiguous transport failure (status 0) may have committed server-side:
                 // reconcile so the local cache reflects whatever the server actually did.
                 if (error == null || error.HttpStatus == 0) RequestBackendResync();
-                onFailed?.Invoke("Satış başarısız. Lütfen tekrar deneyin.");
+                onFailed?.Invoke(BackendErrorMapper.Map(error));
                 yield break;
             }
 
@@ -275,7 +284,7 @@ namespace ValoCase.Core
         // Sell every owned skin. onSold receives (soldCount, totalVpGained).
         public void SellAllBackend(Action<int, int> onSold, Action<string> onFailed)
         {
-            if (!BackendEnabled) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
+            if (!BackendReady) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
             StartCoroutine(SellBulkRoutine(
                 run: (ok, err) => Backend.SellAll(ok, err),
                 onSold, onFailed, label: "sell all"));
@@ -284,7 +293,7 @@ namespace ValoCase.Core
         // Sell every owned skin valued at or below maxVpValue.
         public void SellBelowValueBackend(int maxVpValue, Action<int, int> onSold, Action<string> onFailed)
         {
-            if (!BackendEnabled) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
+            if (!BackendReady) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
             StartCoroutine(SellBulkRoutine(
                 run: (ok, err) => Backend.SellBelowValue(maxVpValue, ok, err),
                 onSold, onFailed, label: "sell below value"));
@@ -305,7 +314,7 @@ namespace ValoCase.Core
             {
                 Debug.LogWarning($"[Backend] Bulk {label} failed — " + (error?.ToString() ?? "null response"));
                 if (error == null || error.HttpStatus == 0) RequestBackendResync();
-                onFailed?.Invoke("Satış başarısız. Lütfen tekrar deneyin.");
+                onFailed?.Invoke(BackendErrorMapper.Map(error));
                 yield break;
             }
 
@@ -322,7 +331,7 @@ namespace ValoCase.Core
 
         public void RefreshDailyBackend(Action<DailyStatusResponse> onDone, Action<string> onFailed)
         {
-            if (!BackendEnabled) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
+            if (!BackendReady) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
             StartCoroutine(RefreshDailyRoutine(onDone, onFailed));
         }
 
@@ -335,7 +344,7 @@ namespace ValoCase.Core
             if (error != null || res == null)
             {
                 Debug.LogWarning("[Backend] Daily status failed — " + (error?.ToString() ?? "null response"));
-                onFailed?.Invoke("Günlük ödül durumu alınamadı.");
+                onFailed?.Invoke(BackendErrorMapper.Map(error));
                 yield break;
             }
             onDone?.Invoke(res);
@@ -343,7 +352,7 @@ namespace ValoCase.Core
 
         public void ClaimDailyBackend(Action<DailyClaimResponse> onDone, Action<string> onFailed)
         {
-            if (!BackendEnabled) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
+            if (!BackendReady) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
             StartCoroutine(ClaimDailyRoutine(onDone, onFailed));
         }
 
@@ -356,7 +365,7 @@ namespace ValoCase.Core
             if (error != null || res == null)
             {
                 Debug.LogWarning("[Backend] Daily claim failed — " + (error?.ToString() ?? "null response"));
-                onFailed?.Invoke("Ödül alınamadı. Lütfen tekrar deneyin.");
+                onFailed?.Invoke(BackendErrorMapper.Map(error));
                 yield break;
             }
 
@@ -365,11 +374,50 @@ namespace ValoCase.Core
             onDone?.Invoke(res);
         }
 
+        // ── Backend Earn VP session (server-authoritative; server calculates VP) ──
+
+        public void ClaimEarnVpSession(int tapCount, long sessionDurationMs, string clientSessionId,
+            int[] tapOffsetsMs, Action<EarnVpClaimResponse> onDone, Action<string> onFailed)
+        {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            Debug.Log($"[EarnVp] ClaimEarnVpSession — BackendReady={BackendReady} tapCount={tapCount} durationMs={sessionDurationMs} offsetsCount={(tapOffsetsMs != null ? tapOffsetsMs.Length : 0)} sessionId={clientSessionId}");
+#endif
+            if (!BackendReady) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
+            if (tapCount <= 0 || string.IsNullOrEmpty(clientSessionId)) { onFailed?.Invoke("Geçersiz oturum."); return; }
+            StartCoroutine(ClaimEarnVpRoutine(tapCount, sessionDurationMs, clientSessionId, tapOffsetsMs, onDone, onFailed));
+        }
+
+        IEnumerator ClaimEarnVpRoutine(int tapCount, long sessionDurationMs, string clientSessionId,
+            int[] tapOffsetsMs, Action<EarnVpClaimResponse> onDone, Action<string> onFailed)
+        {
+            EarnVpClaimResponse res = null;
+            BackendError error = null;
+            yield return Backend.ClaimEarnVpSession(tapCount, sessionDurationMs, clientSessionId, tapOffsetsMs,
+                r => res = r, e => error = e);
+
+            if (error != null || res == null)
+            {
+                var mapped = BackendErrorMapper.Map(error);
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                Debug.LogWarning($"[EarnVp] claim FAILED — userMsg=\"{mapped}\" status={(error != null ? error.HttpStatus : -1)} offline={(error != null && error.IsOffline)} timeout={(error != null && error.IsTimeout)} detail={(error != null ? error.ToString() : "null response")}");
+#endif
+                onFailed?.Invoke(mapped);
+                yield break;
+            }
+
+            int oldBalance = Vp?.Balance ?? 0;
+            ApplyBackendWallet(res.newBalance);
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            Debug.Log($"[EarnVp] claim OK — vpGranted={res.vpGranted} accepted={res.acceptedTapCount} newBalance={res.newBalance} msg={res.message}; wallet {oldBalance} -> {(Vp?.Balance ?? 0)}");
+#endif
+            onDone?.Invoke(res);
+        }
+
         // ── Backend missions (server-authoritative) ─────────────────────────────
 
         public void RefreshMissionsBackend(Action<MissionResponse[]> onDone, Action<string> onFailed)
         {
-            if (!BackendEnabled) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
+            if (!BackendReady) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
             StartCoroutine(RefreshMissionsRoutine(onDone, onFailed));
         }
 
@@ -382,7 +430,7 @@ namespace ValoCase.Core
             if (error != null || res == null)
             {
                 Debug.LogWarning("[Backend] Missions fetch failed — " + (error?.ToString() ?? "null response"));
-                onFailed?.Invoke("Görevler alınamadı.");
+                onFailed?.Invoke(BackendErrorMapper.Map(error));
                 yield break;
             }
             onDone?.Invoke(res.missions ?? Array.Empty<MissionResponse>());
@@ -390,7 +438,7 @@ namespace ValoCase.Core
 
         public void ClaimMissionBackend(string missionId, Action<MissionClaimResponse> onDone, Action<string> onFailed)
         {
-            if (!BackendEnabled) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
+            if (!BackendReady) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
             if (string.IsNullOrEmpty(missionId)) { onFailed?.Invoke("Geçersiz görev."); return; }
             StartCoroutine(ClaimMissionRoutine(missionId, onDone, onFailed));
         }
@@ -404,7 +452,7 @@ namespace ValoCase.Core
             if (error != null || res == null)
             {
                 Debug.LogWarning("[Backend] Mission claim failed — " + (error?.ToString() ?? "null response"));
-                onFailed?.Invoke("Görev ödülü alınamadı. Lütfen tekrar deneyin.");
+                onFailed?.Invoke(BackendErrorMapper.Map(error));
                 yield break;
             }
 
@@ -426,7 +474,7 @@ namespace ValoCase.Core
         {
             var result = new UpgradeBackendResult { Target = target };
 
-            if (!BackendEnabled)
+            if (!BackendReady)
             {
                 result.Error = "Sunucu kullanılamıyor.";
                 onResult?.Invoke(result);
@@ -460,7 +508,7 @@ namespace ValoCase.Core
                 Debug.LogWarning("[Backend] Upgrade failed — " + (error?.ToString() ?? "null response"));
                 // Ambiguous transport failure (status 0) may have committed server-side.
                 if (error == null || error.HttpStatus == 0) RequestBackendResync();
-                result.Error = "Yükseltme başarısız. Lütfen tekrar deneyin.";
+                result.Error = BackendErrorMapper.Map(error);
                 onResult?.Invoke(result);
                 yield break;
             }

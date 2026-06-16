@@ -222,6 +222,9 @@ namespace ValoCase.UI.Screens
 
         void OnBackendBulkSold(int soldCount, int totalVpGained)
         {
+            // Guard: runs from the persistent GameContext; may fire after this screen
+            // was destroyed by navigation.
+            if (this == null) return;
             _bulkSellInFlight = false;
             SetSellInteractable(true);
             if (soldCount > 0) SoundManager.Instance?.Play(SoundId.SellSkin);
@@ -232,6 +235,7 @@ namespace ValoCase.UI.Screens
 
         void OnBackendBulkFailed(string msg)
         {
+            if (this == null) return;
             _bulkSellInFlight = false;
             SetSellInteractable(true);
             if (!string.IsNullOrEmpty(msg)) GameEvents.RaiseToast(msg);

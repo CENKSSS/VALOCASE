@@ -29,6 +29,9 @@ namespace ValoCase.Services.Backend
     {
         const string ApiPrefix = "/api/v1";
 
+        /// <summary>Shared default request timeout (seconds). One value, not scattered.</summary>
+        public const int DefaultTimeoutSeconds = 15;
+
         readonly string _baseUrl;
         readonly int _timeoutSeconds;
 
@@ -38,7 +41,7 @@ namespace ValoCase.Services.Backend
         public BackendApiClient(string baseUrl, int timeoutSeconds, string guestToken = null)
         {
             _baseUrl = string.IsNullOrEmpty(baseUrl) ? "https://valocase-backend-production.up.railway.app" : baseUrl.TrimEnd('/');
-            _timeoutSeconds = timeoutSeconds > 0 ? timeoutSeconds : 15;
+            _timeoutSeconds = timeoutSeconds > 0 ? timeoutSeconds : DefaultTimeoutSeconds;
             GuestToken = guestToken;
         }
 
@@ -115,6 +118,24 @@ namespace ValoCase.Services.Backend
             => Send("POST", ApiPrefix + "/missions/" + UnityWebRequest.EscapeURL(missionId) + "/claim", "{}",
                     auth: true, onSuccess, onError);
 
+        // ── Earn VP session (server-authoritative; server calculates the VP) ────────
+        public IEnumerator ClaimEarnVpSession(int tapCount, long sessionDurationMs, string clientSessionId,
+            int[] tapOffsetsMs, Action<EarnVpClaimResponse> onSuccess, Action<BackendError> onError)
+        {
+            const string path = "/api/earn-vp/session/claim";
+            var body = JsonUtility.ToJson(new EarnVpClaimRequest
+            {
+                tapCount = tapCount,
+                sessionDurationMs = sessionDurationMs,
+                clientSessionId = clientSessionId,
+                tapOffsetsMs = tapOffsetsMs
+            });
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            Debug.Log($"[EarnVp] POST {_baseUrl}{path} auth={!string.IsNullOrEmpty(GuestToken)} body={body}");
+#endif
+            return Send("POST", path, body, auth: true, onSuccess, onError);
+        }
+
         // ── Core request pipeline ───────────────────────────────────────────────
 
         IEnumerator Send<T>(string method, string path, string body, bool auth,
@@ -122,6 +143,16 @@ namespace ValoCase.Services.Backend
                             string wrapArrayKey = null) where T : class
         {
             var url = _baseUrl + path;
+
+            // Offline pre-check at the shared layer: never even open the socket when the
+            // device reports no reachability. Callers map this to the offline message and
+            // restore their UI; no spend/grant/inventory logic runs.
+            if (Application.internetReachability == NetworkReachability.NotReachable)
+            {
+                onError?.Invoke(new BackendError(0, $"{method} {path} -> offline (no reachability)",
+                                                 isTimeout: false, isOffline: true));
+                yield break;
+            }
 
             using var req = new UnityWebRequest(url, method)
             {
@@ -137,11 +168,11 @@ namespace ValoCase.Services.Backend
             if (auth && !string.IsNullOrEmpty(GuestToken))
                 req.SetRequestHeader("X-Guest-Token", GuestToken);
 
-            // Verification log: the exact token sent on each authenticated call
-            // (covers GET /wallet and POST /cases/{id}/open).
+            // Never log the token/account id itself — only whether the call is
+            // authenticated. Keeps tokens out of player/release logs.
             if (auth)
-                Debug.Log($"[BackendAuth] -> {method} {path} | X-Guest-Token=" +
-                          (string.IsNullOrEmpty(GuestToken) ? "<none>" : GuestToken));
+                Debug.Log($"[BackendAuth] -> {method} {path} | " +
+                          (string.IsNullOrEmpty(GuestToken) ? "auth missing" : "authenticated"));
 
             yield return req.SendWebRequest();
 
@@ -149,7 +180,12 @@ namespace ValoCase.Services.Backend
             if (req.result == UnityWebRequest.Result.ConnectionError ||
                 req.result == UnityWebRequest.Result.DataProcessingError)
             {
-                onError?.Invoke(new BackendError(0, $"{method} {path} -> {req.error}"));
+                var errText  = req.error ?? string.Empty;
+                bool timeout = errText.ToLowerInvariant().Contains("timeout") ||
+                               errText.ToLowerInvariant().Contains("timed out");
+                bool offline = Application.internetReachability == NetworkReachability.NotReachable;
+                onError?.Invoke(new BackendError(0, $"{method} {path} -> {req.error}",
+                                                 isTimeout: timeout, isOffline: offline));
                 yield break;
             }
 
@@ -201,14 +237,40 @@ namespace ValoCase.Services.Backend
         }
     }
 
+    [Serializable]
+    public sealed class EarnVpClaimRequest
+    {
+        public int tapCount;
+        public long sessionDurationMs;
+        public string clientSessionId;
+        public int[] tapOffsetsMs;
+    }
+
+    [Serializable]
+    public sealed class EarnVpClaimResponse
+    {
+        public int vpGranted;
+        public int newBalance;
+        public int acceptedTapCount;
+        public string message;   // "OK" or "DUPLICATE"
+    }
+
     // ── Error envelope (transport-agnostic) ─────────────────────────────────────
     public sealed class BackendError
     {
         public readonly int HttpStatus; // 0 == transport/connection failure (no HTTP response)
         public readonly string Message;
-        public BackendError(int httpStatus, string message) { HttpStatus = httpStatus; Message = message; }
+        public readonly bool IsTimeout; // transport failure caused by a request timeout
+        public readonly bool IsOffline; // request not sent / failed due to no reachability
+        public BackendError(int httpStatus, string message, bool isTimeout = false, bool isOffline = false)
+        {
+            HttpStatus = httpStatus;
+            Message    = message;
+            IsTimeout  = isTimeout;
+            IsOffline  = isOffline;
+        }
         public bool IsAuthError => HttpStatus == 401 || HttpStatus == 403;
-        public override string ToString() => $"BackendError(status={HttpStatus}, msg={Message})";
+        public override string ToString() => $"BackendError(status={HttpStatus}, timeout={IsTimeout}, offline={IsOffline}, msg={Message})";
     }
 
     // ── Response DTOs (JsonUtility-serializable; adjust field names to backend) ──
