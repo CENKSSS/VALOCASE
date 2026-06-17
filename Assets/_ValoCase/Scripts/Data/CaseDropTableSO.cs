@@ -36,6 +36,9 @@ namespace ValoCase.Data
         public IReadOnlyList<SkinDropEntry> PossibleDrops => possibleDrops;
         public IReadOnlyList<string> ManualSkinIds => manualSkinIds;
 
+        public void RebuildDropsRuntime(List<SkinDropEntry> drops) =>
+            possibleDrops = drops ?? new List<SkinDropEntry>();
+
         // Populate at runtime (not from Inspector).
         // manualIds is the explicit skin-ID pool; possibleDrops is its resolved form.
         public void InitializeRuntime(List<RarityWeightEntry> weights, List<SkinDropEntry> drops,

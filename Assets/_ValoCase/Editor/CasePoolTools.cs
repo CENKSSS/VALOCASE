@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Text;
 using UnityEditor;
@@ -18,9 +17,6 @@ namespace ValoCase.EditorTools
     /// (deferred to a future dedicated "ID Cleanup Migration Phase").
     ///
     ///   • Validate Case Pools        — loud, itemised validation + summary report.
-    ///   • Rebuild Case Pools (Keep IDs) — regenerate auto-pools using the EXISTING
-    ///                                     frozen IDs, written to cases.generated.json
-    ///                                     for review (never auto-promotes).
     ///
     /// Pool policy: a skin MAY appear in multiple cases. Cross-case overlap is
     /// intentional and is reported as information, never as an error. Only duplicates
@@ -28,9 +24,6 @@ namespace ValoCase.EditorTools
     /// </summary>
     public static class CasePoolTools
     {
-        const string ConfigDir          = "Assets/_ValoCase/Resources/Config";
-        const string CasesGeneratedFile = "cases.generated.json";
-
         // ── Validation ─────────────────────────────────────────────────────────
 
         [MenuItem("ValoCase/Stable IDs/Validate Case Pools")]
@@ -194,73 +187,6 @@ namespace ValoCase.EditorTools
                 "Case Pool Validation",
                 (errors == 0 ? "PASS" : "FAIL") +
                 $"\n\nErrors:   {errors}\nWarnings: {warnings}\n\nSee the Console for the full itemised report.",
-                "OK");
-        }
-
-        // ── Pool rebuild (keeps frozen IDs) ─────────────────────────────────────
-
-        [MenuItem("ValoCase/Stable IDs/Rebuild Case Pools (Keep IDs)")]
-        public static void RebuildCasePools()
-        {
-            var skinRoot = CatalogLoader.LoadSkinCatalog();
-            if (skinRoot?.skins == null || skinRoot.skins.Count == 0)
-            {
-                Debug.LogError("[PoolRebuild] skins.json missing or empty — aborting. " +
-                               "This tool reuses frozen IDs and will NOT mint new ones.");
-                return;
-            }
-
-            // Map legacy → stable from the EXISTING (frozen) skin catalog. No scanning,
-            // no new IDs: every ID in the rebuilt pools comes straight from skins.json.
-            var legacyToStable = new Dictionary<string, string>(StringComparer.Ordinal);
-            foreach (var e in skinRoot.skins)
-            {
-                if (e == null || string.IsNullOrEmpty(e.legacyId) || string.IsNullOrEmpty(e.skinId)) continue;
-                if (!legacyToStable.ContainsKey(e.legacyId))
-                    legacyToStable[e.legacyId] = e.skinId;
-            }
-
-            // Recreate the Vandal skin list keyed on LEGACY ids — exactly what the
-            // auto-pool generator expects — then ExportCaseCatalog translates the
-            // generated pools to the frozen STABLE ids via the map above.
-            var vandalSkins = new List<SkinDefinitionSO>();
-            foreach (var e in skinRoot.skins)
-            {
-                if (e == null) continue;
-                if (!string.Equals(e.weapon, "Vandal", StringComparison.OrdinalIgnoreCase)) continue;
-                if (string.IsNullOrEmpty(e.legacyId)) continue;
-
-                if (!Enum.TryParse<SkinRarity>(e.rarity, true, out var rarity))
-                    rarity = SkinRarity.Select;
-
-                var so = ScriptableObject.CreateInstance<SkinDefinitionSO>();
-                so.InitializeRuntime(e.legacyId, e.displayName, e.weapon, rarity, null,
-                                     e.vpValue > 0 ? e.vpValue : RaritySystem.GetVp(rarity));
-                vandalSkins.Add(so);
-            }
-
-            if (vandalSkins.Count == 0)
-            {
-                Debug.LogError("[PoolRebuild] No Vandal skins found in skins.json — aborting.");
-                return;
-            }
-
-            var caseRoot = VandalCaseBuilder.ExportCaseCatalog(vandalSkins, legacyToStable);
-
-            Directory.CreateDirectory(ConfigDir);
-            var path = Path.Combine(ConfigDir, CasesGeneratedFile);
-            File.WriteAllText(path, JsonUtility.ToJson(caseRoot, true));
-            AssetDatabase.Refresh();
-
-            Debug.Log($"[PoolRebuild] Rebuilt {caseRoot.cases.Count} case pool(s) from frozen IDs → {path}\n" +
-                      "Stable IDs were NOT changed. Review the file, then activate by renaming " +
-                      "cases.generated.json → cases.json. Run 'Validate Case Pools' afterwards.");
-
-            EditorUtility.DisplayDialog(
-                "Rebuild Case Pools",
-                $"Rebuilt {caseRoot.cases.Count} pool(s) using the existing frozen IDs.\n\n" +
-                "Written to cases.generated.json for review (cases.json was NOT touched).\n\n" +
-                "Promote by renaming it to cases.json, then run Validate Case Pools.",
                 "OK");
         }
     }

@@ -409,7 +409,7 @@ namespace ValoCase.UI.Screens
                 selectedCaseLabel.text = dn.ToUpperInvariant();
             }
 
-            var price = ctx?.Shop?.GetDiscountedPrice(caseDef) ?? caseDef.VpPrice;
+            var price = caseDef.VpPrice;
             if (priceLabel != null) priceLabel.text = $"{price:N0} VP";
 
             RefreshOpenButton();

@@ -1,0 +1,172 @@
+[
+  {
+    "caseId": "basic_melee",
+    "displayName": "Basic Melee Case",
+    "price": 1050,
+    "resourceKey": "Art/Cases/Basic_Melee_Case",
+    "enabled": true,
+    "themeColor": "#70A35D",
+    "rarityWeights": [
+      {
+        "rarity": "Select",
+        "weight": 0.0
+      },
+      {
+        "rarity": "Deluxe",
+        "weight": 0.0
+      },
+      {
+        "rarity": "Premium",
+        "weight": 0.0
+      },
+      {
+        "rarity": "Exclusive",
+        "weight": 100.0
+      },
+      {
+        "rarity": "Ultra",
+        "weight": 0.0
+      }
+    ],
+    "manualDropPool": [
+      "skin_melee_hieroscape_blades",
+      "skin_melee_keys_to_elysium",
+      "skin_melee_obsidiana",
+      "skin_melee_k_tac_blade",
+      "skin_melee_hu_else",
+      "skin_melee_montage_axe",
+      "skin_melee_no_limits_bat",
+      "skin_melee_mk_vii_liberty_combat",
+      "skin_melee_jellybeam_sugarslice",
+      "skin_melee_overlay_dagger",
+      "skin_melee_venturi",
+      "skin_melee_blade_of_serket",
+      "skin_melee_solarex_relic",
+      "skin_melee_bound",
+      "skin_melee_comet_sword",
+      "skin_melee_switchback_ascender",
+      "skin_melee_kaimana",
+      "skin_melee_outpost",
+      "skin_melee_luna_s_descent",
+      "skin_melee_valorant_go_vol_1"
+    ]
+  },
+  {
+    "caseId": "protocol_melee",
+    "displayName": "Protocol Melee Case",
+    "price": 3500,
+    "resourceKey": "Art/Cases/Protocol_Melee_Case",
+    "enabled": true,
+    "themeColor": "#DD4DBA",
+    "rarityWeights": [
+      {
+        "rarity": "Select",
+        "weight": 0.0
+      },
+      {
+        "rarity": "Deluxe",
+        "weight": 0.0
+      },
+      {
+        "rarity": "Premium",
+        "weight": 0.0
+      },
+      {
+        "rarity": "Exclusive",
+        "weight": 100.0
+      },
+      {
+        "rarity": "Ultra",
+        "weight": 0.0
+      }
+    ],
+    "manualDropPool": [
+      "skin_melee_venturi",
+      "skin_melee_kuronami_no_yaiba",
+      "skin_melee_sovereign_sword",
+      "skin_melee_evori_s_spellcaster",
+      "skin_melee_bolt",
+      "skin_melee_wonderstallion_hammer",
+      "skin_melee_torque_coiler",
+      "skin_melee_emberclad_hammer",
+      "skin_melee_mystbloom_kunai",
+      "skin_melee_helix_daggers",
+      "skin_melee_prosperity",
+      "skin_melee_artisan_foil",
+      "skin_melee_altitude_knuckle",
+      "skin_melee_blades_of_primordia",
+      "skin_melee_sys",
+      "skin_melee_rgx_11z_pro_karambit",
+      "skin_melee_orion_sword",
+      "skin_melee_switchback_ascender",
+      "skin_melee_araxys_bio_atomizers",
+      "skin_melee_catrina",
+      "skin_melee_winterwunderland_candy_cane",
+      "skin_melee_guardrail_hammer",
+      "skin_melee_heart_splitter",
+      "skin_melee_forsaken_ritual_blade",
+      "skin_melee_rogue_push_daggers",
+      "skin_melee_elderflame_dagger",
+      "skin_melee_oni_claw",
+      "skin_melee_montage_axe"
+    ]
+  },
+  {
+    "caseId": "radiant_melee",
+    "displayName": "Radiant Melee Case",
+    "price": 6250,
+    "resourceKey": "Art/Cases/Radiant_Melee_Case",
+    "enabled": true,
+    "themeColor": "#B3A283",
+    "rarityWeights": [
+      {
+        "rarity": "Select",
+        "weight": 0.0
+      },
+      {
+        "rarity": "Deluxe",
+        "weight": 0.0
+      },
+      {
+        "rarity": "Premium",
+        "weight": 0.0
+      },
+      {
+        "rarity": "Exclusive",
+        "weight": 100.0
+      },
+      {
+        "rarity": "Ultra",
+        "weight": 0.0
+      }
+    ],
+    "manualDropPool": [
+      "skin_melee_champions_2025_butterfly",
+      "skin_melee_glitchpop_axe",
+      "skin_melee_doombringer_battleaxe",
+      "skin_melee_broken_blade_of_the_ruined_king",
+      "skin_melee_ignite_fan",
+      "skin_melee_singularity_butterfly",
+      "skin_melee_relic_stone_daggers",
+      "skin_melee_personal_administrative_melee_unit",
+      "skin_melee_terminus_a_quo",
+      "skin_melee_elderflame_dagger",
+      "skin_melee_champions_2024_blade",
+      "skin_melee_champions_2022_butterfly",
+      "skin_melee_magepunk_sparkswitch",
+      "skin_melee_overdrive_blade",
+      "skin_melee_ion_karambit",
+      "skin_melee_rgx_11z_pro_karambit",
+      "skin_melee_rgx_11z_pro_blade",
+      "skin_melee_arcane_gauntlets",
+      "skin_melee_glitchpop_dagger",
+      "skin_melee_blackthorn_blades",
+      "skin_melee_phaseguard_splitter",
+      "skin_melee_araxys_bio_atomizers",
+      "skin_melee_blades_of_primordia",
+      "skin_melee_mystbloom_fanblade",
+      "skin_melee_forsaken_ritual_blade",
+      "skin_melee_xenohunter"
+    ]
+  }
+]

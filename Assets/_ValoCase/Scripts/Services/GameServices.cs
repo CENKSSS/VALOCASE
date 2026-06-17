@@ -578,7 +578,6 @@ namespace ValoCase.Services
         readonly IInventoryService _inventory;
         readonly IStatisticsService _statistics;
         readonly ICaseProgressionService _progression;
-        readonly IShopService _shop;
         readonly ContentDatabaseSO _database;
         readonly IResultProvider _provider;
 
@@ -587,7 +586,6 @@ namespace ValoCase.Services
             IInventoryService inventory,
             IStatisticsService statistics,
             ICaseProgressionService progression,
-            IShopService shop,
             ContentDatabaseSO database,
             IResultProvider provider)
         {
@@ -595,7 +593,6 @@ namespace ValoCase.Services
             _inventory = inventory;
             _statistics = statistics;
             _progression = progression;
-            _shop = shop;
             _database = database;
             _provider = provider;
         }
@@ -604,7 +601,7 @@ namespace ValoCase.Services
         {
             if (caseDef == null || caseDef.DropTable == null) return false;
             if (!_progression.IsCaseUnlocked(caseDef)) return false;
-            return _vp.CanAfford(_shop.GetDiscountedPrice(caseDef));
+            return _vp.CanAfford(caseDef.VpPrice);
         }
 
         public bool TryBeginOpen(CaseDefinitionSO caseDef, out SkinDefinitionSO rolled, out int vpSpent)
@@ -613,7 +610,7 @@ namespace ValoCase.Services
             vpSpent = 0;
             if (!CanOpen(caseDef)) return false;
 
-            vpSpent = _shop.GetDiscountedPrice(caseDef);
+            vpSpent = caseDef.VpPrice;
             if (!_vp.TrySpend(vpSpent)) return false;
 
             // ── Phase-3 seam: result GENERATION goes through the provider ──────────
@@ -869,7 +866,7 @@ namespace ValoCase.Services
             var shop = new ShopService(save, contentDatabase, gameConfig);
             var dailyRewards = new DailyRewardService(save, gameConfig, vp);
             var fakeOnline = new FakeOnlineCountService(gameConfig);
-            var caseOpening = new CaseOpeningService(vp, inventory, statistics, caseProgression, shop,
+            var caseOpening = new CaseOpeningService(vp, inventory, statistics, caseProgression,
                                                      contentDatabase, resultProvider);
             var upgrade = new UpgradeService(inventory, contentDatabase, save, resultProvider);
             var economy = new EconomyService(vp, inventory, statistics, save, contentDatabase);

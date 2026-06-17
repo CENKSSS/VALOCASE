@@ -106,7 +106,7 @@ namespace ValoCase.UI
         // ── Build ─────────────────────────────────────────────────────────────
         void BuildUI()
         {
-            const float NavH = 90f;  // total container height — matches builder spec
+            const float NavH = 108f;  // total container height — matches builder spec
 
             // ── Outer rect: anchored to screen bottom, full width ──────────────
             var rt = (RectTransform)transform;
@@ -114,7 +114,7 @@ namespace ValoCase.UI
             rt.anchorMax        = new Vector2(1f, 0f);
             rt.pivot            = new Vector2(0.5f, 0f);
             rt.anchoredPosition = Vector2.zero;      // flush with SafeArea bottom
-            rt.sizeDelta        = new Vector2(0f, NavH);  // 90 px, same as builder
+            rt.sizeDelta        = new Vector2(0f, NavH);  // 108 px, same as builder
 
             // ── Dark panel (inset 12px left/right, covers full container height)
             var panel = NewRT("NavPanel", rt, Vector2.zero, Vector2.one);
@@ -225,18 +225,19 @@ namespace ValoCase.UI
             col.offsetMin = col.offsetMax = Vector2.zero;
             var vlg = col.gameObject.AddComponent<VerticalLayoutGroup>();
             vlg.childAlignment         = TextAnchor.MiddleCenter;
-            vlg.spacing                = 4f;
+            vlg.spacing                = 5f;
             vlg.childForceExpandWidth  = false;
             vlg.childForceExpandHeight = false;
-            vlg.padding = new RectOffset(0, 0, 8, 10);
+            vlg.padding = new RectOffset(0, 0, 10, 12);
 
-            // Icon root (20×20 fixed)
+            // Icon root (24×24 reserved; drawn graphics scaled 1.2×)
             var iconGo = new GameObject("Ico", typeof(RectTransform));
             iconGo.transform.SetParent(col, false);
             ui.IconRoot = (RectTransform)iconGo.transform;
             var iLE = iconGo.AddComponent<LayoutElement>();
-            iLE.minWidth = iLE.preferredWidth   = 20f;
-            iLE.minHeight = iLE.preferredHeight = 20f;
+            iLE.minWidth = iLE.preferredWidth   = 24f;
+            iLE.minHeight = iLE.preferredHeight = 24f;
+            ui.IconRoot.localScale = new Vector3(1.2f, 1.2f, 1f);
             DrawIcon(ui.IconRoot, ico, DimWhite);
 
             // Label
@@ -244,10 +245,10 @@ namespace ValoCase.UI
                 typeof(RectTransform), typeof(TextMeshProUGUI));
             lblGo.transform.SetParent(col, false);
             var lLE = lblGo.AddComponent<LayoutElement>();
-            lLE.minHeight = lLE.preferredHeight = 13f;
+            lLE.minHeight = lLE.preferredHeight = 15f;
             ui.Label                  = lblGo.GetComponent<TextMeshProUGUI>();
             ui.Label.text             = label;
-            ui.Label.fontSize         = 9f;
+            ui.Label.fontSize         = 11f;
             ui.Label.fontStyle        = FontStyles.Bold;
             ui.Label.alignment        = TextAlignmentOptions.Center;
             ui.Label.color            = DimWhite;

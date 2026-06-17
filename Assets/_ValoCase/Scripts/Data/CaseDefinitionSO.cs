@@ -51,6 +51,8 @@ namespace ValoCase.Data
             themeColor       = color ?? new Color(0.92f, 0.23f, 0.29f, 1f);
         }
 
+        public void SetVpPriceRuntime(int price) => vpPrice = price;
+
         // Optional runtime icon assignment (used by VandalCaseBuilder + Resources loader).
         public void SetIconRuntime(Sprite icon)
         {

@@ -50,7 +50,13 @@
       "mcp__UnityMCP__validate_script",
       "PowerShell($f = Get-ChildItem -Recurse \"C:\\\\Users\\\\cenk_\\\\Desktop\\\\ValorantProject\" -File; $f | Group-Object { Split-Path \\(Split-Path $_.FullName -Parent\\) -Leaf } | ForEach-Object { \"$\\($_.Name\\): $\\($_.Count\\) files\" }; \"Total: $\\($f.Count\\)\")",
       "mcp__UnityMCP__manage_editor",
-      "Bash(xargs grep -l \"Rarity\\\\|Symbol\\\\|Visual\")"
+      "Bash(xargs grep -l \"Rarity\\\\|Symbol\\\\|Visual\")",
+      "Read(//c/c/Users/cenk_/ValoCase/Assets/_ValoCase/Resources/Config/**)",
+      "Read(//c/Users/cenk_/Desktop/ValoSkins/Vandal/**)",
+      "Bash(grep -i '\\\\.png$')",
+      "Bash(grep -iv '\\\\.png$')",
+      "Bash([ -d \"$DS\" ])",
+      "Bash(grep -iv '\\\\.meta$')"
     ]
   }
 }

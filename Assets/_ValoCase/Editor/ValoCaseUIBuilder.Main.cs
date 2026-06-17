@@ -291,7 +291,7 @@ namespace ValoCase.Editor
             topBarRt.anchorMax        = new Vector2(1f, 1f);
             topBarRt.pivot            = new Vector2(0.5f, 1f);
             topBarRt.anchoredPosition = new Vector2(0f, 0f);
-            topBarRt.sizeDelta        = new Vector2(0f, 72f);
+            topBarRt.sizeDelta        = new Vector2(0f, 86f);
             var topBar   = topBarGo.AddComponent<TopProfileBar>();
             var topBarSo = new SerializedObject(topBar);
             var topNavProp = topBarSo.FindProperty("navigator");
@@ -309,7 +309,7 @@ namespace ValoCase.Editor
             navBarRt.anchorMax        = new Vector2(1f, 0f);
             navBarRt.pivot            = new Vector2(0.5f, 0f);
             navBarRt.anchoredPosition = new Vector2(0f, 0f);   // flush with SafeArea bottom (matches BuildUI runtime)
-            navBarRt.sizeDelta        = new Vector2(0f, 90f);  // 90 px — matches BuildUI NavH
+            navBarRt.sizeDelta        = new Vector2(0f, 108f);  // 108 px — matches BuildUI NavH
             var navBar   = navBarGo.AddComponent<BottomNavBar>();
             var navBarSo = new SerializedObject(navBar);
             var navProp  = navBarSo.FindProperty("navigator");

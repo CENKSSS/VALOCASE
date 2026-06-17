@@ -57,7 +57,11 @@ namespace ValoCase.Services.Backend
             => Send("GET", ApiPrefix + "/inventory", null, auth: true, onSuccess, onError, wrapArrayKey: "items");
 
         public IEnumerator OpenCase(string caseId, Action<OpenCaseResultResponse> onSuccess, Action<BackendError> onError)
-            => Send("POST", ApiPrefix + "/cases/" + UnityWebRequest.EscapeURL(caseId) + "/open", "{}", auth: true, onSuccess, onError);
+        {
+            var path = ApiPrefix + "/cases/" + UnityWebRequest.EscapeURL(caseId) + "/open";
+            var debugTag = caseId == "melee_case" ? caseId : null;
+            return Send("POST", path, "{}", auth: true, onSuccess, onError, debugTag: debugTag);
+        }
 
         // ── Inventory selling (server-authoritative) ────────────────────────────
         // Backend validates ownership, removes inventory, credits VP, writes the
@@ -140,15 +144,24 @@ namespace ValoCase.Services.Backend
 
         IEnumerator Send<T>(string method, string path, string body, bool auth,
                             Action<T> onSuccess, Action<BackendError> onError,
-                            string wrapArrayKey = null) where T : class
+                            string wrapArrayKey = null, string debugTag = null) where T : class
         {
             var url = _baseUrl + path;
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            if (debugTag != null)
+                Debug.Log($"[BACKEND_DEBUG] {debugTag} -> {method} {url} authed={(auth && !string.IsNullOrEmpty(GuestToken))} body={body}");
+#endif
 
             // Offline pre-check at the shared layer: never even open the socket when the
             // device reports no reachability. Callers map this to the offline message and
             // restore their UI; no spend/grant/inventory logic runs.
             if (Application.internetReachability == NetworkReachability.NotReachable)
             {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                if (debugTag != null)
+                    Debug.LogWarning($"[CASE_OPEN_ERROR] {debugTag} aborted BEFORE request — offline (no reachability)");
+#endif
                 onError?.Invoke(new BackendError(0, $"{method} {path} -> offline (no reachability)",
                                                  isTimeout: false, isOffline: true));
                 yield break;
@@ -184,6 +197,10 @@ namespace ValoCase.Services.Backend
                 bool timeout = errText.ToLowerInvariant().Contains("timeout") ||
                                errText.ToLowerInvariant().Contains("timed out");
                 bool offline = Application.internetReachability == NetworkReachability.NotReachable;
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                if (debugTag != null)
+                    Debug.LogWarning($"[CASE_OPEN_ERROR] {debugTag} transport failure DURING request — result={req.result} error={req.error} timeout={timeout} offline={offline}");
+#endif
                 onError?.Invoke(new BackendError(0, $"{method} {path} -> {req.error}",
                                                  isTimeout: timeout, isOffline: offline));
                 yield break;
@@ -192,6 +209,11 @@ namespace ValoCase.Services.Backend
             var status = (int)req.responseCode;
             var text = req.downloadHandler != null ? req.downloadHandler.text : null;
 
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            if (debugTag != null)
+                Debug.Log($"[BACKEND_DEBUG] {debugTag} <- HTTP {status} rawBody={text}");
+#endif
+
             // HTTP error status (4xx/5xx)
             if (req.result == UnityWebRequest.Result.ProtocolError || status >= 400)
             {
@@ -199,6 +221,10 @@ namespace ValoCase.Services.Backend
                 var parsed = TryParse<ErrorResponse>(text, null);
                 if (parsed != null && !string.IsNullOrEmpty(parsed.message))
                     message = parsed.message;
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                if (debugTag != null)
+                    Debug.LogError($"[CASE_OPEN_ERROR] {debugTag} HTTP {status} AFTER response — {method} {path} | mappedMessage=\"{message}\" | rawBody={text}");
+#endif
                 onError?.Invoke(new BackendError(status, $"{method} {path} -> HTTP {status}: {message}"));
                 yield break;
             }
@@ -207,6 +233,10 @@ namespace ValoCase.Services.Backend
             var result = TryParse<T>(text, wrapArrayKey);
             if (result == null)
             {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                if (debugTag != null)
+                    Debug.LogError($"[CASE_OPEN_ERROR] {debugTag} response parse FAILED AFTER response — DTO={typeof(T).Name} | rawBody={text}");
+#endif
                 onError?.Invoke(new BackendError(status, $"{method} {path} -> could not parse response body"));
                 yield break;
             }

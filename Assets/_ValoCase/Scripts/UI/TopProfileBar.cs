@@ -131,7 +131,7 @@ namespace ValoCase.UI
         // ── Build ─────────────────────────────────────────────────────────────
         void BuildUI()
         {
-            const float BarH = 72f;
+            const float BarH = 86f;
 
             // Outer rect — anchored to SafeArea TOP, full width
             var rt = (RectTransform)transform;
@@ -177,7 +177,7 @@ namespace ValoCase.UI
             maskRt.anchorMax        = new Vector2(0f, 0.5f);
             maskRt.pivot            = new Vector2(0f, 0.5f);
             maskRt.anchoredPosition = new Vector2(12f, 0f);
-            maskRt.sizeDelta        = new Vector2(44f, 44f);
+            maskRt.sizeDelta        = new Vector2(52f, 52f);
             var maskImg = maskGo.GetComponent<Image>();
             maskImg.sprite        = circleSpr;
             maskImg.type          = Image.Type.Simple;
@@ -204,7 +204,7 @@ namespace ValoCase.UI
             ringRt.anchorMax        = new Vector2(0f, 0.5f);
             ringRt.pivot            = new Vector2(0f, 0.5f);
             ringRt.anchoredPosition = new Vector2(12f, 0f);
-            ringRt.sizeDelta        = new Vector2(44f, 44f);
+            ringRt.sizeDelta        = new Vector2(52f, 52f);
             var ringImg = ringGo.GetComponent<Image>();
             ringImg.sprite        = circleSpr;
             ringImg.color         = new Color(0f, 0f, 0f, 0f);   // transparent fill
@@ -220,8 +220,8 @@ namespace ValoCase.UI
             colRt.anchorMin        = new Vector2(0f, 0.5f);
             colRt.anchorMax        = new Vector2(0f, 0.5f);
             colRt.pivot            = new Vector2(0f, 0.5f);
-            colRt.anchoredPosition = new Vector2(64f, 0f);   // 12 pad + 44 avatar + 8 gap
-            colRt.sizeDelta        = new Vector2(200f, 44f);
+            colRt.anchoredPosition = new Vector2(72f, 0f);   // 12 pad + 52 avatar + 8 gap
+            colRt.sizeDelta        = new Vector2(220f, 52f);
 
             var vlg = colGo.AddComponent<VerticalLayoutGroup>();
             vlg.childAlignment         = TextAnchor.MiddleLeft;
@@ -230,14 +230,14 @@ namespace ValoCase.UI
             vlg.childForceExpandHeight = false;
             vlg.padding = new RectOffset(0, 0, 4, 4);
 
-            _usernameLabel              = MakeTmp(colGo.transform, "Username", "AGENT", 13f, TextBright);
+            _usernameLabel              = MakeTmp(colGo.transform, "Username", "AGENT", 15f, TextBright);
             _usernameLabel.fontStyle    = FontStyles.Bold;
             _usernameLabel.raycastTarget = false;
-            _usernameLabel.gameObject.AddComponent<LayoutElement>().minHeight = 17f;
+            _usernameLabel.gameObject.AddComponent<LayoutElement>().minHeight = 20f;
 
-            var lvlLbl = MakeTmp(colGo.transform, "Level", "LVL: 1", 10f, DimWhite);
+            var lvlLbl = MakeTmp(colGo.transform, "Level", "LVL: 1", 12f, DimWhite);
             lvlLbl.raycastTarget = false;
-            lvlLbl.gameObject.AddComponent<LayoutElement>().minHeight = 14f;
+            lvlLbl.gameObject.AddComponent<LayoutElement>().minHeight = 16f;
 
             // ── Gear / Settings button (far right) ────────────────────────────
             var gearGo = new GameObject("GearBtn",
@@ -248,13 +248,13 @@ namespace ValoCase.UI
             gearRt.anchorMax        = new Vector2(1f, 0.5f);
             gearRt.pivot            = new Vector2(1f, 0.5f);
             gearRt.anchoredPosition = new Vector2(-10f, 0f);
-            gearRt.sizeDelta        = new Vector2(40f, 40f);
+            gearRt.sizeDelta        = new Vector2(48f, 48f);
             gearGo.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0f); // transparent hit area
             var gearBtn = gearGo.GetComponent<Button>();
             gearBtn.transition = Selectable.Transition.None;
             gearBtn.onClick.AddListener(OnGearClicked);
 
-            var gearIco  = MakeTmp(gearGo.transform, "GearIco", "⚙", 22f, DimWhite);
+            var gearIco  = MakeTmp(gearGo.transform, "GearIco", "⚙", 26f, DimWhite);
             gearIco.alignment     = TextAlignmentOptions.Center;
             gearIco.raycastTarget = false;
             var gIcoRt = gearIco.rectTransform;
@@ -268,10 +268,10 @@ namespace ValoCase.UI
             vpRt.anchorMin        = new Vector2(1f, 0.5f);
             vpRt.anchorMax        = new Vector2(1f, 0.5f);
             vpRt.pivot            = new Vector2(1f, 0.5f);
-            vpRt.anchoredPosition = new Vector2(-54f, 0f);  // 10 pad + 40 gear + 4 gap
-            vpRt.sizeDelta        = new Vector2(190f, 32f);
+            vpRt.anchoredPosition = new Vector2(-62f, 0f);  // 10 pad + 48 gear + 4 gap
+            vpRt.sizeDelta        = new Vector2(210f, 36f);
 
-            _vpLabel              = MakeTmp(vpGo.transform, "VpLbl", "0 VP", 13f, TextBright);
+            _vpLabel              = MakeTmp(vpGo.transform, "VpLbl", "0 VP", 15f, TextBright);
             _vpLabel.alignment    = TextAlignmentOptions.Right;
             _vpLabel.fontStyle    = FontStyles.Bold;
             _vpLabel.raycastTarget = false;

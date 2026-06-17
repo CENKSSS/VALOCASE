@@ -56,8 +56,18 @@ namespace ValoCase.CaseOpening
         {
             if (_sessionActive || caseDef == null) return;
             var ctx = GameContext.Instance;
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            bool meleeDbg = caseDef.CaseId == "melee_case";
+            if (meleeDbg)
+                Debug.Log($"[CASE_OPEN_DEBUG] StartOpeningBackend caseId='{caseDef.CaseId}' name='{caseDef.DisplayName}' price={caseDef.VpPrice} backendEnabled={(ctx != null && ctx.BackendEnabled)} backendReady={(ctx != null && ctx.BackendReady)} offline={BackendErrorMapper.IsOffline}");
+#endif
+
             if (ctx == null || !ctx.BackendReady)
             {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                if (meleeDbg) Debug.LogError("[CASE_OPEN_ERROR] melee_case aborted BEFORE request — backend not ready");
+#endif
                 onFailed?.Invoke("Sunucu kullanılamıyor.");
                 return;
             }
@@ -66,6 +76,9 @@ namespace ValoCase.CaseOpening
             // when there is no connectivity — surface the offline message and bail.
             if (BackendErrorMapper.IsOffline)
             {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                if (meleeDbg) Debug.LogError("[CASE_OPEN_ERROR] melee_case aborted BEFORE request — offline");
+#endif
                 onFailed?.Invoke(BackendErrorMapper.Offline);
                 return;
             }
@@ -87,6 +100,11 @@ namespace ValoCase.CaseOpening
         {
             var ctx = GameContext.Instance;
 
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            bool meleeDbg = caseDef.CaseId == "melee_case";
+            if (meleeDbg) Debug.Log($"[CASE_OPEN_DEBUG] sending backend open request — caseId='{caseDef.CaseId}'");
+#endif
+
             OpenCaseResultResponse response = null;
             BackendError error = null;
 
@@ -97,6 +115,10 @@ namespace ValoCase.CaseOpening
             // ── Request failed BEFORE any local commit — stop the reel, no spend/grant.
             if (error != null || response == null)
             {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                if (meleeDbg)
+                    Debug.LogError($"[CASE_OPEN_ERROR] melee_case open FAILED (during/after request) — status={(error != null ? error.HttpStatus : -1)} detail={(error != null ? error.ToString() : "null response")} userMsg=\"{BackendErrorMapper.Map(error)}\"");
+#endif
                 Debug.LogWarning("[FLOW] Backend open failed — " + (error?.ToString() ?? "null response"));
                 spinController.CancelSpin();
                 // Ambiguous transport failure (status 0) may have committed server-side:
@@ -112,8 +134,17 @@ namespace ValoCase.CaseOpening
             var mapped = BackendResultMapper.ToCaseOpeningResult(response);
             var skin = ctx.Content != null ? ctx.Content.GetSkin(mapped?.RolledSkinId) : null;
 
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            if (meleeDbg)
+                Debug.Log($"[CASE_OPEN_DEBUG] response parsed — respCaseId='{response.caseId}' wonSkinId='{(response.wonSkin != null ? response.wonSkin.skinId : "null")}' wonRarity='{(response.wonSkin != null ? response.wonSkin.rarity : "null")}' newVpBalance={response.newVpBalance} inventoryItemId='{response.inventoryItemId}' localResolved={(skin != null)}");
+#endif
+
             if (skin == null)
             {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                if (meleeDbg)
+                    Debug.LogError($"[CASE_OPEN_ERROR] melee_case AFTER response — backend skinId '{mapped?.RolledSkinId}' not found in local catalog (GetSkin returned null)");
+#endif
                 // Server committed but we cannot resolve the skin locally. Do NOT
                 // fake-grant or refund. Stop the reel, apply the authoritative wallet,
                 // reconcile inventory from the server, and show a safe message.
@@ -130,12 +161,14 @@ namespace ValoCase.CaseOpening
             // ── Apply authoritative wallet immediately (no local spend). ──
             ctx.ApplyBackendWallet(response.newVpBalance);
 
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            if (meleeDbg)
+                Debug.Log($"[CASE_OPEN_DEBUG] melee_case resolved local skin='{skin.SkinName}' id='{skin.SkinId}' — open OK, landing reel");
+#endif
+
             _rolledSkin = skin;
-            // The backend response carries no vpSpent field. Derive it from the
-            // selected case price (same source the local path uses, incl. shop
-            // discounts). This is cosmetic-stat only — the authoritative wallet is
-            // response.newVpBalance, already applied above.
-            _vpSpent = ctx.Shop != null ? ctx.Shop.GetDiscountedPrice(caseDef) : caseDef.VpPrice;
+            // Cosmetic stat only — authoritative wallet is response.newVpBalance.
+            _vpSpent = caseDef.VpPrice;
 
             Debug.Log($"[FLOW] Backend open OK — case='{caseDef.CaseId}' skin='{skin.SkinName}' " +
                       $"vpSpent={_vpSpent} newBalance={response.newVpBalance}");

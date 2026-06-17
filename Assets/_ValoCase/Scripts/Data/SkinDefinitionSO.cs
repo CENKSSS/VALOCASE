@@ -89,6 +89,8 @@ namespace ValoCase.Data
             accentColor   = Color.white;
         }
 
+        public void SetVpValueRuntime(int vp) => vpValue = vp;
+
         // Phase-6: lazy variant — stores the Resources path instead of the Sprite.
         // The Sprite is loaded + cached on first Icon access. Used by the catalog loader
         // so startup no longer loads every skin texture into memory.

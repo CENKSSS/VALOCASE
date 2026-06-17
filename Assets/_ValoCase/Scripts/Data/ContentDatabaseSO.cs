@@ -52,6 +52,8 @@ namespace ValoCase.Data
             if (loadSkinsFromFileSystem)
                 BuildCasesFromSource();
 
+            ApplyBalanceOverrides();
+
             _caseLookup = cases
                 .Where(c => c != null)
                 .GroupBy(c => c.CaseId)
@@ -127,6 +129,50 @@ namespace ValoCase.Data
             }
 
             cases = built ?? new List<CaseDefinitionSO>();
+        }
+
+        // ── Balance overrides (no-op when no override file exists) ────────────
+        // Mutates only the runtime-built SO instances; never writes catalog assets.
+        void ApplyBalanceOverrides()
+        {
+            var svc = BalanceOverrideService.Instance;
+            if (svc == null || !svc.HasAny) return;
+
+            foreach (var s in skins)
+                if (s != null && svc.TryGetSkinVp(s.SkinId, out int vp))
+                    s.SetVpValueRuntime(vp);
+
+            var kept = new List<CaseDefinitionSO>(cases.Count);
+            foreach (var c in cases)
+            {
+                if (c == null) continue;
+                if (!svc.IsCaseEnabled(c.CaseId)) continue;
+                if (svc.TryGetCasePrice(c.CaseId, out int price)) c.SetVpPriceRuntime(price);
+                ApplyDropOverrides(c, svc);
+                kept.Add(c);
+            }
+            cases = kept;
+        }
+
+        void ApplyDropOverrides(CaseDefinitionSO c, BalanceOverrideService svc)
+        {
+            var table = c.DropTable;
+            if (table == null) return;
+
+            var drops = new List<SkinDropEntry>();
+            foreach (var d in table.PossibleDrops)
+            {
+                if (d?.skin == null) continue;
+                var sid = d.skin.SkinId;
+                if (!svc.IsSkinEnabled(sid)) continue;
+                if (!svc.IsDropEnabled(c.CaseId, sid)) continue;
+                drops.Add(new SkinDropEntry
+                {
+                    skin = d.skin,
+                    skinWeightOverride = svc.GetDropWeight(c.CaseId, sid, d.skinWeightOverride)
+                });
+            }
+            table.RebuildDropsRuntime(drops);
         }
 
         // ── Save migration (one-time, version-gated) ──────────────────────────

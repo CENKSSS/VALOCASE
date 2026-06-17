@@ -22,6 +22,7 @@ namespace ValoCase.UI.Screens
         [SerializeField] TextMeshProUGUI rotationTimerLabel;
 
         readonly List<GameObject> _cards = new();
+        readonly List<GridLayoutGroup> _groupGrids = new();
         bool _builtOnce;
         bool _dealsSectionHidden;
 
@@ -29,16 +30,17 @@ namespace ValoCase.UI.Screens
         static readonly Color GreenBadge = new Color(0.09f,  0.55f,  0.26f,  1f);
         static readonly Color TextBright = new Color(0.925f, 0.910f, 0.882f, 1f);
 
-        // ── Grid constants ────────────────────────────────────────────────────
+        // ── Grid constants (compact, multi-column boxed cards) ─────────────────
         const int   DefaultColumns = 2;     // phones (portrait)
-        const int   WideColumns    = 3;     // tablets / iPad portrait
-        const int   MaxColumns     = 4;     // iPad landscape / very wide screens
-        const float WideMinViewportWidth     = 1080f; // ≥ this (canvas units) → 3 columns
-        const float VeryWideMinViewportWidth = 1500f; // ≥ this (canvas units) → 4 columns
-        const float CellAspect     = 1.3f;  // cellHeight = cellWidth × CellAspect (1.25–1.35 range)
-        const float HPad           = 8f;    // grid left & right padding (tablet / iPad)
-        const float PhoneHPad      = 20f;   // larger safe side padding on phones (2-col)
+        const int   MaxColumns     = 4;     // wider screens / editor
+        const float TargetCellW    = 225f;  // desired card width → drives the column count
+        const float MaxCellW       = 245f;  // cards stay compact instead of stretching wide
+        const float CellAspect     = 1.12f; // cellHeight = cellWidth × CellAspect (compact box)
+        const float SidePad        = 8f;    // grid left & right padding
         const float Gap            = 8f;    // spacing between cells
+
+        static readonly Color Accent = new Color(1f, 0.275f, 0.333f, 1f);
+        static readonly string[] PreferredGroupOrder = { "Vandal", "Melee", "Ghost", "Phantom" };
 
         // ── Lifecycle ─────────────────────────────────────────────────────────
 

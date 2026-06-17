@@ -10,8 +10,8 @@ namespace ValoCase.Data
     ///   0  Özel      Select
     ///   1  Üstün     Deluxe
     ///   2  İhtişamlı Premium
-    ///   3  Ultra     Ultra
-    ///   4  Seçkin    Exclusive
+    ///   3  Seçkin    Exclusive
+    ///   4  Ultra     Ultra
     ///
     /// All screens, services and loaders must use this class instead of
     /// hardcoding their own VP tables, labels or ordering logic.
@@ -23,11 +23,11 @@ namespace ValoCase.Data
         // whenever a deterministic rarity order is required.
         public static readonly SkinRarity[] OrderedRarities =
         {
-            SkinRarity.Select,     // Özel      rank 0
+            SkinRarity.Select,     // Özel      rank 0 (lowest)
             SkinRarity.Deluxe,     // Üstün     rank 1
             SkinRarity.Premium,    // İhtişamlı rank 2
-            SkinRarity.Ultra,      // Ultra     rank 3
-            SkinRarity.Exclusive,  // Seçkin    rank 4
+            SkinRarity.Exclusive,  // Seçkin    rank 3
+            SkinRarity.Ultra,      // Ultra     rank 4 (highest)
         };
 
         // ── Rank lookup ───────────────────────────────────────────────────────
