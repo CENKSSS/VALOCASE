@@ -17,59 +17,60 @@ namespace ValoCase.UI
         public RectTransform RectTransform { get; private set; }
         public SkinDefinitionSO Skin { get; private set; }
 
+        // Neutral spin slot — no rarity color so the outcome stays hidden until reveal.
+        // Panel is noticeably lighter than the spin background so each card reads as a
+        // distinct slot/placeholder.
+        static readonly Color SlotBg     = new Color(0.094f, 0.122f, 0.180f, 1f);
+        static readonly Color SlotBorder = new Color(1f, 1f, 1f, 0.20f);
+        const float CardScale = 0.6f;
+        static readonly Vector2 IconSize = new Vector2(170f, 120f);
+
         void Awake() => RectTransform = transform as RectTransform;
 
         public void Bind(SkinDefinitionSO skin, RarityVisualSO visuals)
         {
             Skin = skin;
+            ApplyNeutralStyle();
             if (skin == null) return;
 
-            // ── Skin icon — always white tint, always on top of glow/background ──
             if (icon != null)
             {
-                Debug.Log("[REEL_ICON] skin=" + skin.SkinName);
-                Debug.Log("[REEL_ICON] icon null=" + (skin.Icon == null));
-
-                icon.sprite        = skin.Icon;
-                icon.color         = Color.white;      // never inherit rarity tint or dark pool state
-                icon.enabled       = skin.Icon != null;
+                icon.sprite         = skin.Icon;
+                icon.color          = Color.white;
+                icon.enabled        = skin.Icon != null;
                 icon.preserveAspect = true;
-                icon.material      = null;             // default Unity UI material — no custom shaders
-                icon.raycastTarget = false;
-
-                // Push icon above rarityFrame and glow so neither overlays it.
+                icon.material       = null;
+                icon.raycastTarget  = false;
                 icon.transform.SetAsLastSibling();
-
-                Debug.Log("[REEL_ICON] image color=" + icon.color);
-                Debug.Log("[REEL_ICON] material=" + icon.material);
-                Debug.Log("[REEL_ICON] enabled=" + icon.enabled);
-                Debug.Log("[REEL_ICON_FIX] applied white tint for " + skin.SkinName);
-                Debug.Log("[REEL_ICON_FIX] icon sibling=" + icon.transform.GetSiblingIndex());
             }
 
-            if (weaponLabel != null) weaponLabel.text = skin.WeaponName;
-            if (skinLabel   != null) skinLabel.text   = skin.SkinName;
+            if (skinLabel != null) skinLabel.text = skin.SkinName;
+        }
 
-            if (visuals != null && visuals.TryGet(skin.Rarity, out var entry))
+        // Same neutral dark slot for every card during the spin — rarity is only
+        // revealed afterward in the result panel, never on the reel itself.
+        void ApplyNeutralStyle()
+        {
+            if (RectTransform != null)
+                RectTransform.localScale = new Vector3(CardScale, CardScale, 1f);
+
+            if (rarityFrame != null)
             {
-                // rarityFrame is the full-card background — use deep rarity color.
-                if (rarityFrame != null)
-                    rarityFrame.color = entry.cardBgColor;
+                rarityFrame.sprite = null;
+                rarityFrame.type   = Image.Type.Simple;
+                rarityFrame.color  = SlotBg;
 
-                // Glow overlay: soft neon tint behind the skin icon (NOT on top).
-                if (glow != null)
-                {
-                    var alpha = skin.Rarity >= SkinRarity.Premium ? 0.28f : 0.14f;
-                    glow.color = new Color(entry.primaryColor.r, entry.primaryColor.g, entry.primaryColor.b, alpha);
-                    glow.gameObject.SetActive(true);
-                    // Keep glow below icon — icon's SetAsLastSibling above already handles this.
-                }
-
-                // Border glow matches rarity accent.
-                var outline = GetComponent<Outline>();
-                if (outline != null)
-                    outline.effectColor = new Color(entry.primaryColor.r, entry.primaryColor.g, entry.primaryColor.b, 0.75f);
+                // Prefab root has no Outline; put the slot border on the panel itself.
+                var border = rarityFrame.GetComponent<Outline>();
+                if (border == null) border = rarityFrame.gameObject.AddComponent<Outline>();
+                border.effectColor    = SlotBorder;
+                border.effectDistance = new Vector2(2f, -2f);
             }
+
+            if (glow != null) glow.gameObject.SetActive(false);
+            if (weaponLabel != null) weaponLabel.gameObject.SetActive(false);
+
+            if (icon != null) icon.rectTransform.sizeDelta = IconSize;
         }
 
         public void OnSpawned() { }

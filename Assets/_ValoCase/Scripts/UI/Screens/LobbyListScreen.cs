@@ -1,3 +1,4 @@
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using TMPro;
@@ -6,6 +7,8 @@ using UnityEngine.UI;
 using ValoCase.Battle;
 using ValoCase.Core;
 using ValoCase.Data;
+using ValoCase.Progression;
+using ValoCase.Services.Backend;
 using ValoCase.UI;
 using static ValoCase.UI.UIBuild;
 
@@ -37,9 +40,12 @@ namespace ValoCase.UI.Screens
         const float StatsH      = 78f;
         const float CreateH     = 52f;
         const float SectionH    = 44f;
-        const float NavReserve  = 98f;   // clear the persistent 90dp bottom nav
+        const float NavReserve  = 16f;    // bottom nav space reserved by shared Screens host
+        const float ListChromeTop = TopInset + HeaderH + Gap + StatsH + Gap + CreateH + Gap + SectionH;
+        const float MinListH    = 120f;
 
         bool _built;
+        RectTransform _scrollRt;
 
         TextMeshProUGUI _balanceLbl;
         TextMeshProUGUI _activeCountLbl;
@@ -51,6 +57,13 @@ namespace ValoCase.UI.Screens
 
         readonly List<GameObject> _cardGos = new();
         List<BattleLobbyData>     _lobbies = new();
+
+        // Online public-lobby state. When the backend is ready the list is fetched from
+        // GET /battles/lobbies every ~3s; otherwise the legacy bot lobbies are shown as a
+        // dev/offline fallback (the old /battles/bot flow stays available behind them).
+        bool      _onlineMode;
+        bool      _botFallbackShown;
+        Coroutine _refreshCo;
 
         // Resolved once from the content database.
         Sprite           _basicCaseIcon;
@@ -70,15 +83,37 @@ namespace ValoCase.UI.Screens
 
         protected override bool KeepAliveWhenHidden => BattleViewOpen;
 
+        // Battle tab re-tapped while already on this screen: always return to the PvP
+        // lobby list. Closes the Create Battle overlay, and leaves the waiting room only
+        // when that is safe (never interrupts a starting/running battle).
+        public override void OnReselected()
+        {
+            if (_createPanel != null && _createPanel.gameObject.activeSelf)
+            {
+                CloseCreate();
+                SetLobbyChromeActive(true);
+                return;
+            }
+
+            if (_waitingPanel != null && _waitingPanel.IsOpen)
+            {
+                if (_waitingPanel.CanLeaveSafely)
+                    _waitingPanel.RequestLeaveExternally();
+                return;
+            }
+        }
+
         protected override void OnShown()
         {
             BuildOnce();
 
+            var rt = (RectTransform)transform;
+            rt.anchoredPosition = Vector2.zero;
+
             if (BattleViewOpen)
             {
-                // Returning from Settings (or any other screen) mid-battle:
-                // restore the exact battle view, state and panels untouched.
-                Debug.Log("[BATTLE_NAV] Returned to active battle room — state preserved");
+                Debug.Log("[ONLINE_BATTLE] battle screen shown after navbar return — preserving state");
+                _waitingPanel.NotifyReturnedToScreen();
                 return;
             }
 
@@ -87,7 +122,12 @@ namespace ValoCase.UI.Screens
             SetLobbyChromeActive(true);   // restore lobby if returning from a battle
             RefreshBalance();
             RefreshStats();
-            StartCoroutine(UIAnimator.SlideFromBottom((RectTransform)transform, 0.25f));
+            StartLobbyRefresh();          // live online list (or bot fallback)
+
+            Canvas.ForceUpdateCanvases();
+            LayoutRebuilder.ForceRebuildLayoutImmediate(rt);
+            Debug.Log("[ONLINE_BATTLE] lobby layout rebuilt on show");
+            StartCoroutine(UIAnimator.SlideFromBottom(rt, 0.25f));
         }
 
         protected override void OnHidden()
@@ -124,8 +164,9 @@ namespace ValoCase.UI.Screens
             BuildScrollList(rt);
             BuildSubPanels(rt);
 
-            _lobbies = BuildBotLobbies();
-            PopulateList();
+            // The lobby list is filled by StartLobbyRefresh() (online fetch or, when the
+            // backend is unavailable, the legacy bot lobbies). Nothing is built here so a
+            // stale bot list never flashes before the first online refresh.
         }
 
         void BuildHeader(RectTransform rt)
@@ -168,6 +209,8 @@ namespace ValoCase.UI.Screens
             _balanceLbl.alignment = TextAlignmentOptions.MidlineLeft;
             SetRect(_balanceLbl.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 1f), new Vector2(0f, 0.5f),
                 new Vector2(28f, 0f), new Vector2(-34f, 0f));
+
+            chip.gameObject.SetActive(false);   // wallet shown in top navbar
         }
 
         enum StatIcon { Trophy, Crosshair, Coin, Defeat, Star }
@@ -363,11 +406,11 @@ namespace ValoCase.UI.Screens
         {
             var scrollGo = NewGo("Scroll", rt, typeof(ScrollRect), typeof(Image));
             scrollGo.GetComponent<Image>().color = Color.clear;
-            var scrollRt = (RectTransform)scrollGo.transform;
-            scrollRt.anchorMin = Vector2.zero;
-            scrollRt.anchorMax = Vector2.one;
-            scrollRt.offsetMin = new Vector2(0f, NavReserve);
-            scrollRt.offsetMax = new Vector2(0f, -(TopInset + HeaderH + Gap + StatsH + Gap + CreateH + Gap + SectionH));
+            _scrollRt = (RectTransform)scrollGo.transform;
+            _scrollRt.anchorMin = new Vector2(0f, 1f);
+            _scrollRt.anchorMax = new Vector2(1f, 1f);
+            _scrollRt.pivot     = new Vector2(0.5f, 1f);
+            SizeListViewport();
 
             var viewport = NewGo("Viewport", scrollGo.transform, typeof(RectMask2D), typeof(Image));
             viewport.GetComponent<Image>().color = Color.clear;
@@ -397,6 +440,24 @@ namespace ValoCase.UI.Screens
             sr.movementType     = ScrollRect.MovementType.Elastic;
         }
 
+        // Keeps the list below the fixed top chrome and above the reserved bottom, with a
+        // clamped minimum so a short usable area scrolls instead of inverting the viewport.
+        void SizeListViewport()
+        {
+            if (_scrollRt == null) return;
+            float parentH = ((RectTransform)transform).rect.height;
+            float h = parentH > 1f
+                ? Mathf.Max(MinListH, parentH - ListChromeTop - NavReserve)
+                : MinListH;
+            _scrollRt.offsetMax = new Vector2(0f, -ListChromeTop);
+            _scrollRt.offsetMin = new Vector2(0f, -(ListChromeTop + h));
+        }
+
+        void OnRectTransformDimensionsChange()
+        {
+            if (_built) SizeListViewport();
+        }
+
         void BuildSubPanels(RectTransform rt)
         {
             var createGo = NewGo("CreatePanel", rt);
@@ -422,12 +483,141 @@ namespace ValoCase.UI.Screens
 
             foreach (var lobby in _lobbies)
             {
-                var card = LobbyCard.Create(_listContent, lobby, _basicCaseIcon, OnJoinLobby);
+                Sprite hostAvatar = _onlineMode && !string.IsNullOrEmpty(lobby.HostAvatarId)
+                    ? ValoCase.Profile.ProfileManager.ResolveAvatarSprite(lobby.HostAvatarId)
+                    : null;
+                var card = LobbyCard.Create(_listContent, lobby, ResolveCaseIcon(lobby), OnJoinLobby,
+                    !CanAffordLobby(lobby), hostAvatar);
                 _cardGos.Add(card.gameObject);
             }
 
+            Debug.Log("[BATTLE_LOBBY_DIAG] rendered " + _cardGos.Count + " lobby cards (onlineMode=" + _onlineMode + ")");
+
             if (_activeCountLbl != null)
                 _activeCountLbl.text = _lobbies.Count + " LIVE";
+        }
+
+        // Per-lobby case icon (online lobbies carry a real caseId); falls back to the
+        // basic-case icon resolved for the bot fallback, then to null (card handles it).
+        Sprite ResolveCaseIcon(BattleLobbyData lobby)
+        {
+            var content = GameContext.Instance?.Content;
+            if (content != null && !string.IsNullOrEmpty(lobby?.CaseId))
+            {
+                var c = content.GetCase(lobby.CaseId);
+                if (c != null && c.CaseIcon != null) return c.CaseIcon;
+            }
+            return _basicCaseIcon;
+        }
+
+        // ── Online lobby list (GET /api/v1/battles/lobbies, auto-refresh ~3s) ────────
+        void StartLobbyRefresh()
+        {
+            StopLobbyRefresh();
+            _botFallbackShown = false;
+            _refreshCo = StartCoroutine(LobbyAutoRefresh());
+        }
+
+        void StopLobbyRefresh()
+        {
+            if (_refreshCo != null) { StopCoroutine(_refreshCo); _refreshCo = null; }
+        }
+
+        IEnumerator LobbyAutoRefresh()
+        {
+            // Stops automatically when the screen is hidden (OnHidden → StopAllCoroutines)
+            // or while the battle room is up — public lobbies aren't refreshed mid-battle.
+            while (isActiveAndEnabled && !BattleViewOpen)
+            {
+                var ctx = GameContext.Instance;
+                if (ctx != null && ctx.BackendReady && ctx.Backend != null)
+                {
+                    _onlineMode       = true;
+                    _botFallbackShown = false;
+
+                    Debug.Log("[BATTLE_LOBBY_DIAG] GET /api/v1/battles/lobbies — online mode, requesting… baseUrl=" +
+                              ctx.BackendBaseUrl + " backendReady=" + ctx.BackendReady +
+                              " hasToken=" + ctx.HasGuestToken + " hasAccountId=" + ctx.HasGuestAccountId);
+
+                    LobbyListResponse resp = null;
+                    BackendError      err  = null;
+                    yield return ctx.Backend.GetBattleLobbies(r => resp = r, e => err = e);
+
+                    if (resp != null) ApplyOnlineLobbies(resp);
+                    else if (err != null) Debug.LogWarning("[BATTLE_LOBBY_DIAG] list fetch FAILED — " + err);
+                }
+                else if (!_botFallbackShown)
+                {
+                    // Backend not ready (editor/offline): show the legacy bot lobbies once.
+                    _onlineMode       = false;
+                    _botFallbackShown = true;
+                    Debug.LogWarning("[BATTLE_LOBBY_DIAG] backend NOT ready — showing LOCAL bot fallback (not online). " +
+                                     "ctxNull=" + (ctx == null) + " backendReady=" + (ctx != null && ctx.BackendReady) +
+                                     " hasToken=" + (ctx != null && ctx.HasGuestToken));
+                    _lobbies = BuildBotLobbies();
+                    PopulateList();
+                }
+
+                yield return new WaitForSecondsRealtime(3f);
+            }
+        }
+
+        // Shows only public WAITING lobbies (all players', not just the current user's).
+        // A lobby that has started/finished/cancelled — or that still says WAITING but
+        // already carries result data — has spent its single PvP lifetime and is dropped
+        // so it can never be reopened as an active card.
+        void ApplyOnlineLobbies(LobbyListResponse resp)
+        {
+            var list = new List<BattleLobbyData>();
+            int rawCount = resp.lobbies != null ? resp.lobbies.Length : 0;
+            Debug.Log("[BATTLE_LOBBY_DIAG] backend returned " + rawCount + " lobbies (raw, pre-filter)");
+            if (resp.lobbies != null)
+            {
+                foreach (var r in resp.lobbies)
+                {
+                    if (r == null) continue;
+
+                    if (!string.Equals(r.status, "WAITING", StringComparison.OrdinalIgnoreCase))
+                    {
+                        Debug.Log("[BATTLE_LOBBY_DIAG] DROP id=" + r.battleId + " reason=status!=WAITING status=" + r.status);
+                        continue;
+                    }
+
+                    if (HasResultData(r))
+                    {
+                        Debug.Log("[BATTLE_LOBBY_DIAG] DROP id=" + r.battleId + " reason=hasResultData");
+                        continue;
+                    }
+
+                    var data = BattleLobbyMapper.ToLobbyData(r);
+                    if (data == null)
+                    {
+                        Debug.Log("[BATTLE_LOBBY_DIAG] DROP id=" + r.battleId + " reason=mapNull");
+                        continue;
+                    }
+
+                    Debug.Log("[BATTLE_LOBBY_DIAG] KEEP id=" + r.battleId + " status=" + r.status +
+                              " case=" + r.caseId + " creator=" + (r.creator != null ? r.creator.accountId : "-"));
+                    list.Add(data);
+                }
+            }
+            Debug.Log("[BATTLE_LOBBY_DIAG] accepted " + list.Count + " of " + rawCount + " lobbies after filters");
+            _lobbies = list;
+            PopulateList();
+        }
+
+        // True when a lobby already carries battle-result fields, regardless of a stale
+        // status string — winner, completed-PvP progression, or rolled per-slot rounds.
+        static bool HasResultData(LobbyResponse r)
+        {
+            // JsonUtility never leaves nested serializable fields null, so progression is
+            // checked for real content — a non-null empty instance is not a result.
+            if (r.progression != null && (r.progression.level > 0 || r.progression.totalXp > 0)) return true;
+            if (!string.IsNullOrEmpty(r.winnerDisplayName)) return true;
+            if (r.slots != null)
+                foreach (var s in r.slots)
+                    if (s != null && s.rounds != null && s.rounds.Length > 0) return true;
+            return false;
         }
 
         // ── Default bot lobbies (Basic Vandal Case, 1x, 1v1 / 1v1v1) ─────────────
@@ -540,39 +730,98 @@ namespace ValoCase.UI.Screens
 
         void OnJoinLobby(BattleLobbyData lobby)
         {
-            // Block entry unless the player can afford the battle cost.
+            // VP affordability is the only join gate; case-level locks never apply here.
             if (!CanAffordEntry(lobby)) return;
 
-            // Joining a default bot lobby → full-screen Battle Room.
+            if (_onlineMode)
+            {
+                Debug.Log("[ONLINE_BATTLE] open lobby as viewer battleId=" + lobby?.LobbyId);
+                OpenOnlineRoom(lobby.LobbyId, lobby);
+                return;
+            }
+
+            // ── legacy local/bot fallback ──
             SetLobbyChromeActive(false);
             _waitingPanel.Show(lobby, isHost: false);
         }
 
         void OpenWaitingFromCreate(BattleLobbyData lobby)
         {
-            // Block entry unless the player can afford the battle cost; the create
-            // panel stays open so the player can adjust or cancel.
-            if (!CanAffordEntry(lobby)) return;
+            if (_onlineMode)
+            {
+                // POST /battles/lobbies, then open the waiting room on the returned id.
+                StartCoroutine(CreateOnlineRoutine(lobby));
+                return;
+            }
 
+            // ── legacy local fallback ──
+            if (!CanAffordEntry(lobby)) return;
             _createPanel.Hide();
             SetLobbyChromeActive(false);
             _waitingPanel.Show(lobby, isHost: true);
+        }
+
+        // ── Online create / join ────────────────────────────────────────────────
+        IEnumerator CreateOnlineRoutine(BattleLobbyData lobby)
+        {
+            var ctx = GameContext.Instance;
+            if (ctx == null || ctx.Backend == null) { GameEvents.RaiseToast("Sunucu kullanılamıyor."); yield break; }
+
+            var selections = new List<CaseSelectionRequest>();
+            if (lobby.CaseSelections != null)
+                foreach (var s in lobby.CaseSelections)
+                    selections.Add(new CaseSelectionRequest { caseId = s.CaseId, quantity = Mathf.Clamp(s.Quantity, 1, 5) });
+            if (selections.Count == 0 && !string.IsNullOrEmpty(lobby.CaseId))
+                selections.Add(new CaseSelectionRequest { caseId = lobby.CaseId, quantity = Mathf.Max(1, lobby.Rounds) });
+
+            Debug.Log("[BATTLE_LOBBY_DIAG] CREATE POST /api/v1/battles/lobbies selections=" + selections.Count +
+                      " maxSlots=" + lobby.MaxPlayers + " hasToken=" + ctx.HasGuestToken);
+            foreach (var s in selections)
+                Debug.Log("[BATTLE_LOBBY_DIAG] create selection caseId=" + s.caseId + " qty=" + s.quantity +
+                          " locallyUnlocked=" + PlayerProgression.IsCaseUnlocked(s.caseId) +
+                          " requiredLevel=" + PlayerProgression.RequiredLevelForCaseId(s.caseId));
+
+            LobbyResponse resp = null;
+            BackendError  err  = null;
+            yield return ctx.Backend.CreateBattleLobby(selections, lobby.MaxPlayers,
+                r => resp = r, e => err = e);
+
+            if (err != null || resp == null)
+            {
+                Debug.LogWarning("[BATTLE_LOBBY_DIAG] CREATE FAILED — status=" + (err != null ? err.HttpStatus : -1) +
+                                 " lockedCategory=" + (err != null ? err.LockedCategory : null) +
+                                 " requiredLevel=" + (err != null ? err.RequiredLevel : 0) +
+                                 " msg=" + (err != null ? err.Message : "null response"));
+                GameEvents.RaiseToast(WaitingRoomScreen.MapLobbyError(err));
+                yield break;
+            }
+
+            Debug.Log("[BATTLE_LOBBY_DIAG] CREATE ok battleId=" + resp.battleId + " status=" + resp.status);
+            ctx.RequestBackendResync();   // entry cost is charged server-side on create
+            _createPanel.Hide();
+            OpenOnlineRoom(resp.battleId, BattleLobbyMapper.ToLobbyData(resp));
+        }
+
+        void OpenOnlineRoom(string battleId, BattleLobbyData summary)
+        {
+            StopLobbyRefresh();
+            SetLobbyChromeActive(false);
+            _waitingPanel.ShowOnline(battleId, summary);
         }
 
         // Entry cost = Case Price × Round Count, stored as WagerVP on the lobby.
         // Shows a message and returns false when the balance is insufficient.
         bool CanAffordEntry(BattleLobbyData lobby)
         {
-            int cost = lobby?.WagerVP ?? 0;
-            var vp   = GameContext.Instance?.Vp;
+            if (CanAffordLobby(lobby)) return true;
+            GameEvents.RaiseToast("Yetersiz VP");
+            return false;
+        }
 
-            if (vp != null && vp.Balance < cost)
-            {
-                GameEvents.RaiseToast("Not enough VP to join this battle");
-                return false;
-            }
-
-            return true;
+        bool CanAffordLobby(BattleLobbyData lobby)
+        {
+            var vp = GameContext.Instance?.Vp;
+            return vp == null || vp.Balance >= (lobby?.WagerVP ?? 0);
         }
 
         void CloseWaiting()
@@ -580,10 +829,16 @@ namespace ValoCase.UI.Screens
             _waitingPanel.Hide();
             SetLobbyChromeActive(true);
 
+            // Drop any cached lobby (including the just-completed one) so it cannot linger
+            // on screen, then force an immediate fresh fetch of the live public list.
+            _lobbies = new List<BattleLobbyData>();
+            PopulateList();
+
             // The battle may have changed the balance (entry cost) and stats; keep
             // the lobby chrome in sync on return.
             RefreshBalance();
             RefreshStats();
+            StartLobbyRefresh();   // resume the live public list
         }
 
         // Toggles the lobby's own UI so the Battle Room shows full-screen with no

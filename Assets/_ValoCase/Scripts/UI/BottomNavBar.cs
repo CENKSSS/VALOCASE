@@ -103,23 +103,24 @@ namespace ValoCase.UI
             Repaint();
         }
 
+        /// <summary>Fixed nav height — shared content root insets by this. Single source of truth.</summary>
+        public const float Height = 162f;
+
         // ── Build ─────────────────────────────────────────────────────────────
         void BuildUI()
         {
-            const float NavH = 108f;  // total container height — matches builder spec
-
             // ── Outer rect: anchored to screen bottom, full width ──────────────
             var rt = (RectTransform)transform;
             rt.anchorMin        = Vector2.zero;
             rt.anchorMax        = new Vector2(1f, 0f);
             rt.pivot            = new Vector2(0.5f, 0f);
             rt.anchoredPosition = Vector2.zero;      // flush with SafeArea bottom
-            rt.sizeDelta        = new Vector2(0f, NavH);  // 108 px, same as builder
+            rt.sizeDelta        = new Vector2(0f, Height);
 
-            // ── Dark panel (inset 12px left/right, covers full container height)
+            // ── Dark panel (inset left/right, covers full container height)
             var panel = NewRT("NavPanel", rt, Vector2.zero, Vector2.one);
-            panel.offsetMin = new Vector2(12f, 0f);  // no bottom gap — content fully hidden
-            panel.offsetMax = new Vector2(-12f, 0f);
+            panel.offsetMin = Vector2.zero;
+            panel.offsetMax = Vector2.zero;
 
             var panelImg = panel.gameObject.AddComponent<Image>();
             panelImg.color = NavBg;
@@ -133,7 +134,7 @@ namespace ValoCase.UI
                 new Vector2(0f, 1f), new Vector2(1f, 1f));
             topBorderRt.pivot            = new Vector2(0.5f, 1f);
             topBorderRt.anchoredPosition = Vector2.zero;
-            topBorderRt.sizeDelta        = new Vector2(0f, 1.5f);
+            topBorderRt.sizeDelta        = new Vector2(0f, 2.5f);
             var topBorderImg = topBorderRt.gameObject.AddComponent<Image>();
             topBorderImg.color        = BorderCol;
             topBorderImg.raycastTarget = false;
@@ -166,15 +167,15 @@ namespace ValoCase.UI
             float yAnchor = top  ? 1f : 0f;
             float xPivot  = left ? 0f : 1f;
             float yPivot  = top  ? 1f : 0f;
-            float xOff    = left ?  3f : -3f;
-            float yOff    = top  ? -3f :  3f;
+            float xOff    = left ?  5f : -5f;
+            float yOff    = top  ? -5f :  5f;
 
             // Horizontal arm
             var h = NewRT("CH", parent,
                 new Vector2(xAnchor, yAnchor), new Vector2(xAnchor, yAnchor));
             h.pivot            = new Vector2(xPivot, yPivot);
             h.anchoredPosition = new Vector2(xOff, yOff);
-            h.sizeDelta        = new Vector2(8f, 1f);
+            h.sizeDelta        = new Vector2(14f, 1.7f);
             var hImg = h.gameObject.AddComponent<Image>();
             hImg.color = ActiveRed;
             hImg.raycastTarget = false;
@@ -184,7 +185,7 @@ namespace ValoCase.UI
                 new Vector2(xAnchor, yAnchor), new Vector2(xAnchor, yAnchor));
             v.pivot            = new Vector2(xPivot, yPivot);
             v.anchoredPosition = new Vector2(xOff, yOff);
-            v.sizeDelta        = new Vector2(1f, 8f);
+            v.sizeDelta        = new Vector2(1.7f, 14f);
             var vImg = v.gameObject.AddComponent<Image>();
             vImg.color = ActiveRed;
             vImg.raycastTarget = false;
@@ -215,7 +216,7 @@ namespace ValoCase.UI
                 new Vector2(0f, 1f), new Vector2(1f, 1f));
             barRt.pivot            = new Vector2(0.5f, 1f);
             barRt.anchoredPosition = Vector2.zero;
-            barRt.sizeDelta        = new Vector2(0f, 2f);
+            barRt.sizeDelta        = new Vector2(0f, 3.4f);
             ui.TopBar              = barRt.gameObject.AddComponent<Image>();
             ui.TopBar.color        = Color.clear;
             ui.TopBar.raycastTarget = false;
@@ -225,19 +226,19 @@ namespace ValoCase.UI
             col.offsetMin = col.offsetMax = Vector2.zero;
             var vlg = col.gameObject.AddComponent<VerticalLayoutGroup>();
             vlg.childAlignment         = TextAnchor.MiddleCenter;
-            vlg.spacing                = 5f;
+            vlg.spacing                = 9f;
             vlg.childForceExpandWidth  = false;
             vlg.childForceExpandHeight = false;
-            vlg.padding = new RectOffset(0, 0, 10, 12);
+            vlg.padding = new RectOffset(0, 0, 12, 16);
 
-            // Icon root (24×24 reserved; drawn graphics scaled 1.2×)
+            // Icon root (40×40 reserved; drawn graphics scaled ~2.0× ≈ 1.7× larger)
             var iconGo = new GameObject("Ico", typeof(RectTransform));
             iconGo.transform.SetParent(col, false);
             ui.IconRoot = (RectTransform)iconGo.transform;
             var iLE = iconGo.AddComponent<LayoutElement>();
-            iLE.minWidth = iLE.preferredWidth   = 24f;
-            iLE.minHeight = iLE.preferredHeight = 24f;
-            ui.IconRoot.localScale = new Vector3(1.2f, 1.2f, 1f);
+            iLE.minWidth = iLE.preferredWidth   = 40f;
+            iLE.minHeight = iLE.preferredHeight = 40f;
+            ui.IconRoot.localScale = new Vector3(2.04f, 2.04f, 1f);
             DrawIcon(ui.IconRoot, ico, DimWhite);
 
             // Label
@@ -245,15 +246,17 @@ namespace ValoCase.UI
                 typeof(RectTransform), typeof(TextMeshProUGUI));
             lblGo.transform.SetParent(col, false);
             var lLE = lblGo.AddComponent<LayoutElement>();
-            lLE.minHeight = lLE.preferredHeight = 15f;
+            lLE.minHeight = lLE.preferredHeight = 24f;
             ui.Label                  = lblGo.GetComponent<TextMeshProUGUI>();
             ui.Label.text             = label;
-            ui.Label.fontSize         = 11f;
             ui.Label.fontStyle        = FontStyles.Bold;
             ui.Label.alignment        = TextAlignmentOptions.Center;
             ui.Label.color            = DimWhite;
-            ui.Label.characterSpacing = 1.5f;
+            ui.Label.characterSpacing = 1f;
             ui.Label.raycastTarget    = false;
+            ui.Label.enableAutoSizing = true;   // grow short labels, keep INVENTORY clean in the fixed tab width
+            ui.Label.fontSizeMin      = 11f;
+            ui.Label.fontSizeMax      = 17f;
 
             // Glow dot (active only, bottom-centre of tab)
             var dotGo = new GameObject("Dot",
@@ -263,14 +266,14 @@ namespace ValoCase.UI
             dotRt.anchorMin        = new Vector2(0.5f, 0f);
             dotRt.anchorMax        = new Vector2(0.5f, 0f);
             dotRt.pivot            = new Vector2(0.5f, 0f);
-            dotRt.anchoredPosition = new Vector2(0f, 4f);
-            dotRt.sizeDelta        = new Vector2(4f, 4f);
+            dotRt.anchoredPosition = new Vector2(0f, 7f);
+            dotRt.sizeDelta        = new Vector2(7f, 7f);
             var dotImg = dotGo.GetComponent<Image>();
             dotImg.color        = ActiveRed;
             dotImg.raycastTarget = false;
             var dotOl = dotGo.AddComponent<Outline>();
             dotOl.effectColor    = new Color(1f, 0.122f, 0.224f, 0.6f);
-            dotOl.effectDistance = new Vector2(3f, -3f);
+            dotOl.effectDistance = new Vector2(5f, -5f);
             ui.Dot = dotGo;
 
             return ui;

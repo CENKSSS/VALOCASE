@@ -1,37 +1,6 @@
 {
-    "version": 1,
-    "skinOverrides": [],
-    "caseOverrides": [
-        {
-            "caseId": "vandal_arcane",
-            "hasPriceOverride": true,
-            "priceOverride": 2500,
-            "enabled": true
-        },
-        {
-            "caseId": "vandal_radiant",
-            "hasPriceOverride": true,
-            "priceOverride": 1700,
-            "enabled": true
-        },
-        {
-            "caseId": "vandal_protocol",
-            "hasPriceOverride": true,
-            "priceOverride": 1800,
-            "enabled": true
-        },
-        {
-            "caseId": "vandal_tactical",
-            "hasPriceOverride": false,
-            "priceOverride": 0,
-            "enabled": false
-        },
-        {
-            "caseId": "vandal_elite",
-            "hasPriceOverride": false,
-            "priceOverride": 0,
-            "enabled": false
-        }
-    ],
-    "dropOverrides": []
+  "version": 1,
+  "skinOverrides": [],
+  "caseOverrides": [],
+  "dropOverrides": []
 }

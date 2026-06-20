@@ -197,7 +197,7 @@ namespace ValoCase.EditorTools
                 {
                     EditorGUILayout.BeginVertical();
                     EditorGUILayout.LabelField(s.displayName, EditorStyles.label);
-                    EditorGUILayout.LabelField($"{s.weapon} · {s.rarity}{(s.enabled ? "" : " · DISABLED")}  —  {id}",
+                    EditorGUILayout.LabelField($"{s.weapon} · {s.rarity} · {s.vpValue:N0} VP{(s.enabled ? "" : " · DISABLED")}  —  {id}",
                         EditorStyles.miniLabel);
                     EditorGUILayout.EndVertical();
                 }
@@ -254,7 +254,7 @@ namespace ValoCase.EditorTools
                 EditorGUILayout.BeginHorizontal(EditorStyles.helpBox);
                 EditorGUILayout.BeginVertical();
                 EditorGUILayout.LabelField(e.displayName + (e.enabled ? "" : "  (DISABLED)"), EditorStyles.label);
-                EditorGUILayout.LabelField($"{e.weapon} · {e.rarity}  —  {e.skinId}", EditorStyles.miniLabel);
+                EditorGUILayout.LabelField($"{e.weapon} · {e.rarity} · {e.vpValue:N0} VP  —  {e.skinId}", EditorStyles.miniLabel);
                 EditorGUILayout.EndVertical();
 
                 if (poolSet.Contains(e.skinId))

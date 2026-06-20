@@ -37,9 +37,11 @@ namespace ValoCase.UI
         BattleLobbyData         _data;
         Action<BattleLobbyData> _onJoin;
         AngledCutImage          _joinBg;
+        bool                    _locked;
+        Sprite                  _hostAvatar;
 
         public static LobbyCard Create(Transform parent, BattleLobbyData data,
-            Sprite caseIcon, Action<BattleLobbyData> onJoin)
+            Sprite caseIcon, Action<BattleLobbyData> onJoin, bool locked, Sprite hostAvatar = null)
         {
             var go   = NewGo("LobbyCard_" + data.LobbyId, parent);
             var card = go.AddComponent<LobbyCard>();
@@ -48,14 +50,16 @@ namespace ValoCase.UI
             le.minHeight       = Height;
             le.preferredHeight = Height;
 
-            card.Build(data, caseIcon, onJoin);
+            card.Build(data, caseIcon, onJoin, locked, hostAvatar);
             return card;
         }
 
-        void Build(BattleLobbyData data, Sprite caseIcon, Action<BattleLobbyData> onJoin)
+        void Build(BattleLobbyData data, Sprite caseIcon, Action<BattleLobbyData> onJoin, bool locked, Sprite hostAvatar)
         {
-            _data   = data;
-            _onJoin = onJoin;
+            _data       = data;
+            _onJoin     = onJoin;
+            _locked     = locked;
+            _hostAvatar = hostAvatar;
 
             var bg = MakeImage("Bg", transform, RefCard, raycast: true);
             Stretch(bg.rectTransform);
@@ -112,6 +116,29 @@ namespace ValoCase.UI
                 iRt.pivot     = new Vector2(0.5f, 0.5f);
                 iRt.sizeDelta = new Vector2(ThumbSz - 10f, ThumbSz - 10f);
             }
+
+            // Host avatar badge (online lobbies only): a small framed portrait at the
+            // thumb's bottom-right showing the real creator's backend avatar.
+            if (_hostAvatar != null)
+            {
+                const float badge = 26f;
+                var frame = MakeImage("HostAvatarFrame", tile.transform, RefCard);
+                SetRect(frame.rectTransform,
+                    new Vector2(1f, 0f), new Vector2(1f, 0f), new Vector2(1f, 0f),
+                    new Vector2(4f, -4f), new Vector2(badge, badge));
+                var fb = frame.gameObject.AddComponent<Outline>();
+                fb.effectColor    = WithAlpha(RefPrimary, 0.8f);
+                fb.effectDistance = new Vector2(1f, -1f);
+
+                var photo = MakeImage("HostAvatar", frame.transform, Color.white);
+                photo.sprite         = _hostAvatar;
+                photo.preserveAspect = true;
+                var pr = photo.rectTransform;
+                pr.anchorMin = new Vector2(0f, 0f);
+                pr.anchorMax = new Vector2(1f, 1f);
+                pr.offsetMin = new Vector2(1.5f, 1.5f);
+                pr.offsetMax = new Vector2(-1.5f, -1.5f);
+            }
         }
 
         void BuildTextContent(BattleLobbyData data)
@@ -123,12 +150,12 @@ namespace ValoCase.UI
                 new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0f, 1f),
                 new Vector2(TextLeft, -16f), new Vector2(TextWidthD, 22f));
 
-            var botBadge = MakeAngled("BotBadge", transform, RefPrimary, 3f);
+            var botBadge = MakeAngled("StatusBadge", transform, RefPrimary, 3f);
             SetRect(botBadge.rectTransform,
                 new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f),
                 new Vector2(TextLeft, -44f), new Vector2(76f, 18f));
 
-            var botLbl = MakeTmp(botBadge.transform, "Lbl", "BOT LOBBY",
+            var botLbl = MakeTmp(botBadge.transform, "Lbl", StatusText(data),
                 8f, FontStyles.Bold, RefWhite);
             botLbl.alignment        = TextAlignmentOptions.Center;
             botLbl.characterSpacing = 1f;
@@ -149,10 +176,11 @@ namespace ValoCase.UI
             typeLbl.characterSpacing = 1f;
             Stretch(typeLbl.rectTransform);
 
-            string caseLine = $"{data.CaseName}  <color=#{Hex(RefGold)}><b>x1</b></color>";
-            var caseLbl = MakeTmp(transform, "CaseName", caseLine,
+            var caseLbl = MakeTmp(transform, "CaseName", CaseLine(data),
                 11f, FontStyles.Normal, RefMuted);
             caseLbl.alignment = TextAlignmentOptions.MidlineLeft;
+            caseLbl.enableWordWrapping = false;
+            caseLbl.overflowMode = TextOverflowModes.Ellipsis;
             SetRect(caseLbl.rectTransform,
                 new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0f, 1f),
                 new Vector2(TextLeft, -68f), new Vector2(TextWidthD, 18f));
@@ -215,11 +243,20 @@ namespace ValoCase.UI
 
         void BuildJoinButton()
         {
-            _joinBg = MakeAngled("JoinBtn", transform, RefPrimary, 6f, raycast: true);
+            _joinBg = MakeAngled("JoinBtn", transform, _locked ? RefSecondary : RefPrimary, 6f, raycast: true);
 
-            var joinGlow = _joinBg.gameObject.AddComponent<Shadow>();
-            joinGlow.effectColor = WithAlpha(RefPrimary, 0.75f);
-            joinGlow.effectDistance = new Vector2(0f, -4f);
+            if (_locked)
+            {
+                var lockBorder = _joinBg.gameObject.AddComponent<Outline>();
+                lockBorder.effectColor    = WithAlpha(RefMuted, 0.6f);
+                lockBorder.effectDistance = new Vector2(1f, -1f);
+            }
+            else
+            {
+                var joinGlow = _joinBg.gameObject.AddComponent<Shadow>();
+                joinGlow.effectColor = WithAlpha(RefPrimary, 0.75f);
+                joinGlow.effectDistance = new Vector2(0f, -4f);
+            }
 
             SetRect(_joinBg.rectTransform,
                 new Vector2(1f, 0f), new Vector2(1f, 0f), new Vector2(1f, 0f),
@@ -229,16 +266,18 @@ namespace ValoCase.UI
             joinBtn.transition = Selectable.Transition.None;
             joinBtn.onClick.AddListener(OnJoinPressed);
 
-            var lbl = MakeTmp(_joinBg.transform, "Lbl", "JOIN",
-                14f, FontStyles.Bold, RefWhite);
-            lbl.alignment        = TextAlignmentOptions.Center;
-            lbl.characterSpacing = 2f;
+            var lbl = MakeTmp(_joinBg.transform, "Lbl", _locked ? "Yetersiz VP" : "VIEW",
+                _locked ? 9f : 14f, FontStyles.Bold, _locked ? RefMuted : RefWhite);
+            lbl.alignment          = TextAlignmentOptions.Center;
+            lbl.characterSpacing   = _locked ? 0f : 2f;
+            lbl.enableWordWrapping  = false;
+            lbl.overflowMode        = TextOverflowModes.Ellipsis;
             Stretch(lbl.rectTransform);
         }
 
         void OnJoinPressed()
         {
-            StartCoroutine(Flash());
+            if (!_locked) StartCoroutine(Flash());
             _onJoin?.Invoke(_data);
         }
 
@@ -252,11 +291,47 @@ namespace ValoCase.UI
 
         void OnDisable() => StopAllCoroutines();
 
-        static string LobbyTitle(BattleLobbyData d) => d.MaxPlayers switch
+        // Online lobbies show the creator's display name; the bot fallback keeps its
+        // original labels (HostName is "BOT" for those, so they fall through).
+        static string LobbyTitle(BattleLobbyData d)
         {
-            2 => "Basic Vandal Duel",
-            3 => "Basic Vandal Triple Battle",
-            _ => d.CaseName + " Battle",
+            if (!string.IsNullOrEmpty(d.HostName) &&
+                !string.Equals(d.HostName, "BOT", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(d.HostName, "YOU", StringComparison.OrdinalIgnoreCase))
+                return d.HostName;
+
+            return d.MaxPlayers switch
+            {
+                2 => "Basic Vandal Duel",
+                3 => "Basic Vandal Triple Battle",
+                _ => d.CaseName + " Battle",
+            };
+        }
+
+        // Joined "Name xN" per selected case; falls back to the single-case summary.
+        static string CaseLine(BattleLobbyData d)
+        {
+            string qtyHex = Hex(RefGold);
+            if (d.CaseSelections != null && d.CaseSelections.Count > 0)
+            {
+                var sb = new System.Text.StringBuilder();
+                for (int i = 0; i < d.CaseSelections.Count; i++)
+                {
+                    var s = d.CaseSelections[i];
+                    if (i > 0) sb.Append("   ");
+                    sb.Append(s.CaseName).Append("  <color=#").Append(qtyHex).Append("><b>x")
+                      .Append(s.Quantity).Append("</b></color>");
+                }
+                return sb.ToString();
+            }
+            return $"{d.CaseName}  <color=#{qtyHex}><b>x{d.Rounds}</b></color>";
+        }
+
+        static string StatusText(BattleLobbyData d) => d.Status switch
+        {
+            LobbyStatus.Full => "FULL",
+            LobbyStatus.Live => "LIVE",
+            _                => "WAITING",
         };
 
         static string TypeText(BattleLobbyData d) => d.MaxPlayers switch

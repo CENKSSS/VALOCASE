@@ -4,6 +4,7 @@ using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
 using ValoCase.Core;
+using ValoCase.Services.Backend;
 using ValoCase.Systems;
 
 namespace ValoCase.UI.Screens
@@ -30,12 +31,24 @@ namespace ValoCase.UI.Screens
         static readonly Color TextDim   = new Color(1f, 1f, 1f, 0.38f);
 
         bool            _built;
-        ScreenType      _prevScreen;
-        GameObject      _backBtnGo;
         GameObject      _comingSoonPanel;
         TextMeshProUGUI _comingSoonTitle;
         MissionSystem   _missionSystem;
         MissionsScreen  _missionsPanel;
+
+        const int DailyRewardVp = 2000;
+
+        Button              _dailyClaimBtn;
+        Image               _dailyClaimImg;
+        TextMeshProUGUI     _dailyClaimLbl;
+        TextMeshProUGUI     _dailyStatusLbl;
+        bool                _dailyBackend;
+        bool                _dailyStatusLoaded;
+        bool                _dailyClaimInFlight;
+        bool                _dailyRefetching;
+        DailyStatusResponse _dailyStatus;
+        double              _dailyNextClaimRealtime;
+        float               _dailyTick;
 
         public void Inject(MissionSystem system)
         {
@@ -112,30 +125,38 @@ namespace ValoCase.UI.Screens
         // ── Lifecycle ─────────────────────────────────────────────────────────
         void Awake()
         {
-            // Builder-wired back button: reuse with correct previous-screen navigation
             if (backButton != null)
-                backButton.onClick.AddListener(OnBackClicked);
-        }
-
-        void OnBackClicked()
-        {
-            var targetScreen = (_prevScreen != ScreenType.Tools &&
-                                _prevScreen != ScreenType.Settings &&
-                                _prevScreen != ScreenType.EarnVp)
-                ? _prevScreen
-                : ScreenType.CaseOpening;   // fallback → CASES
-            navigator?.Navigate(targetScreen);
+                backButton.gameObject.SetActive(false);
         }
 
         protected override void OnShown()
         {
-            _prevScreen = navigator?.PreviousScreen ?? ScreenType.CaseOpening;
             BuildOnce();
             // Make sure overlays are hidden when re-entering
             if (_comingSoonPanel != null) _comingSoonPanel.SetActive(false);
             _missionsPanel?.Hide();
-            // Re-assert back button on top (handles re-entry after ComingSoon was shown)
-            EnsureBackButtonOnTop();
+            RefreshDaily();
+        }
+
+        void Update()
+        {
+            if (!IsVisible || _dailyClaimBtn == null) return;
+            _dailyTick += Time.unscaledDeltaTime;
+            if (_dailyTick < 1f) return;
+            _dailyTick = 0f;
+
+            // Backend cooldown elapsed while the screen stays open — re-pull so the
+            // CLAIM visual restores to active without re-entering Tools.
+            if (_dailyBackend && _dailyStatusLoaded && _dailyStatus != null &&
+                !_dailyStatus.claimable && !_dailyClaimInFlight && !_dailyRefetching &&
+                _dailyNextClaimRealtime - Time.unscaledTimeAsDouble <= 0)
+            {
+                _dailyRefetching = true;
+                FetchDailyStatus();
+                return;
+            }
+
+            UpdateDailyUi();
         }
 
         // ── Build (runs once on first show) ───────────────────────────────────
@@ -149,9 +170,10 @@ namespace ValoCase.UI.Screens
             // Shared section background (cover image, aspect preserved)
             FullscreenBackground.AttachShared(gameObject);
 
-            // Content area — between TopProfileBar (115 px) and BottomNavBar (110 px)
-            const float topPad  = 115f;
-            const float botPad  = 110f;
+            // Navbar space is reserved by the shared Screens host (ScreenContentFitter);
+            // these are just content-edge margins.
+            const float topPad  = 24f;
+            const float botPad  = 24f;
             const float sidePad =  24f;
 
             var content = NewGo("Content", rt, typeof(VerticalLayoutGroup));
@@ -183,6 +205,8 @@ namespace ValoCase.UI.Screens
             // Small spacer
             var sp0 = NewGo("Sp0", content.transform, typeof(LayoutElement));
             sp0.GetComponent<LayoutElement>().minHeight = 10f;
+
+            BuildDailyRewardCard(content.transform);
 
             // ── Three rows ────────────────────────────────────────────────────
             BuildRow(content.transform, "VP KAZAN", AccentVP, () =>
@@ -217,9 +241,6 @@ namespace ValoCase.UI.Screens
 
             // Missions overlay panel (full-screen, shown on GOREVLER tap)
             EnsureMissionsPanel();
-
-            // ── BACK button — built last so it renders on top of all content ──
-            BuildBackButton(rt);
         }
 
         // ── Tappable row card ──────────────────────────────────────────────────
@@ -283,65 +304,6 @@ namespace ValoCase.UI.Screens
                 _ => img.color = CardBg);
         }
 
-        // ── BACK button (top-left, below TopProfileBar) ───────────────────────
-        void BuildBackButton(RectTransform screenRt)
-        {
-            if (_backBtnGo != null)
-            {
-                EnsureBackButtonOnTop();
-                return;
-            }
-            // Serialized back button already covers the behavior — skip procedural one.
-            if (backButton != null) return;
-
-            _backBtnGo = new GameObject("BackBtn",
-                typeof(RectTransform), typeof(Image), typeof(Button), typeof(Outline));
-            _backBtnGo.transform.SetParent(screenRt, false);
-
-            var bRt = (RectTransform)_backBtnGo.transform;
-            bRt.anchorMin        = new Vector2(0f, 1f);
-            bRt.anchorMax        = new Vector2(0f, 1f);
-            bRt.pivot            = new Vector2(0f, 1f);
-            bRt.anchoredPosition = new Vector2(28f, -88f);
-            bRt.sizeDelta        = new Vector2(96f, 36f);
-
-            _backBtnGo.GetComponent<Image>().color = new Color(0.031f, 0.055f, 0.102f, 0.97f);
-
-            var ol = _backBtnGo.GetComponent<Outline>();
-            ol.effectColor    = new Color(1f, 0.122f, 0.224f, 0.80f);
-            ol.effectDistance = new Vector2(1.5f, -1.5f);
-
-            var lbl = MakeTmp(_backBtnGo.transform, "Lbl", "BACK",
-                12f, FontStyles.Bold, Color.white);
-            lbl.alignment = TextAlignmentOptions.Center;
-            var lRt = lbl.rectTransform;
-            lRt.anchorMin = Vector2.zero; lRt.anchorMax = Vector2.one;
-            lRt.offsetMin = lRt.offsetMax = Vector2.zero;
-
-            var btn = _backBtnGo.GetComponent<Button>();
-            btn.transition = Selectable.Transition.None;
-            btn.onClick.AddListener(OnBackClicked);
-
-            EnsureBackButtonOnTop();
-        }
-
-        void EnsureBackButtonOnTop()
-        {
-            if (_backBtnGo == null) return;
-            _backBtnGo.SetActive(true);
-            _backBtnGo.transform.SetParent((RectTransform)transform, false);
-
-            // Re-apply position in case anything shifted
-            var bRt = (RectTransform)_backBtnGo.transform;
-            bRt.anchorMin        = new Vector2(0f, 1f);
-            bRt.anchorMax        = new Vector2(0f, 1f);
-            bRt.pivot            = new Vector2(0f, 1f);
-            bRt.anchoredPosition = new Vector2(28f, -88f);
-            bRt.sizeDelta        = new Vector2(96f, 36f);
-
-            _backBtnGo.transform.SetAsLastSibling();
-        }
-
         // ── Full-screen Coming Soon overlay ───────────────────────────────────
         void BuildComingSoonPanel(RectTransform screenRt)
         {
@@ -399,6 +361,211 @@ namespace ValoCase.UI.Screens
             if (_comingSoonPanel == null) return;
             _comingSoonTitle.text = title;
             _comingSoonPanel.SetActive(true);
+        }
+
+        // ── Daily Reward card — unconditional 2000 VP every 24h ───────────────
+        void BuildDailyRewardCard(Transform parent)
+        {
+            var cardGo = NewGo("DailyRewardCard", parent,
+                typeof(Image), typeof(Outline), typeof(LayoutElement));
+            cardGo.GetComponent<LayoutElement>().minHeight = 96f;
+            cardGo.GetComponent<Image>().color = CardBg;
+
+            var ol = cardGo.GetComponent<Outline>();
+            ol.effectColor    = new Color(AccentVP.r, AccentVP.g, AccentVP.b, 0.35f);
+            ol.effectDistance = new Vector2(1.5f, -1.5f);
+
+            var bar = NewGo("Bar", cardGo.transform, typeof(Image));
+            var barRt = (RectTransform)bar.transform;
+            barRt.anchorMin        = new Vector2(0f, 0f);
+            barRt.anchorMax        = new Vector2(0f, 1f);
+            barRt.pivot            = new Vector2(0f, 0.5f);
+            barRt.anchoredPosition = Vector2.zero;
+            barRt.sizeDelta        = new Vector2(3.5f, 0f);
+            bar.GetComponent<Image>().color        = AccentVP;
+            bar.GetComponent<Image>().raycastTarget = false;
+
+            var title = MakeTmp(cardGo.transform, "Title", "DAILY REWARD", 15f, FontStyles.Bold, TextBright);
+            title.alignment = TextAlignmentOptions.TopLeft;
+            var titleRt = title.rectTransform;
+            titleRt.anchorMin = new Vector2(0f, 1f);
+            titleRt.anchorMax = new Vector2(0.6f, 1f);
+            titleRt.pivot     = new Vector2(0f, 1f);
+            titleRt.anchoredPosition = new Vector2(20f, -14f);
+            titleRt.sizeDelta = new Vector2(0f, 22f);
+            title.raycastTarget = false;
+
+            var reward = MakeTmp(cardGo.transform, "Reward", $"+{DailyRewardVp:N0} VP", 22f, FontStyles.Bold, AccentVP);
+            reward.alignment = TextAlignmentOptions.TopLeft;
+            var rewardRt = reward.rectTransform;
+            rewardRt.anchorMin = new Vector2(0f, 1f);
+            rewardRt.anchorMax = new Vector2(0.6f, 1f);
+            rewardRt.pivot     = new Vector2(0f, 1f);
+            rewardRt.anchoredPosition = new Vector2(20f, -38f);
+            rewardRt.sizeDelta = new Vector2(0f, 28f);
+            reward.raycastTarget = false;
+
+            _dailyStatusLbl = MakeTmp(cardGo.transform, "Status", "", 11f, FontStyles.Normal, TextDim);
+            _dailyStatusLbl.alignment = TextAlignmentOptions.TopLeft;
+            var statusRt = _dailyStatusLbl.rectTransform;
+            statusRt.anchorMin = new Vector2(0f, 0f);
+            statusRt.anchorMax = new Vector2(0.6f, 0f);
+            statusRt.pivot     = new Vector2(0f, 0f);
+            statusRt.anchoredPosition = new Vector2(20f, 12f);
+            statusRt.sizeDelta = new Vector2(0f, 16f);
+            _dailyStatusLbl.raycastTarget = false;
+
+            var btnGo = NewGo("ClaimBtn", cardGo.transform, typeof(Image), typeof(Button));
+            _dailyClaimImg = btnGo.GetComponent<Image>();
+            _dailyClaimImg.color = AccentVP;
+            var btnRt = (RectTransform)btnGo.transform;
+            btnRt.anchorMin        = new Vector2(1f, 0.5f);
+            btnRt.anchorMax        = new Vector2(1f, 0.5f);
+            btnRt.pivot            = new Vector2(1f, 0.5f);
+            btnRt.anchoredPosition = new Vector2(-16f, 0f);
+            btnRt.sizeDelta        = new Vector2(128f, 56f);
+
+            _dailyClaimBtn = btnGo.GetComponent<Button>();
+            _dailyClaimBtn.transition = Selectable.Transition.None;
+            _dailyClaimBtn.onClick.AddListener(OnDailyClaim);
+
+            _dailyClaimLbl = MakeTmp(btnGo.transform, "Lbl", "CLAIM", 15f, FontStyles.Bold, new Color(0.05f, 0.06f, 0.09f, 1f));
+            _dailyClaimLbl.alignment     = TextAlignmentOptions.Center;
+            _dailyClaimLbl.raycastTarget = false;
+            var lblRt = _dailyClaimLbl.rectTransform;
+            lblRt.anchorMin = Vector2.zero; lblRt.anchorMax = Vector2.one;
+            lblRt.offsetMin = Vector2.zero; lblRt.offsetMax = Vector2.zero;
+        }
+
+        void RefreshDaily()
+        {
+            if (_dailyClaimBtn == null) return;
+            var ctx = GameContext.Instance;
+            _dailyBackend = ctx != null && ctx.BackendEnabled;
+            if (_dailyBackend)
+            {
+                _dailyStatusLoaded  = false;
+                _dailyClaimInFlight = false;
+                _dailyRefetching    = false;
+                FetchDailyStatus();
+            }
+            UpdateDailyUi();
+        }
+
+        void FetchDailyStatus()
+        {
+            var ctx = GameContext.Instance;
+            if (ctx == null) return;
+            ctx.RefreshDailyBackend(
+                res =>
+                {
+                    if (this == null) return;
+                    _dailyRefetching = false;
+                    _dailyStatus = res;
+                    _dailyStatusLoaded = true;
+                    _dailyNextClaimRealtime = Time.unscaledTimeAsDouble +
+                        Math.Max(0L, res != null ? res.secondsUntilNextClaim : 0L);
+                    UpdateDailyUi();
+                },
+                err =>
+                {
+                    if (this == null) return;
+                    _dailyRefetching = false;
+                    if (!string.IsNullOrEmpty(err)) GameEvents.RaiseToast(err);
+                });
+        }
+
+        void UpdateDailyUi()
+        {
+            if (_dailyClaimBtn == null) return;
+
+            if (_dailyBackend)
+            {
+                bool claimable = _dailyStatusLoaded && _dailyStatus != null && _dailyStatus.claimable && !_dailyClaimInFlight;
+                _dailyClaimBtn.interactable = claimable;
+                SetClaimVisual(claimable);
+                if (_dailyStatusLbl != null)
+                {
+                    if (!_dailyStatusLoaded || _dailyStatus == null)
+                        _dailyStatusLbl.text = "Yükleniyor…";
+                    else if (_dailyStatus.claimable)
+                        _dailyStatusLbl.text = "Şimdi alınabilir";
+                    else
+                        _dailyStatusLbl.text = $"Sonraki: {CooldownText(_dailyNextClaimRealtime - Time.unscaledTimeAsDouble)}";
+                }
+                return;
+            }
+
+            var daily = GameContext.Instance?.DailyRewards;
+            bool can = daily != null && daily.CanClaimToday;
+            _dailyClaimBtn.interactable = can;
+            SetClaimVisual(can);
+            if (_dailyStatusLbl != null)
+                _dailyStatusLbl.text = daily == null ? "" :
+                    (can ? "Şimdi alınabilir" : $"Sonraki: {daily.TimeUntilNextClaim:hh\\:mm\\:ss}");
+        }
+
+        static readonly Color DailyBtnActive   = new Color(0.902f, 0.816f, 0.435f, 1f);   // AccentVP gold
+        static readonly Color DailyBtnClaimed  = new Color(0.902f, 0.816f, 0.435f, 0.18f);
+        static readonly Color DailyLblActive   = new Color(0.05f, 0.06f, 0.09f, 1f);
+        static readonly Color DailyLblClaimed  = new Color(0.925f, 0.910f, 0.882f, 0.30f);
+
+        void SetClaimVisual(bool claimable)
+        {
+            if (_dailyClaimImg != null) _dailyClaimImg.color = claimable ? DailyBtnActive : DailyBtnClaimed;
+            if (_dailyClaimLbl != null) _dailyClaimLbl.color = claimable ? DailyLblActive : DailyLblClaimed;
+        }
+
+        static string CooldownText(double seconds)
+        {
+            if (seconds < 0) seconds = 0;
+            return TimeSpan.FromSeconds(seconds).ToString(@"hh\:mm\:ss");
+        }
+
+        void OnDailyClaim()
+        {
+            var ctx = GameContext.Instance;
+            if (ctx == null) return;
+
+            if (_dailyBackend)
+            {
+                if (_dailyClaimInFlight) return;
+                if (!_dailyStatusLoaded || _dailyStatus == null || !_dailyStatus.claimable) return;
+
+                _dailyClaimInFlight = true;
+                _dailyClaimBtn.interactable = false;
+                ctx.ClaimDailyBackend(
+                    res =>
+                    {
+                        if (this == null) return;
+                        _dailyClaimInFlight = false;
+                        if (_dailyStatus != null)
+                        {
+                            _dailyStatus.claimable = false;
+                            if (res != null) _dailyStatus.currentStreak = res.currentStreak;
+                        }
+                        int reward = res != null ? res.rewardVp : 0;
+                        GameEvents.RaiseToast($"Günlük ödül: +{reward:N0} VP");
+                        FetchDailyStatus();
+                        UpdateDailyUi();
+                    },
+                    err =>
+                    {
+                        if (this == null) return;
+                        _dailyClaimInFlight = false;
+                        if (!string.IsNullOrEmpty(err)) GameEvents.RaiseToast(err);
+                        UpdateDailyUi();
+                    });
+                return;
+            }
+
+            if (ctx.DailyRewards != null && ctx.DailyRewards.TryClaim(out var local))
+            {
+                ctx.Statistics?.RecordVpEarned(local);
+                ctx.Save?.Save();
+                GameEvents.RaiseToast($"Günlük ödül: +{local:N0} VP");
+            }
+            UpdateDailyUi();
         }
 
         // ── Helpers ───────────────────────────────────────────────────────────

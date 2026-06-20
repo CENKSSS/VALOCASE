@@ -10,20 +10,11 @@ namespace ValoCase.UI.Screens
     /// </summary>
     public sealed class MarketScreen : UIScreenBase
     {
-        [SerializeField] UINavigator navigator;
-        [SerializeField] Button backButton;
-
         static readonly Color ActiveRed = new Color(1f, 0.122f, 0.224f, 1f);
         static readonly Color TextBright= new Color(0.925f, 0.910f, 0.882f, 1f);
         static readonly Color TextDim   = new Color(1f, 1f, 1f, 0.38f);
 
         bool _built;
-
-        void Awake()
-        {
-            if (backButton != null)
-                backButton.onClick.AddListener(() => navigator?.Navigate(ScreenType.MainMenu));
-        }
 
         protected override void OnShown()
         {

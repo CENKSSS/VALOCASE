@@ -28,7 +28,8 @@ namespace ValoCase.UI
         {
             if (sellButton != null) sellButton.onClick.AddListener(Sell);
             if (closeButton != null) closeButton.onClick.AddListener(Hide);
-            Hide();
+            // Do not Hide() here: this component lives on the toggled root, so Awake runs
+            // during the first Show()'s SetActive(true) and would re-hide the popup.
         }
 
         public void Show(string skinId)

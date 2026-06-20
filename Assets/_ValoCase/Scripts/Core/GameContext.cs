@@ -61,6 +61,11 @@ namespace ValoCase.Core
         // Backend client is constructed and ready to send requests.
         public bool BackendReady => Backend != null;
 
+        // Device-visible battle-lobby diagnostics (no token/account values exposed).
+        public string BackendBaseUrl => gameConfig != null ? gameConfig.BackendBaseUrl : null;
+        public bool HasGuestToken => Backend != null && !string.IsNullOrEmpty(Backend.GuestToken);
+        public bool HasGuestAccountId => Save?.Data != null && !string.IsNullOrEmpty(Save.Data.guestAccountId);
+
         // Runtime-only per-instance view of the backend inventory (itemId identity that
         // the quantity/skinId save cache aggregates away). Rebuilt on every inventory
         // sync; empty in local mode. Never persisted. Used by future itemId-based
@@ -178,6 +183,7 @@ namespace ValoCase.Core
                         Save.Data.guestAccountId = res.accountId;
                         Backend.GuestToken = token;
                         Save.Save();
+                        AdoptBackendAvatar(res.avatarId);
                         Debug.Log("[BackendAuth] Guest registered and token resolved.");
                     },
                     err => Debug.LogWarning("[Backend] Guest registration failed — staying on local cache. " + err));
@@ -199,6 +205,7 @@ namespace ValoCase.Core
                 res =>
                 {
                     Vp?.SetBalance(res.vpBalance);
+                    ProgressionSync.ApplyFromWallet(res);   // mirror backend level/XP into the UI cache
                     Save.Save();
                     Debug.Log($"[BackendAuth] Wallet synced — vp={res.vpBalance}");
                 },
@@ -211,6 +218,20 @@ namespace ValoCase.Core
                 err => Debug.LogWarning("[Backend] Inventory sync failed — keeping cached inventory. " + err));
 
             Debug.Log("[Backend] Boot sync complete.");
+        }
+
+        // Adopt a backend avatarId into the local profile cache, but only when it maps to a
+        // real loaded face card. The generic "avatar_1" default has no card, so the local
+        // default sprite is kept — new players still show the default avatar.
+        void AdoptBackendAvatar(string avatarId)
+        {
+            if (string.IsNullOrEmpty(avatarId)) return;
+            foreach (var av in ProfileManager.Avatars)
+                if (string.Equals(av.name, avatarId, StringComparison.OrdinalIgnoreCase))
+                {
+                    PlayerProfileData.SetAvatar(av.sprite, av.name);
+                    return;
+                }
         }
 
         // ── Backend live helpers (used by the case-opening backend path) ────────
@@ -235,7 +256,7 @@ namespace ValoCase.Core
         IEnumerator ResyncWalletAndInventory()
         {
             yield return Backend.GetWallet(
-                res => { Vp?.SetBalance(res.vpBalance); Save.Save(); Debug.Log("[Backend] Wallet re-synced — vp=" + res.vpBalance); },
+                res => { Vp?.SetBalance(res.vpBalance); ProgressionSync.ApplyFromWallet(res); Save.Save(); Debug.Log("[Backend] Wallet re-synced — vp=" + res.vpBalance); },
                 err => Debug.LogWarning("[Backend] Wallet re-sync failed — keeping cached balance. " + err));
 
             yield return Backend.GetInventory(
@@ -322,6 +343,78 @@ namespace ValoCase.Core
             yield return SyncInventoryFromBackend();      // reconcile removed items
             Debug.Log($"[Backend] Bulk {label} OK — soldCount={response.soldCount} totalVpGained={response.totalVpGained} newBalance={response.newVpBalance}");
             onSold?.Invoke(response.soldCount, response.totalVpGained);
+        }
+
+        // ── Backend account display name (server-authoritative profile) ─────────
+        // Backend trims/validates and echoes the stored name. Only on success do we
+        // update the local cache (save + PlayerProfileData) so names never diverge from
+        // the server. A 400 surfaces a clear validation message; nothing is cached.
+        public void SaveDisplayNameBackend(string displayName, Action<string> onSaved, Action<string> onFailed)
+        {
+            if (!BackendReady) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
+            var trimmed = (displayName ?? string.Empty).Trim();
+            if (string.IsNullOrEmpty(trimmed)) { onFailed?.Invoke("İsim boş olamaz."); return; }
+            if (trimmed.Length > 20) trimmed = trimmed.Substring(0, 20);
+            StartCoroutine(SaveDisplayNameRoutine(trimmed, onSaved, onFailed));
+        }
+
+        IEnumerator SaveDisplayNameRoutine(string displayName, Action<string> onSaved, Action<string> onFailed)
+        {
+            DisplayNameResponse res = null;
+            BackendError error = null;
+            yield return Backend.SetDisplayName(displayName, r => res = r, e => error = e);
+
+            if (error != null || res == null)
+            {
+                Debug.LogWarning("[Backend] Display name save failed — " + (error?.ToString() ?? "null response"));
+                var msg = error != null && error.HttpStatus == 400
+                    ? "İsim geçersiz. En fazla 20 karakter olmalı."
+                    : BackendErrorMapper.Map(error);
+                onFailed?.Invoke(msg);
+                yield break;
+            }
+
+            var saved = !string.IsNullOrEmpty(res.displayName) ? res.displayName : displayName;
+            Save.Data.playerName = saved;
+            Save.Save();
+            PlayerProfileData.SetUsername(saved);
+            Debug.Log("[Backend] Display name saved.");
+            onSaved?.Invoke(saved);
+        }
+
+        // ── Backend account avatar (server-authoritative profile) ───────────────
+        // Avatar is server-owned like the display name: the backend trims/validates and
+        // echoes the stored avatarId. The local cache (PlayerProfileData) is updated only
+        // on success via onSaved, so a real player's avatar is the same one other clients
+        // receive in lobby/battle responses. A failure surfaces a message and caches nothing.
+        public void SaveAvatarBackend(string avatarId, Action<string> onSaved, Action<string> onFailed)
+        {
+            if (!BackendReady) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
+            var trimmed = (avatarId ?? string.Empty).Trim();
+            if (string.IsNullOrEmpty(trimmed)) { onFailed?.Invoke("Avatar geçersiz."); return; }
+            if (trimmed.Length > 50) trimmed = trimmed.Substring(0, 50);
+            StartCoroutine(SaveAvatarRoutine(trimmed, onSaved, onFailed));
+        }
+
+        IEnumerator SaveAvatarRoutine(string avatarId, Action<string> onSaved, Action<string> onFailed)
+        {
+            AvatarResponse res = null;
+            BackendError error = null;
+            yield return Backend.SetAvatar(avatarId, r => res = r, e => error = e);
+
+            if (error != null || res == null)
+            {
+                Debug.LogWarning("[Backend] Avatar save failed — " + (error?.ToString() ?? "null response"));
+                var msg = error != null && error.HttpStatus == 400
+                    ? "Avatar geçersiz."
+                    : BackendErrorMapper.Map(error);
+                onFailed?.Invoke(msg);
+                yield break;
+            }
+
+            var saved = !string.IsNullOrEmpty(res.avatarId) ? res.avatarId : avatarId;
+            Debug.Log("[Backend] Avatar saved.");
+            onSaved?.Invoke(saved);
         }
 
         // ── Backend daily rewards (server-authoritative) ────────────────────────
@@ -470,8 +563,9 @@ namespace ValoCase.Core
         // inventory reconciles. On any failure this resyncs (when state may be stale)
         // and surfaces a safe message — no spin, no local consume, no local grant.
         public IEnumerator UpgradeBackendRoutine(
-            List<SkinDefinitionSO> inputs, SkinDefinitionSO target, Action<UpgradeBackendResult> onResult)
+            List<SkinDefinitionSO> inputs, IReadOnlyList<SkinDefinitionSO> targets, Action<UpgradeBackendResult> onResult)
         {
+            var target = targets != null && targets.Count > 0 ? targets[0] : null;
             var result = new UpgradeBackendResult { Target = target };
 
             if (!BackendReady)
@@ -497,9 +591,13 @@ namespace ValoCase.Core
                 yield break;
             }
 
+            var targetSkinIds = new List<string>();
+            foreach (var t in targets)
+                if (t != null) targetSkinIds.Add(t.SkinId);
+
             UpgradeResponse response = null;
             BackendError error = null;
-            yield return Backend.Upgrade(itemIds.ToArray(), target.SkinId,
+            yield return Backend.Upgrade(itemIds.ToArray(), target.SkinId, targetSkinIds.ToArray(),
                 r => response = r,
                 e => error = e);
 

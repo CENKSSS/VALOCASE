@@ -325,18 +325,18 @@ namespace ValoCase.UI
                 skinIconImage.enabled = skin.Icon != null;
                 skinIconImage.color   = Color.white;
             }
-            if (skinNameLabel != null) skinNameLabel.text = skin.SkinName;
-            if (vpLabel       != null) vpLabel.text       = $"{skin.VpValue:N0} VP";
-            if (rarityLabel   != null)
-                rarityLabel.text = RaritySystem.Labels.TryGetValue(skin.Rarity, out var rn)
-                    ? rn.ToUpperInvariant()
-                    : skin.Rarity.ToString().ToUpperInvariant();
-            if (categoryLabel != null)
+            if (vpLabel != null) vpLabel.text = $"{skin.VpValue:N0} VP";
+
+            if (skinNameLabel != null)
             {
-                bool has = !string.IsNullOrEmpty(skin.WeaponName);
-                categoryLabel.gameObject.SetActive(has);
-                if (has) categoryLabel.text = skin.WeaponName.ToUpperInvariant();
+                skinNameLabel.gameObject.SetActive(true);
+                skinNameLabel.text = skin.SkinName;
             }
+
+            // Rarity and weapon-type labels (and the rarity badge pill) stay hidden.
+            if (rarityLabel   != null) rarityLabel.gameObject.SetActive(false);
+            if (rarityBadgeBg != null) rarityBadgeBg.gameObject.SetActive(false);
+            if (categoryLabel != null) categoryLabel.gameObject.SetActive(false);
         }
 
         // Mobile: simple, quick fade + subtle scale (0.94 → 1.00). No overshoot.

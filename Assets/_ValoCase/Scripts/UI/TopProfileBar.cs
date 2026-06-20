@@ -3,6 +3,7 @@ using UnityEngine;
 using UnityEngine.UI;
 using ValoCase.Core;
 using ValoCase.Profile;
+using ValoCase.Progression;
 
 namespace ValoCase.UI
 {
@@ -27,11 +28,16 @@ namespace ValoCase.UI
         static readonly Color ActiveRed  = new Color(1f, 0.122f, 0.224f, 1f);        // #FF1F3A
         static readonly Color DimWhite   = new Color(1f, 1f, 1f, 0.38f);             // inactive
         static readonly Color TextBright = new Color(0.925f, 0.910f, 0.882f, 1f);    // #ECE8E1
+        static readonly Color XpGreen    = new Color(0.290f, 0.831f, 0.392f, 1f);    // progress fill
+        static readonly Color XpTrack    = new Color(1f, 1f, 1f, 0.12f);             // bar background
 
         // ── Runtime UI refs ───────────────────────────────────────────────────
         Image           _avatarImg;
         TextMeshProUGUI _usernameLabel;
         TextMeshProUGUI _vpLabel;
+        TextMeshProUGUI _levelLabel;
+        TextMeshProUGUI _xpLabel;
+        RectTransform   _xpFill;
 
         // ── Lifecycle ─────────────────────────────────────────────────────────
         void Awake()
@@ -59,6 +65,7 @@ namespace ValoCase.UI
 
             SyncProfile();
             SyncVp();
+            SyncProgression();
         }
 
         void OnEnable()
@@ -66,12 +73,14 @@ namespace ValoCase.UI
             Debug.Log("[TOP_BAR_DEBUG] OnEnable");
             PlayerProfileData.OnProfileChanged += OnProfileChanged;
             GameEvents.OnVpChanged             += OnVpChanged;
+            PlayerProgression.OnChanged        += SyncProgression;
         }
 
         void OnDisable()
         {
             PlayerProfileData.OnProfileChanged -= OnProfileChanged;
             GameEvents.OnVpChanged             -= OnVpChanged;
+            PlayerProgression.OnChanged        -= SyncProgression;
         }
 
         // ── Event handlers ────────────────────────────────────────────────────
@@ -121,6 +130,21 @@ namespace ValoCase.UI
             _vpLabel.text = FormatVp(bal);
         }
 
+        // Updates the level label, XP text, and green bar fill from the cached
+        // backend progression. Safe before any backend data arrives (defaults Lv. 1, 0/20).
+        void SyncProgression()
+        {
+            int lvl = PlayerProgression.Level;
+            int cur = PlayerProgression.CurrentLevelXp;
+            int req = PlayerProgression.XpRequiredForNextLevel > 0
+                ? PlayerProgression.XpRequiredForNextLevel
+                : PlayerProgression.DefaultXpPerLevel;
+
+            if (_levelLabel != null) _levelLabel.text = $"Lv. {lvl}";
+            if (_xpLabel != null)    _xpLabel.text    = $"{cur}/{req}";
+            if (_xpFill != null)     _xpFill.anchorMax = new Vector2(PlayerProgression.Fill01, 1f);
+        }
+
         static string FormatVp(int amount)
         {
             if (amount >= 1_000_000) return (amount / 1_000_000f).ToString("0.##") + "M VP";
@@ -128,18 +152,19 @@ namespace ValoCase.UI
             return amount + " VP";
         }
 
+        /// <summary>Fixed bar height — shared content root insets by this. Single source of truth.</summary>
+        public const float Height = 112f;
+
         // ── Build ─────────────────────────────────────────────────────────────
         void BuildUI()
         {
-            const float BarH = 86f;
-
             // Outer rect — anchored to SafeArea TOP, full width
             var rt = (RectTransform)transform;
             rt.anchorMin        = new Vector2(0f, 1f);
             rt.anchorMax        = new Vector2(1f, 1f);
             rt.pivot            = new Vector2(0.5f, 1f);
             rt.anchoredPosition = Vector2.zero;
-            rt.sizeDelta        = new Vector2(0f, BarH);
+            rt.sizeDelta        = new Vector2(0f, Height);
 
             // ── Dark panel (full width, full height) ──────────────────────────
             var panel = NewRT("TopPanel", rt, Vector2.zero, Vector2.one);
@@ -176,8 +201,8 @@ namespace ValoCase.UI
             maskRt.anchorMin        = new Vector2(0f, 0.5f);
             maskRt.anchorMax        = new Vector2(0f, 0.5f);
             maskRt.pivot            = new Vector2(0f, 0.5f);
-            maskRt.anchoredPosition = new Vector2(12f, 0f);
-            maskRt.sizeDelta        = new Vector2(52f, 52f);
+            maskRt.anchoredPosition = new Vector2(14f, 0f);
+            maskRt.sizeDelta        = new Vector2(64f, 64f);
             var maskImg = maskGo.GetComponent<Image>();
             maskImg.sprite        = circleSpr;
             maskImg.type          = Image.Type.Simple;
@@ -203,8 +228,8 @@ namespace ValoCase.UI
             ringRt.anchorMin        = new Vector2(0f, 0.5f);
             ringRt.anchorMax        = new Vector2(0f, 0.5f);
             ringRt.pivot            = new Vector2(0f, 0.5f);
-            ringRt.anchoredPosition = new Vector2(12f, 0f);
-            ringRt.sizeDelta        = new Vector2(52f, 52f);
+            ringRt.anchoredPosition = new Vector2(14f, 0f);
+            ringRt.sizeDelta        = new Vector2(64f, 64f);
             var ringImg = ringGo.GetComponent<Image>();
             ringImg.sprite        = circleSpr;
             ringImg.color         = new Color(0f, 0f, 0f, 0f);   // transparent fill
@@ -220,24 +245,56 @@ namespace ValoCase.UI
             colRt.anchorMin        = new Vector2(0f, 0.5f);
             colRt.anchorMax        = new Vector2(0f, 0.5f);
             colRt.pivot            = new Vector2(0f, 0.5f);
-            colRt.anchoredPosition = new Vector2(72f, 0f);   // 12 pad + 52 avatar + 8 gap
-            colRt.sizeDelta        = new Vector2(220f, 52f);
+            colRt.anchoredPosition = new Vector2(88f, 0f);   // 14 pad + 64 avatar + 10 gap
+            colRt.sizeDelta        = new Vector2(240f, 64f);
 
             var vlg = colGo.AddComponent<VerticalLayoutGroup>();
             vlg.childAlignment         = TextAnchor.MiddleLeft;
-            vlg.spacing                = 1f;
+            vlg.spacing                = 2f;
             vlg.childForceExpandWidth  = true;
             vlg.childForceExpandHeight = false;
-            vlg.padding = new RectOffset(0, 0, 4, 4);
+            vlg.padding = new RectOffset(0, 0, 5, 5);
 
-            _usernameLabel              = MakeTmp(colGo.transform, "Username", "AGENT", 15f, TextBright);
+            _usernameLabel              = MakeTmp(colGo.transform, "Username", "AGENT", 18f, TextBright);
             _usernameLabel.fontStyle    = FontStyles.Bold;
             _usernameLabel.raycastTarget = false;
-            _usernameLabel.gameObject.AddComponent<LayoutElement>().minHeight = 20f;
+            _usernameLabel.gameObject.AddComponent<LayoutElement>().minHeight = 22f;
 
-            var lvlLbl = MakeTmp(colGo.transform, "Level", "LVL: 1", 12f, DimWhite);
-            lvlLbl.raycastTarget = false;
-            lvlLbl.gameObject.AddComponent<LayoutElement>().minHeight = 16f;
+            _levelLabel              = MakeTmp(colGo.transform, "Level", "Lv. 1", 13f, DimWhite);
+            _levelLabel.fontStyle    = FontStyles.Bold;
+            _levelLabel.raycastTarget = false;
+            _levelLabel.gameObject.AddComponent<LayoutElement>().minHeight = 16f;
+
+            // ── Level XP bar (green fill + centered XP text) ──────────────────
+            var barGo = new GameObject("XpBar", typeof(RectTransform), typeof(Image));
+            barGo.transform.SetParent(colGo.transform, false);
+            var barLe = barGo.AddComponent<LayoutElement>();
+            barLe.minHeight       = 11f;
+            barLe.preferredHeight = 11f;
+            barLe.preferredWidth  = 205f;
+            var barImg = barGo.GetComponent<Image>();
+            barImg.color         = XpTrack;
+            barImg.raycastTarget = false;
+
+            var fillGo = new GameObject("XpFill", typeof(RectTransform), typeof(Image));
+            fillGo.transform.SetParent(barGo.transform, false);
+            _xpFill = (RectTransform)fillGo.transform;
+            _xpFill.anchorMin        = new Vector2(0f, 0f);
+            _xpFill.anchorMax        = new Vector2(0f, 1f);   // right edge set to Fill01 at sync
+            _xpFill.pivot            = new Vector2(0f, 0.5f);
+            _xpFill.offsetMin        = Vector2.zero;
+            _xpFill.offsetMax        = Vector2.zero;
+            var fillImg = fillGo.GetComponent<Image>();
+            fillImg.color         = XpGreen;
+            fillImg.raycastTarget = false;
+
+            _xpLabel              = MakeTmp(barGo.transform, "XpText", "0/20", 10f, TextBright);
+            _xpLabel.alignment    = TextAlignmentOptions.Center;
+            _xpLabel.fontStyle    = FontStyles.Bold;
+            _xpLabel.raycastTarget = false;
+            var xpLblRt = _xpLabel.rectTransform;
+            xpLblRt.anchorMin = Vector2.zero; xpLblRt.anchorMax = Vector2.one;
+            xpLblRt.offsetMin = Vector2.zero; xpLblRt.offsetMax = Vector2.zero;
 
             // ── Gear / Settings button (far right) ────────────────────────────
             var gearGo = new GameObject("GearBtn",
@@ -247,14 +304,14 @@ namespace ValoCase.UI
             gearRt.anchorMin        = new Vector2(1f, 0.5f);
             gearRt.anchorMax        = new Vector2(1f, 0.5f);
             gearRt.pivot            = new Vector2(1f, 0.5f);
-            gearRt.anchoredPosition = new Vector2(-10f, 0f);
-            gearRt.sizeDelta        = new Vector2(48f, 48f);
+            gearRt.anchoredPosition = new Vector2(-12f, 0f);
+            gearRt.sizeDelta        = new Vector2(56f, 56f);
             gearGo.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0f); // transparent hit area
             var gearBtn = gearGo.GetComponent<Button>();
             gearBtn.transition = Selectable.Transition.None;
             gearBtn.onClick.AddListener(OnGearClicked);
 
-            var gearIco  = MakeTmp(gearGo.transform, "GearIco", "⚙", 26f, DimWhite);
+            var gearIco  = MakeTmp(gearGo.transform, "GearIco", "⚙", 30f, DimWhite);
             gearIco.alignment     = TextAlignmentOptions.Center;
             gearIco.raycastTarget = false;
             var gIcoRt = gearIco.rectTransform;
@@ -268,10 +325,10 @@ namespace ValoCase.UI
             vpRt.anchorMin        = new Vector2(1f, 0.5f);
             vpRt.anchorMax        = new Vector2(1f, 0.5f);
             vpRt.pivot            = new Vector2(1f, 0.5f);
-            vpRt.anchoredPosition = new Vector2(-62f, 0f);  // 10 pad + 48 gear + 4 gap
-            vpRt.sizeDelta        = new Vector2(210f, 36f);
+            vpRt.anchoredPosition = new Vector2(-74f, 0f);  // 12 pad + 56 gear + 6 gap
+            vpRt.sizeDelta        = new Vector2(220f, 40f);
 
-            _vpLabel              = MakeTmp(vpGo.transform, "VpLbl", "0 VP", 15f, TextBright);
+            _vpLabel              = MakeTmp(vpGo.transform, "VpLbl", "0 VP", 18f, TextBright);
             _vpLabel.alignment    = TextAlignmentOptions.Right;
             _vpLabel.fontStyle    = FontStyles.Bold;
             _vpLabel.raycastTarget = false;

@@ -117,9 +117,9 @@ namespace ValoCase.UI
                 new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(0f, 0.5f),
                 new Vector2(0f, 0f), new Vector2(22f, 22f));
 
-            // Real player header uses the configured profile (avatar + nickname),
-            // matching the pre-start presentation. Bots keep their placeholders.
-            Sprite userAvatar  = _isUser ? PlayerProfileData.Avatar : null;
+            // Every participant shows their backend avatar when provided; the local user
+            // falls back to their own configured profile. Bots/unknowns keep the initial.
+            Sprite userAvatar  = ResolveHeaderAvatar(player);
             string displayName = _isUser
                 ? (!string.IsNullOrEmpty(PlayerProfileData.Username) ? PlayerProfileData.Username : "YOU")
                 : (player != null ? player.Name : "?");
@@ -161,6 +161,16 @@ namespace ValoCase.UI
             SetRect(_statusLbl.rectTransform,
                 new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(0f, 0f),
                 new Vector2(28f, 1f), new Vector2(-28f, 12f));
+
+            var sep = MakeImage("HeaderSeparator", rt, ColorPalette.WithAlpha(Color.white, 0.12f), raycast: false);
+            var sepRt = sep.rectTransform;
+            sepRt.anchorMin = new Vector2(0f, 1f);
+            sepRt.anchorMax = new Vector2(1f, 1f);
+            sepRt.pivot     = new Vector2(0.5f, 1f);
+            sepRt.sizeDelta = new Vector2(0f, 1.5f);
+            sepRt.anchoredPosition = new Vector2(0f, -(4f + h));
+            sepRt.offsetMin = new Vector2(pad + 6f, sepRt.offsetMin.y);
+            sepRt.offsetMax = new Vector2(-(pad + 6f), sepRt.offsetMax.y);
         }
 
         void BuildReel(RectTransform rt, Color accent, float pad, float top, float reelH)
@@ -413,9 +423,9 @@ namespace ValoCase.UI
 
             _waitingCg = root.AddComponent<CanvasGroup>();
 
-            // Real player uses their configured profile (name + avatar). Bots keep
-            // their existing placeholder presentation untouched.
-            Sprite userAvatar  = _isUser ? PlayerProfileData.Avatar : null;
+            // Every participant uses their backend avatar when provided; the local user
+            // falls back to their own configured profile. Bots/unknowns keep the initial.
+            Sprite userAvatar  = ResolveHeaderAvatar(player);
             string displayName = _isUser
                 ? (!string.IsNullOrEmpty(PlayerProfileData.Username) ? PlayerProfileData.Username : "YOU")
                 : (player != null ? player.Name : "?");
@@ -483,6 +493,12 @@ namespace ValoCase.UI
                 new Vector2(0f, -(padTop + avatarSize + 14f + 24f + 6f)), new Vector2(-8f, 16f));
 
             root.SetActive(false);
+        }
+
+        Sprite ResolveHeaderAvatar(BattlePlayerResult player)
+        {
+            if (player != null && player.Avatar != null) return player.Avatar;
+            return _isUser ? PlayerProfileData.Avatar : null;
         }
 
         public void SetReelPool(IReadOnlyList<SkinDefinitionSO> pool)

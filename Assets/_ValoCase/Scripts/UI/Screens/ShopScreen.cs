@@ -8,6 +8,8 @@ using UnityEngine;
 using UnityEngine.UI;
 using ValoCase.Core;
 using ValoCase.Data;
+using ValoCase.Progression;
+using ValoCase.UI;   // CaseListItemView — reuse its procedural chain/padlock sprites
 
 namespace ValoCase.UI.Screens
 {
@@ -22,8 +24,12 @@ namespace ValoCase.UI.Screens
         [SerializeField] TextMeshProUGUI rotationTimerLabel;
 
         readonly List<GameObject> _cards = new();
+        // Visible case cards paired with their case id, so lock overlays can be
+        // re-evaluated per card whenever PlayerProgression changes (no grid rebuild).
+        readonly List<(GameObject card, string caseId)> _lockCards = new();
         readonly List<GridLayoutGroup> _groupGrids = new();
         bool _builtOnce;
+        bool _gridSized;          // true once SizeGridToViewport has set real cell sizes
         bool _dealsSectionHidden;
 
         // ── Palette ───────────────────────────────────────────────────────────
@@ -33,14 +39,15 @@ namespace ValoCase.UI.Screens
         // ── Grid constants (compact, multi-column boxed cards) ─────────────────
         const int   DefaultColumns = 2;     // phones (portrait)
         const int   MaxColumns     = 4;     // wider screens / editor
-        const float TargetCellW    = 225f;  // desired card width → drives the column count
-        const float MaxCellW       = 245f;  // cards stay compact instead of stretching wide
-        const float CellAspect     = 1.12f; // cellHeight = cellWidth × CellAspect (compact box)
-        const float SidePad        = 8f;    // grid left & right padding
-        const float Gap            = 8f;    // spacing between cells
+        const float TargetCellW    = 200f;  // placeholder card width before the grid is sized
+        const float MaxCellW       = 224f;  // cards stay compact instead of stretching wide
+        const float CellAspect     = 1.45f; // cellHeight = cellWidth × CellAspect (tall card)
+        const float SidePad        = 4f;    // grid left & right padding
+        const float Gap            = 4f;    // spacing between cells
+        const float MinCardW       = 64f;   // mobile-safe floor before dropping below 4 columns
 
         static readonly Color Accent = new Color(1f, 0.275f, 0.333f, 1f);
-        static readonly string[] PreferredGroupOrder = { "Vandal", "Melee", "Ghost", "Phantom" };
+        static readonly string[] PreferredGroupOrder = { "Classic", "Ghost", "Bulldog", "Vandal", "Melee" };
 
         // ── Lifecycle ─────────────────────────────────────────────────────────
 
@@ -58,10 +65,15 @@ namespace ValoCase.UI.Screens
         protected override void OnShown()
         {
             Refresh();
-            GameEvents.OnShopRotated += Refresh;
+            GameEvents.OnShopRotated    += Refresh;
+            PlayerProgression.OnChanged += Refresh;   // re-evaluate lock overlays on level change
         }
 
-        protected override void OnHidden() => GameEvents.OnShopRotated -= Refresh;
+        protected override void OnHidden()
+        {
+            GameEvents.OnShopRotated    -= Refresh;
+            PlayerProgression.OnChanged -= Refresh;
+        }
 
         // ── Core refresh ──────────────────────────────────────────────────────
 
@@ -86,6 +98,13 @@ namespace ValoCase.UI.Screens
                 _builtOnce = true;
             }
             HideDailyDealsSection();
+
+            // On the first build the cards have no real size yet (SizeGridToViewport
+            // runs next frame and calls this itself once cells are measured). On every
+            // later refresh — e.g. PlayerProgression.OnChanged after a case opening —
+            // the grid is already sized, so re-evaluate locks live here.
+            if (_gridSized)
+                RefreshLockStates();
         }
 
         // ── Legacy UI teardown ────────────────────────────────────────────────
@@ -170,28 +189,20 @@ namespace ValoCase.UI.Screens
                 t.gameObject.SetActive(false);
         }
 
-        // ── Responsive case grid (2 / 3 / 4 columns) ──────────────────────────
+        // ── Grouped, compact case grid ─────────────────────────────────────────
+        // Cases are split into weapon/category sections (inferred from their drop
+        // pool); each section is a header + its own responsive GridLayoutGroup, all
+        // stacked in a VerticalLayoutGroup. Column count and compact cell size are
+        // decided in SizeGridToViewport once the real Viewport rect is known.
 
         void BuildGrid(GameContext ctx)
         {
-            // Shared section background (cover image, aspect preserved)
             FullscreenBackground.AttachShared(gameObject);
 
-            // Load cases first so row count is known before computing cellH.
             var allCases = ctx.Content?.Cases;
-            Debug.Log("[SHOP_GRID] total cases from content=" + (allCases?.Count ?? 0));
-            var sortedCases = (allCases ?? Enumerable.Empty<CaseDefinitionSO>())
-                .Where(c => c != null)
-                .OrderBy(c => c.VpPrice)
-                .ToList();
-            Debug.Log("[SHOP_GRID] vandal featured cases=" + sortedCases.Count +
-                      " columns=" + DefaultColumns);
-
-            // Column count and cell dimensions are both decided later by
-            // SizeGridToViewport() from the live Viewport rect (see coroutine), so we
-            // never rely on the unreliable Awake-time selfRt.rect. Start at the phone
-            // default; the coroutine widens to 3 / 4 columns on tablets.
-            int cols = DefaultColumns;
+            var cases = (allCases ?? Enumerable.Empty<CaseDefinitionSO>())
+                .Where(c => c != null).ToList();
+            Debug.Log("[SHOP_GRID] total cases from content=" + cases.Count);
 
             // ── ScrollRect ────────────────────────────────────────────────────
             var scrollGo = new GameObject("CaseGrid_Scroll", typeof(RectTransform));
@@ -199,8 +210,9 @@ namespace ValoCase.UI.Screens
             var scrollRt = scrollGo.GetComponent<RectTransform>();
             scrollRt.anchorMin = Vector2.zero;
             scrollRt.anchorMax = Vector2.one;
-            scrollRt.offsetMin = new Vector2(16f,   112f);  // clear BottomNavBar
-            scrollRt.offsetMax = new Vector2(-16f, -118f);  // clear TopProfileBar
+            // Navbar space is reserved by the shared Screens host; these are content margins.
+            scrollRt.offsetMin = new Vector2(16f,  16f);
+            scrollRt.offsetMax = new Vector2(-16f, -16f);
 
             var sr = scrollGo.AddComponent<ScrollRect>();
             sr.horizontal        = false;
@@ -219,7 +231,7 @@ namespace ValoCase.UI.Screens
             vpRt.offsetMax = Vector2.zero;
             sr.viewport = vpRt;
 
-            // ── Content ───────────────────────────────────────────────────────
+            // ── Content (vertical stack of sections) ──────────────────────────
             var ctGo = new GameObject("Content", typeof(RectTransform));
             ctGo.transform.SetParent(vpGo.transform, false);
             var ctRt = ctGo.GetComponent<RectTransform>();
@@ -230,105 +242,173 @@ namespace ValoCase.UI.Screens
             ctRt.offsetMax = Vector2.zero;
             sr.content = ctRt;
 
-            // GridLayoutGroup — fixed column count, rows grow downward
-            var grid = ctGo.AddComponent<GridLayoutGroup>();
-            grid.padding         = new RectOffset((int)HPad, (int)HPad, 10, 10);
-            grid.cellSize        = new Vector2(200f, 260f); // placeholder; SizeGridToViewport overwrites next frame
-            grid.spacing         = new Vector2(Gap, Gap);
-            grid.startCorner     = GridLayoutGroup.Corner.UpperLeft;
-            grid.startAxis       = GridLayoutGroup.Axis.Horizontal;
-            grid.childAlignment  = TextAnchor.UpperLeft;  // cards start top-left; partial last row fills from left
-            grid.constraint      = GridLayoutGroup.Constraint.FixedColumnCount;
-            grid.constraintCount = cols;
+            var vlg = ctGo.AddComponent<VerticalLayoutGroup>();
+            vlg.padding               = new RectOffset(0, 0, 8, 18);
+            vlg.spacing               = 8f;
+            vlg.childAlignment        = TextAnchor.UpperCenter;
+            vlg.childControlWidth     = true;
+            vlg.childControlHeight    = true;
+            vlg.childForceExpandWidth = true;
+            vlg.childForceExpandHeight = false;
 
             var csf = ctGo.AddComponent<ContentSizeFitter>();
             csf.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
             csf.verticalFit   = ContentSizeFitter.FitMode.PreferredSize;
 
-            // ── Populate cards ─────────────────────────────────────────────────
-            for (var i = 0; i < sortedCases.Count; i++)
+            // ── Sections ──────────────────────────────────────────────────────
+            _groupGrids.Clear();
+            _lockCards.Clear();
+            foreach (var (header, groupCases) in GroupCasesByWeapon(cases))
             {
-                var caseDef = sortedCases[i];
-                Debug.Log("[SHOP_DEBUG] raw case index=" + i);
-                Debug.Log("[SHOP_DEBUG] case null=" + (caseDef == null));
-                if (caseDef != null)
-                {
-                    Debug.Log("[SHOP_DEBUG] case id="             + caseDef.CaseId);
-                    Debug.Log("[SHOP_DEBUG] case display="        + caseDef.DisplayName);
-                    Debug.Log("[SHOP_DEBUG] case price="          + caseDef.VpPrice);
-                    Debug.Log("[SHOP_DEBUG] case icon null="      + (caseDef.CaseIcon == null));
-                    Debug.Log("[SHOP_DEBUG] case dropTable null=" + (caseDef.DropTable == null));
-                }
-                Debug.Log("[SHOP_GRID] case raw name=" + (caseDef?.CaseId ?? "(null)") +
-                          " display=" + (caseDef?.DisplayName ?? "(null)"));
-                BuildCard(ctGo.transform, caseDef);
+                BuildSectionHeader(ctGo.transform, header);
+
+                var gridGo = Child(ctGo.transform, "Grid_" + header.Replace(' ', '_'));
+                var grid = gridGo.AddComponent<GridLayoutGroup>();
+                grid.padding         = new RectOffset((int)SidePad, (int)SidePad, 4, 6);
+                grid.cellSize        = new Vector2(TargetCellW, TargetCellW * CellAspect); // placeholder
+                grid.spacing         = new Vector2(Gap, Gap);
+                grid.startCorner     = GridLayoutGroup.Corner.UpperLeft;
+                grid.startAxis       = GridLayoutGroup.Axis.Horizontal;
+                grid.childAlignment  = TextAnchor.UpperCenter;
+                grid.constraint      = GridLayoutGroup.Constraint.FixedColumnCount;
+                grid.constraintCount = DefaultColumns;
+
+                foreach (var caseDef in groupCases.OrderBy(c => c.VpPrice))
+                    BuildCard(gridGo.transform, caseDef);
+
+                _groupGrids.Add(grid);
             }
 
-            // Decide columns and cell size from the REAL Viewport rect after layout
-            // settles next frame — avoids the unreliable Awake-time rect read.
-            StartCoroutine(SizeGridToViewport(grid, vpRt, ctRt));
+            StartCoroutine(SizeGridToViewport(vpRt, ctRt));
         }
 
-        // Picks the column count and cell size from the actual Viewport rect one frame
-        // after the grid is built, when the Canvas layout is valid. Card height is kept
-        // proportional to card WIDTH (not the viewport), so cards never stretch to fill
-        // the screen; ContentSizeFitter then derives the Content height from the row
-        // count and the ScrollRect scrolls when needed.
-        IEnumerator SizeGridToViewport(GridLayoutGroup grid, RectTransform vpRt,
-                                       RectTransform ctRt)
+        // Splits cases into ordered weapon sections inferred from their drop pools.
+        List<(string header, List<CaseDefinitionSO> cases)> GroupCasesByWeapon(List<CaseDefinitionSO> cases)
         {
-            // Let the freshly-built hierarchy run at least one layout pass, then wait
-            // until the Viewport actually has a size (guards a late layout frame).
+            var byGroup = new Dictionary<string, List<CaseDefinitionSO>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var c in cases)
+            {
+                var key = InferWeaponGroup(c);
+                if (!byGroup.TryGetValue(key, out var list))
+                    byGroup[key] = list = new List<CaseDefinitionSO>();
+                list.Add(c);
+            }
+
+            var keys = byGroup.Keys.ToList();
+            int Rank(string k)
+            {
+                if (string.Equals(k, "Other", StringComparison.OrdinalIgnoreCase)) return 1000;
+                int p = Array.FindIndex(PreferredGroupOrder, x => string.Equals(x, k, StringComparison.OrdinalIgnoreCase));
+                return p >= 0 ? p : 100;
+            }
+            keys.Sort((a, b) =>
+            {
+                int ra = Rank(a), rb = Rank(b);
+                return ra != rb ? ra.CompareTo(rb) : string.Compare(a, b, StringComparison.OrdinalIgnoreCase);
+            });
+
+            var ordered = keys
+                .Select(k => (header: string.Equals(k, "Other", StringComparison.OrdinalIgnoreCase) ? "Other Cases" : k + " Cases", cases: byGroup[k]))
+                .ToList();
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            Debug.Log("[SHOP_SECTION_ORDER] " + string.Join(" > ", ordered.Select(o => o.header)));
+#endif
+            return ordered;
+        }
+
+        // Dominant weapon among the case's pool skins (>= 50% share), else "Other".
+        static string InferWeaponGroup(CaseDefinitionSO caseDef)
+        {
+            var drops = caseDef?.DropTable?.PossibleDrops;
+            if (drops == null || drops.Count == 0) return "Other";
+
+            var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            int total = 0;
+            foreach (var d in drops)
+            {
+                var w = d?.skin?.WeaponName;
+                if (string.IsNullOrEmpty(w)) continue;
+                counts.TryGetValue(w, out var n);
+                counts[w] = n + 1;
+                total++;
+            }
+            if (total == 0) return "Other";
+
+            var best = counts.OrderByDescending(kv => kv.Value).First();
+            return best.Value >= total * 0.5f ? best.Key : "Other";
+        }
+
+        void BuildSectionHeader(Transform parent, string title)
+        {
+            var h = Child(parent, "Header_" + title.Replace(' ', '_'));
+            var le = h.AddComponent<LayoutElement>();
+            le.preferredHeight = 34f;
+            le.minHeight       = 34f;
+
+            var line = Child(h.transform, "Divider");
+            var lrt = line.GetComponent<RectTransform>();
+            lrt.anchorMin = new Vector2(0.06f, 0f);
+            lrt.anchorMax = new Vector2(0.94f, 0f);
+            lrt.pivot     = new Vector2(0.5f, 0f);
+            lrt.offsetMin = new Vector2(0f, 2f);
+            lrt.offsetMax = new Vector2(0f, 4f);
+            var li = line.AddComponent<Image>();
+            li.color         = new Color(Accent.r, Accent.g, Accent.b, 0.28f);
+            li.raycastTarget = false;
+
+            var lblGo = Child(h.transform, "Label");
+            StretchFill(lblGo.GetComponent<RectTransform>());
+            var tmp = lblGo.AddComponent<TextMeshProUGUI>();
+            tmp.text               = title.ToUpperInvariant();
+            tmp.fontSize           = 17f;
+            tmp.fontStyle          = FontStyles.Bold;
+            tmp.characterSpacing   = 4f;
+            tmp.alignment          = TextAlignmentOptions.Center;
+            tmp.color              = TextBright;
+            tmp.enableWordWrapping = false;
+            tmp.overflowMode       = TextOverflowModes.Ellipsis;
+            tmp.raycastTarget      = false;
+        }
+
+        // Decides one compact, capped cell size and column count from the real Viewport
+        // rect, then applies it to every section grid. Card width is capped so cards stay
+        // compact (centered) instead of stretching to fill wide screens.
+        IEnumerator SizeGridToViewport(RectTransform vpRt, RectTransform ctRt)
+        {
             yield return null;
             for (int i = 0; i < 8 && (vpRt == null || vpRt.rect.width < 1f); i++)
                 yield return null;
-            if (grid == null || vpRt == null) yield break;
+            if (vpRt == null) yield break;
 
             float vpW = vpRt.rect.width;
-            float vpH = vpRt.rect.height;
 
-            // Responsive column count from the actual device/game-view aspect ratio.
-            // The ScrollRect viewport can be shorter than the full screen, so vpW / vpH
-            // may falsely classify a tall iPhone as a tablet. Screen aspect is safer:
-            // iPhone portrait ≈ 0.46 → 2 columns, iPad portrait ≈ 0.70 → 3 columns,
-            // iPad landscape >= 1.0 → 4 columns when there is enough viewport width.
-            float screenAspect = Screen.height > 0 ? (float)Screen.width / Screen.height : 0f;
-            int cols;
-            if (screenAspect < 0.60f)                                                   cols = DefaultColumns; // phone portrait → 2
-            else if (screenAspect >= 1.0f && vpW >= VeryWideMinViewportWidth)           cols = MaxColumns;     // landscape wide → 4
-            else if (screenAspect >= 0.60f && vpW >= WideMinViewportWidth)              cols = WideColumns;    // tablet portrait → 3
-            else                                                                        cols = DefaultColumns; // fallback → 2
-            grid.constraintCount = cols;
+            int cols = MaxColumns;
+            while (cols > DefaultColumns && (vpW - SidePad * 2f - Gap * (cols - 1)) / cols < MinCardW)
+                cols--;
 
-            // Card width from the viewport width, side padding and gaps. Phones use a
-            // larger safe side padding; tablets/iPad keep the tight padding.
-            float sidePad   = cols == DefaultColumns ? PhoneHPad : HPad;
-            float available = Mathf.Max(40f, vpW - sidePad * 2f - Gap * (cols - 1));
-            float cellW     = available / cols;
-
-            // Safety cap (phone): one column never exceeds ~46% of the viewport, so two
-            // columns always fit with slack even if the measured width is slightly large.
-            if (cols == DefaultColumns)
-                cellW = Mathf.Min(cellW, vpW * 0.46f);
+            float available = Mathf.Max(40f, vpW - SidePad * 2f - Gap * (cols - 1));
+            float cellW     = Mathf.Min(available / cols, MaxCellW);
             cellW = Mathf.Max(1f, cellW);
+            float cellH     = cellW * CellAspect;
 
-            // Re-center: spread any leftover width as equal left/right padding, so the row
-            // is guaranteed to sit inside the viewport (right column can never overflow).
-            int pad = Mathf.RoundToInt(Mathf.Max(HPad, (vpW - cols * cellW - Gap * (cols - 1)) * 0.5f));
-            grid.padding = new RectOffset(pad, pad, 10, 10);
+            int pad = Mathf.RoundToInt(Mathf.Max(SidePad, (vpW - cols * cellW - Gap * (cols - 1)) * 0.5f));
 
-            // Card height is proportional to its OWN width — natural portrait shape,
-            // no artificial stretching to fill the viewport.
-            float cellH = cellW * CellAspect;
+            foreach (var grid in _groupGrids)
+            {
+                if (grid == null) continue;
+                grid.constraintCount = cols;
+                grid.cellSize        = new Vector2(cellW, cellH);
+                grid.padding         = new RectOffset(pad, pad, 4, 6);
+            }
+            Debug.Log("[SHOP_GRID] sized vpW=" + vpW + " cols=" + cols + " cellW=" + cellW + " cellH=" + cellH);
 
-            grid.cellSize = new Vector2(cellW, cellH);
-            Debug.Log("[SHOP_GRID] sized grid vpW=" + vpW + " vpH=" + vpH +
-                      " screenAspect=" + screenAspect +
-                      " cols=" + cols + " cellW=" + cellW + " cellH=" + cellH);
-
-            // Apply the new Content height immediately so ScrollRect bounds are correct.
             if (ctRt != null)
                 LayoutRebuilder.ForceRebuildLayoutImmediate(ctRt);
+
+            // Cards now have their real size — build the chain/padlock overlays at the
+            // correct diagonal length, and from here on let Refresh() keep them current.
+            _gridSized = true;
+            RefreshLockStates();
         }
 
         // ── Portrait case card ─────────────────────────────────────────────────
@@ -396,6 +476,13 @@ namespace ValoCase.UI.Screens
                 btn.onClick.AddListener(() =>
                 {
                     Debug.Log("[SHOP_CARD] clicked case=" + caseName + " id=" + caseId);
+                    // Locked categories are never openable — show the unlock level instead.
+                    if (!PlayerProgression.IsCaseUnlocked(caseId))
+                    {
+                        int req = PlayerProgression.RequiredLevelForCaseId(caseId);
+                        GameEvents.RaiseToast($"Seviye {req}'te açılır");
+                        return;
+                    }
                     CaseOpeningScreen.PendingCaseId = caseId;
                     navigator?.Navigate(ScreenType.CaseOpening);
                 });
@@ -417,10 +504,10 @@ namespace ValoCase.UI.Screens
                 {
                     var g  = Child(card.transform, "IconArea");
                     var rt = g.GetComponent<RectTransform>();
-                    rt.anchorMin = new Vector2(0f, 0.42f);
+                    rt.anchorMin = new Vector2(0f, 0.43f);
                     rt.anchorMax = new Vector2(1f, 1f);
-                    rt.offsetMin = new Vector2(6f,   5f);
-                    rt.offsetMax = new Vector2(-6f, -6f);
+                    rt.offsetMin = new Vector2(4f,   2f);
+                    rt.offsetMax = new Vector2(-4f, -2f);
 
                     if (!iconNull)
                     {
@@ -440,7 +527,7 @@ namespace ValoCase.UI.Screens
                         StretchFill(qGo.GetComponent<RectTransform>());
                         var q = qGo.AddComponent<TextMeshProUGUI>();
                         q.text      = "?";
-                        q.fontSize  = 26;
+                        q.fontSize  = 20;
                         q.alignment = TextAlignmentOptions.Center;
                         q.color     = TextBright;
                     }
@@ -458,8 +545,8 @@ namespace ValoCase.UI.Screens
                     var tmp = g.AddComponent<TextMeshProUGUI>();
                     tmp.text               = caseName;
                     tmp.enableAutoSizing   = true;   // scales with card → readable on phone & tablet
-                    tmp.fontSizeMin        = 12f;
-                    tmp.fontSizeMax        = 38f;
+                    tmp.fontSizeMin        = 10f;
+                    tmp.fontSizeMax        = 18f;
                     tmp.fontStyle          = FontStyles.Bold;
                     tmp.alignment          = TextAlignmentOptions.Center;
                     tmp.color              = TextBright;
@@ -487,8 +574,8 @@ namespace ValoCase.UI.Screens
                     var tmp = lblGo.AddComponent<TextMeshProUGUI>();
                     tmp.text               = caseDef.VpPrice.ToString("N0") + " VP";
                     tmp.enableAutoSizing   = true;   // fits the price bar at any card size
-                    tmp.fontSizeMin        = 12f;
-                    tmp.fontSizeMax        = 34f;
+                    tmp.fontSizeMin        = 9f;
+                    tmp.fontSizeMax        = 15f;
                     tmp.fontStyle          = FontStyles.Bold;
                     tmp.alignment          = TextAlignmentOptions.Center;
                     tmp.color              = Color.white;
@@ -499,11 +586,183 @@ namespace ValoCase.UI.Screens
                 // Drop-rate text intentionally omitted from the shop card for a cleaner
                 // layout. BuildRateString is kept (not deleted) for potential reuse.
 
+                // Lock overlay is applied/refreshed by RefreshLockStates() once the
+                // card has its real size, and again on every PlayerProgression change.
                 _cards.Add(card);
+                _lockCards.Add((card, caseId));
             }
             catch (Exception ex)
             {
                 Debug.LogError("[SHOP_CARD_DEBUG] BuildCard failed for " + caseName + " error=" + ex);
+            }
+        }
+
+        // Re-evaluates every visible card's lock state against the current player level.
+        // Locked → ensure the crossed-chain/padlock overlay exists and is shown.
+        // Unlocked → hide the overlay so the card looks and behaves like a normal card
+        // (the card Button itself is always interactable; its click handler already
+        // routes locked cases to the unlock toast and unlocked cases to opening).
+        void RefreshLockStates()
+        {
+            int current = PlayerProgression.Level;
+            foreach (var (card, caseId) in _lockCards)
+            {
+                if (card == null) continue;
+                bool locked   = !PlayerProgression.IsCaseUnlocked(caseId);
+                int  required = PlayerProgression.RequiredLevelForCaseId(caseId);
+                var  overlay  = card.transform.Find("LockOverlay");
+
+                if (locked)
+                {
+                    if (overlay == null)
+                    {
+                        BuildLockOverlay(card.transform, required);
+                        Debug.Log($"[SHOP_LOCK] overlay created case={caseId} required={required} current={current} screen=ShopScreen");
+                    }
+                    else if (!overlay.gameObject.activeSelf)
+                    {
+                        overlay.gameObject.SetActive(true);
+                    }
+                }
+                else if (overlay != null && overlay.gameObject.activeSelf)
+                {
+                    overlay.gameObject.SetActive(false);
+                    Debug.Log($"[SHOP_LOCK] overlay hidden (unlocked) case={caseId} required={required} current={current} screen=ShopScreen");
+                }
+            }
+        }
+
+        // Locked-card overlay: card stays visible but darkened, with two steel chains
+        // crossed diagonally into an X, a golden padlock in the centre, and a small dark
+        // rounded "LEVEL N" box directly above it. Reuses CaseListItemView's procedural
+        // chain-link and padlock sprites so both code paths share one visual. The overlay
+        // raycastTarget stays false so the card Button beneath still receives the tap and
+        // shows the unlock toast. Does not alter card size, layout, sorting, or price.
+        static void BuildLockOverlay(Transform card, int requiredLevel)
+        {
+            var cardRt = card.GetComponent<RectTransform>();
+            float w = cardRt != null && cardRt.rect.width  > 1f ? cardRt.rect.width  : TargetCellW;
+            float h = cardRt != null && cardRt.rect.height > 1f ? cardRt.rect.height : TargetCellW * CellAspect;
+            float diag  = Mathf.Sqrt(w * w + h * h);
+            float angle = Mathf.Atan2(h, w) * Mathf.Rad2Deg;
+
+            var ov = Child(card, "LockOverlay");
+            StretchFill(ov.GetComponent<RectTransform>());
+            var ovImg = ov.AddComponent<Image>();
+            ovImg.color         = new Color(0.02f, 0.03f, 0.06f, 0.55f);   // darken the card
+            ovImg.raycastTarget = false;                                    // tap falls to card Button
+            ov.transform.SetAsLastSibling();                                // above icon/title/price
+
+            // Crossed chains forming the X.
+            MakeChainBar(ov.transform,  angle, diag);
+            MakeChainBar(ov.transform, -angle, diag);
+
+            // Golden padlock in the centre.
+            float lockSize = Mathf.Clamp(h * 0.30f, 30f, 54f);
+            var lockGo = Child(ov.transform, "LockBadge");
+            var lrt = lockGo.GetComponent<RectTransform>();
+            lrt.anchorMin = lrt.anchorMax = new Vector2(0.5f, 0.5f);
+            lrt.pivot            = new Vector2(0.5f, 0.5f);
+            lrt.anchoredPosition = new Vector2(0f, -lockSize * 0.18f);
+            lrt.sizeDelta        = new Vector2(lockSize * (40f / 48f), lockSize);
+            var lImg = lockGo.AddComponent<Image>();
+            lImg.sprite         = CaseListItemView.PadlockSprite();
+            lImg.preserveAspect = true;
+            lImg.raycastTarget  = false;
+
+            // Dark rounded "LEVEL N" box directly above the padlock.
+            var box = Child(ov.transform, "LockLevelBox");
+            var boxRt = box.GetComponent<RectTransform>();
+            boxRt.anchorMin = boxRt.anchorMax = new Vector2(0.5f, 0.5f);
+            boxRt.pivot            = new Vector2(0.5f, 0.5f);
+            boxRt.anchoredPosition = new Vector2(0f, lockSize * 0.62f + 12f);
+            boxRt.sizeDelta        = new Vector2(Mathf.Clamp(w * 0.62f, 56f, 96f), 22f);
+            var boxImg = box.AddComponent<Image>();
+            boxImg.sprite        = RoundedBoxSprite();
+            boxImg.type          = Image.Type.Sliced;
+            boxImg.color         = new Color(0.04f, 0.05f, 0.08f, 0.92f);
+            boxImg.raycastTarget = false;
+
+            var lbl = Child(box.transform, "LockLevelLabel");
+            var lblRt = lbl.GetComponent<RectTransform>();
+            lblRt.anchorMin = Vector2.zero; lblRt.anchorMax = Vector2.one;
+            lblRt.offsetMin = new Vector2(4f, 0f); lblRt.offsetMax = new Vector2(-4f, 0f);
+            var tmp = lbl.AddComponent<TextMeshProUGUI>();
+            tmp.text               = $"LEVEL {requiredLevel}";
+            tmp.fontStyle          = FontStyles.Bold;
+            tmp.enableAutoSizing   = true;
+            tmp.fontSizeMin        = 9f;
+            tmp.fontSizeMax        = 14f;
+            tmp.characterSpacing   = 2f;
+            tmp.alignment          = TextAlignmentOptions.Center;
+            tmp.color              = new Color(0.98f, 0.84f, 0.45f, 1f);   // golden
+            tmp.enableWordWrapping = false;
+            tmp.raycastTarget      = false;
+        }
+
+        static Sprite s_roundedBox;
+
+        // 9-sliced rounded-rect sprite generated in code (replaces the unreliable built-in
+        // UI/Skin/Background.psd) so the LEVEL box keeps rounded corners at any size.
+        static Sprite RoundedBoxSprite()
+        {
+            if (s_roundedBox != null) return s_roundedBox;
+
+            const int size = 24, r = 7;
+            var tex = new Texture2D(size, size, TextureFormat.RGBA32, false) { filterMode = FilterMode.Bilinear };
+            var px  = new Color32[size * size];
+            for (int y = 0; y < size; y++)
+            for (int x = 0; x < size; x++)
+            {
+                float cx = Mathf.Clamp(x + 0.5f, r, size - r);
+                float cy = Mathf.Clamp(y + 0.5f, r, size - r);
+                float dx = (x + 0.5f) - cx, dy = (y + 0.5f) - cy;
+                byte a = dx * dx + dy * dy <= r * r ? (byte)255 : (byte)0;
+                px[y * size + x] = new Color32(255, 255, 255, a);
+            }
+            tex.SetPixels32(px);
+            tex.Apply();
+
+            s_roundedBox = Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f),
+                100f, 0, SpriteMeshType.FullRect, new Vector4(r, r, r, r));
+            return s_roundedBox;
+        }
+
+        // One diagonal chain: a rotated bar filled with overlapping oval steel links,
+        // reusing the cached procedural link sprite shared with CaseListItemView.
+        static void MakeChainBar(Transform parent, float angleDeg, float length)
+        {
+            const float thickness = 22f, pitch = 26f;
+
+            var bar = Child(parent, "Chain");
+            var rt  = bar.GetComponent<RectTransform>();
+            rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0.5f);
+            rt.pivot            = new Vector2(0.5f, 0.5f);
+            rt.anchoredPosition = Vector2.zero;
+            rt.sizeDelta        = new Vector2(length, thickness);
+            rt.localEulerAngles = new Vector3(0f, 0f, angleDeg);
+
+            // Drop one link from each end (top-right/bottom-right on this diagonal, and
+            // their mirrors) and re-centre, so the chain terminates inside the card rect
+            // instead of poking past the corners.
+            int   n      = Mathf.Max(1, Mathf.CeilToInt(length / pitch) - 2);
+            float startX = -(n - 1) * pitch * 0.5f;
+            var   sprite = CaseListItemView.ChainLinkSprite();
+            var   steel  = new Color(0.45f, 0.48f, 0.55f, 1f);   // darker, lower-contrast steel
+
+            for (int i = 0; i < n; i++)
+            {
+                var lk  = new GameObject("Link", typeof(RectTransform), typeof(Image));
+                lk.transform.SetParent(rt, false);
+                var lrt = (RectTransform)lk.transform;
+                lrt.anchorMin = lrt.anchorMax = new Vector2(0.5f, 0.5f);
+                lrt.pivot            = new Vector2(0.5f, 0.5f);
+                lrt.anchoredPosition = new Vector2(startX + i * pitch, 0f);
+                lrt.sizeDelta        = new Vector2(pitch + 6f, thickness);
+                var img = lk.GetComponent<Image>();
+                img.sprite        = sprite;
+                img.color         = steel;
+                img.raycastTarget = false;
             }
         }
 

@@ -168,6 +168,7 @@ namespace ValoCase.Battle
         public bool   IsUser;
         public bool   IsWinner;
         public int    TotalVp;
+        public Sprite Avatar;   // backend avatarId resolved to a face card; null → header falls back
         public readonly List<SkinDefinitionSO> Skins = new List<SkinDefinitionSO>();
     }
 

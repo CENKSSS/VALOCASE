@@ -56,7 +56,8 @@
       "Bash(grep -i '\\\\.png$')",
       "Bash(grep -iv '\\\\.png$')",
       "Bash([ -d \"$DS\" ])",
-      "Bash(grep -iv '\\\\.meta$')"
+      "Bash(grep -iv '\\\\.meta$')",
+      "PowerShell(Select-String -Path \"C:\\\\Users\\\\cenk_\\\\ValoCase\\\\Assets\\\\_ValoCase\\\\Scripts\\\\UI\\\\Screens\\\\CaseOpeningScreen.cs\" -Pattern \"GlowRt|_openBtnGlow\" | ForEach-Object { \"$\\($_.LineNumber\\): $\\($_.Line.Trim\\(\\)\\)\" })"
     ]
   }
 }

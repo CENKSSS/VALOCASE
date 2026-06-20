@@ -35,9 +35,11 @@ namespace ValoCase.EditorTools
         bool _dirty;
 
         Vector2 _caseListScroll, _detailScroll, _catalogScroll, _poolScroll;
+        string _caseSearch = "";
         string _poolSearch = "";
         int _poolWeaponIdx, _poolRarityIdx;
         string _selectedCatalogSkin;
+        readonly HashSet<string> _checkedCatalogSkins = new(StringComparer.Ordinal);
         int _selectedPoolIdx = -1;
 
         int _randWeaponIdx;
@@ -153,22 +155,36 @@ namespace ValoCase.EditorTools
             using (new EditorGUILayout.VerticalScope(GUILayout.Width(230)))
             {
                 EditorGUILayout.LabelField($"Cases ({_root.cases.Count})", EditorStyles.boldLabel);
+                _caseSearch = EditorGUILayout.TextField("Search", _caseSearch);
                 if (GUILayout.Button("+ New Case")) CreateNewCase();
 
                 _caseListScroll = EditorGUILayout.BeginScrollView(_caseListScroll);
+                int shown = 0;
                 for (int i = 0; i < _root.cases.Count; i++)
                 {
                     var c = _root.cases[i];
+                    if (!CaseMatchesSearch(c)) continue;
+                    shown++;
                     var label = $"{(c.enabled ? "" : "(off) ")}{c.caseId}";
                     var style = i == _selectedCase ? EditorStyles.boldLabel : EditorStyles.label;
                     if (GUILayout.Button(label, style)) { _selectedCase = i; _selectedPoolIdx = -1; }
                 }
+                if (shown == 0 && !string.IsNullOrEmpty(_caseSearch))
+                    EditorGUILayout.LabelField("No matches", EditorStyles.miniLabel);
                 EditorGUILayout.EndScrollView();
 
                 GUILayout.FlexibleSpace();
                 using (new EditorGUI.DisabledScope(_selectedCase < 0))
                     if (GUILayout.Button("Delete Selected Case")) DeleteSelectedCase();
             }
+        }
+
+        bool CaseMatchesSearch(CaseCatalogEntry c)
+        {
+            if (string.IsNullOrWhiteSpace(_caseSearch)) return true;
+            var q = _caseSearch.Trim();
+            return (c.caseId != null && c.caseId.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0)
+                || (c.displayName != null && c.displayName.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0);
         }
 
         void CreateNewCase()
@@ -353,24 +369,51 @@ namespace ValoCase.EditorTools
                 }
 
                 var filtered = FilterSkins(_poolWeaponIdx, _poolRarityIdx, _poolSearch);
-                EditorGUILayout.LabelField($"{filtered.Count} match", EditorStyles.miniLabel);
+
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    EditorGUILayout.LabelField($"{filtered.Count} match", EditorStyles.miniLabel, GUILayout.Width(70));
+                    EditorGUILayout.LabelField($"Selected: {_checkedCatalogSkins.Count}", EditorStyles.miniBoldLabel, GUILayout.Width(90));
+                    GUILayout.FlexibleSpace();
+                    if (GUILayout.Button("Select All", GUILayout.Width(80)))
+                        foreach (var s in filtered) _checkedCatalogSkins.Add(s.skinId);
+                    if (GUILayout.Button("Deselect All", GUILayout.Width(90)))
+                        _checkedCatalogSkins.Clear();
+                }
 
                 _catalogScroll = EditorGUILayout.BeginScrollView(_catalogScroll, GUILayout.Height(220));
                 foreach (var s in filtered)
                 {
-                    bool inPool = c.manualDropPool.Contains(s.skinId);
-                    var style = s.skinId == _selectedCatalogSkin ? EditorStyles.boldLabel : EditorStyles.label;
-                    if (GUILayout.Button($"{(inPool ? "● " : "")}{s.displayName}  [{s.rarity} {s.vpValue}]", style))
-                        _selectedCatalogSkin = s.skinId;
+                    using (new EditorGUILayout.HorizontalScope())
+                    {
+                        bool wasChecked = _checkedCatalogSkins.Contains(s.skinId);
+                        bool nowChecked = EditorGUILayout.Toggle(wasChecked, GUILayout.Width(18));
+                        if (nowChecked != wasChecked)
+                        {
+                            if (nowChecked) _checkedCatalogSkins.Add(s.skinId);
+                            else _checkedCatalogSkins.Remove(s.skinId);
+                        }
+
+                        bool inPool = c.manualDropPool.Contains(s.skinId);
+                        var style = s.skinId == _selectedCatalogSkin ? EditorStyles.boldLabel : EditorStyles.label;
+                        if (GUILayout.Button($"{(inPool ? "● " : "")}{s.displayName}  {s.weapon} · {s.rarity} · {s.vpValue}vp  {s.skinId}", style))
+                            _selectedCatalogSkin = s.skinId;
+                    }
                 }
                 EditorGUILayout.EndScrollView();
 
                 if (_selectedCatalogSkin != null && _skinById.TryGetValue(_selectedCatalogSkin, out var sel))
                     EditorGUILayout.LabelField($"{sel.displayName} | {sel.weapon} | {sel.rarity} | {sel.vpValue} VP | id={sel.skinId}", EditorStyles.miniLabel);
 
-                using (new EditorGUI.DisabledScope(_selectedCatalogSkin == null))
-                    if (GUILayout.Button("Add Selected →"))
-                        AddToPool(c, _selectedCatalogSkin);
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    using (new EditorGUI.DisabledScope(_checkedCatalogSkins.Count == 0))
+                        if (GUILayout.Button($"Add Selected → ({_checkedCatalogSkins.Count})"))
+                            AddCheckedToPool(c);
+                    using (new EditorGUI.DisabledScope(_selectedCatalogSkin == null))
+                        if (GUILayout.Button("Add Highlighted →", GUILayout.Width(140)))
+                            AddToPool(c, _selectedCatalogSkin);
+                }
             }
         }
 
@@ -445,6 +488,19 @@ namespace ValoCase.EditorTools
             if (string.IsNullOrEmpty(skinId) || c.manualDropPool.Contains(skinId)) return;
             c.manualDropPool = c.manualDropPool.Append(skinId).ToArray();
             _dirty = true;
+        }
+
+        void AddCheckedToPool(CaseCatalogEntry c)
+        {
+            if (_checkedCatalogSkins.Count == 0) return;
+            var existing = new HashSet<string>(c.manualDropPool, StringComparer.Ordinal);
+            var toAdd = _checkedCatalogSkins.Where(id => _skinById.ContainsKey(id) && !existing.Contains(id)).ToList();
+            if (toAdd.Count == 0) { ShowNotification(new GUIContent("All checked skins already in pool")); return; }
+            c.manualDropPool = c.manualDropPool.Concat(toAdd).ToArray();
+            _checkedCatalogSkins.Clear();
+            _selectedPoolIdx = -1;
+            _dirty = true;
+            ShowNotification(new GUIContent($"Added {toAdd.Count} skin(s)"));
         }
 
         void RemoveFromPool(CaseCatalogEntry c, string skinId)

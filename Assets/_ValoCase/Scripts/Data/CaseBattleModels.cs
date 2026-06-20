@@ -36,12 +36,26 @@ namespace ValoCase.Data
         Bot
     }
 
+    public struct BattleCaseSelection
+    {
+        public string CaseId;
+        public string CaseName;
+        public int    Quantity;   // opens per participant, 1..5
+        public int    PriceVp;    // per-open price
+        public BattleCaseSelection(string caseId, string caseName, int quantity, int priceVp)
+        { CaseId = caseId; CaseName = caseName; Quantity = quantity; PriceVp = priceVp; }
+    }
+
     public sealed class BattleLobbyData
     {
-        public string            LobbyId;
-        public string            HostName;
+        public string            LobbyId;            // backend battleId in online mode
+        public string            HostName;           // creator display name in online mode
+        public string            HostAvatarId;       // creator avatarId in online mode
+        public string            CaseId;             // backend caseId (online create/join + summary)
+        public string            CreatorAccountId;   // online: used to detect "your own" lobby
         public string            CaseName;
-        public int               Rounds = 1;
+        public List<BattleCaseSelection> CaseSelections = new List<BattleCaseSelection>();
+        public int               Rounds = 1;         // total opens across all selections
         public BattleMode         Mode  = BattleMode.Normal;
         public BattlePlayerCount  PlayerCount = BattlePlayerCount.OneVOne;
         public int               CurrentPlayers = 1;

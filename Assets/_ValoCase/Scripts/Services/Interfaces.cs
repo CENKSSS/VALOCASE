@@ -67,6 +67,14 @@ namespace ValoCase.Services
         /// </summary>
         bool TryUpgradeMulti(IReadOnlyList<SkinDefinitionSO> inputs, SkinDefinitionSO target, out bool success);
 
+        /// <summary>
+        /// Resolves a value-based upgrade with multiple targets. All inputs are consumed
+        /// (success and failure alike); every target is added on success. The upgrade
+        /// only resolves when the target total VP is strictly greater than the input total.
+        /// Returns true on resolution; `success` indicates the outcome.
+        /// </summary>
+        bool TryUpgradeMultiTarget(IReadOnlyList<SkinDefinitionSO> inputs, IReadOnlyList<SkinDefinitionSO> targets, out bool success);
+
         /// <summary>Hook for animation systems, telemetry, future networking.</summary>
         event System.Action<SkinDefinitionSO, SkinDefinitionSO, bool> OnUpgradeResolved;
 

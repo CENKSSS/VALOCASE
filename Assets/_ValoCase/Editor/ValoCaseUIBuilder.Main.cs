@@ -252,12 +252,15 @@ namespace ValoCase.Editor
             var screenHost = CreateRect("Screens", safe, Vector2.zero);
             StretchFull(screenHost);
             DisableRaycast(screenHost);
-            Debug.Log("[BOTTOM_NAV_FIX] reverted unsafe screen offset");
+            // Shared content root: insets between the top/bottom navbars at runtime.
+            screenHost.gameObject.AddComponent<ScreenContentFitter>();
+            screenHost.offsetMin = new Vector2(0f, BottomNavBar.Height);
+            screenHost.offsetMax = new Vector2(0f, -TopProfileBar.Height);
 
             var caseItemView = caseListItemPrefab.GetComponent<CaseListItemView>();
             var dropItemView = dropItemPrefab.GetComponent<DropItemView>();
             var weaponCardView = weaponSkinCardPrefab.GetComponent<WeaponSkinCardView>();
-            var main = BuildMainMenuScreen(screenHost, navigator);
+            // Old prototype main menu retired — reachable only through the BottomNavBar tabs now.
             var inventory = BuildSimpleScreen<InventoryScreen>(screenHost, "InventoryScreen", ScreenType.Inventory, navigator, "INVENTORY");
             var shop = BuildSimpleScreen<ShopScreen>(screenHost, "ShopScreen", ScreenType.Shop, navigator, "SHOP");
             var settings = BuildSimpleScreen<SettingsScreen>(screenHost, "SettingsScreen", ScreenType.Settings, navigator, "SETTINGS");
@@ -278,7 +281,7 @@ namespace ValoCase.Editor
             WireShopExtras(shop, caseItemView);
             WireSettingsExtras(settings);
 
-            var daily = BuildDailyPopup(safe);
+            BuildDailyPopup(safe);
             BuildToast(safe);
             BuildSkinWinPopup(safe);   // fullscreen win overlay — rendered on top of everything
             Debug.Log("[DEBUG][BUILDER] SkinWinPopup added to canvas prefab");
@@ -291,7 +294,7 @@ namespace ValoCase.Editor
             topBarRt.anchorMax        = new Vector2(1f, 1f);
             topBarRt.pivot            = new Vector2(0.5f, 1f);
             topBarRt.anchoredPosition = new Vector2(0f, 0f);
-            topBarRt.sizeDelta        = new Vector2(0f, 86f);
+            topBarRt.sizeDelta        = new Vector2(0f, TopProfileBar.Height);  // single source of truth
             var topBar   = topBarGo.AddComponent<TopProfileBar>();
             var topBarSo = new SerializedObject(topBar);
             var topNavProp = topBarSo.FindProperty("navigator");
@@ -309,7 +312,7 @@ namespace ValoCase.Editor
             navBarRt.anchorMax        = new Vector2(1f, 0f);
             navBarRt.pivot            = new Vector2(0.5f, 0f);
             navBarRt.anchoredPosition = new Vector2(0f, 0f);   // flush with SafeArea bottom (matches BuildUI runtime)
-            navBarRt.sizeDelta        = new Vector2(0f, 108f);  // 108 px — matches BuildUI NavH
+            navBarRt.sizeDelta        = new Vector2(0f, BottomNavBar.Height);  // single source of truth
             var navBar   = navBarGo.AddComponent<BottomNavBar>();
             var navBarSo = new SerializedObject(navBar);
             var navProp  = navBarSo.FindProperty("navigator");
@@ -319,8 +322,7 @@ namespace ValoCase.Editor
             Debug.Log("[BOTTOM_NAV] Added to PF_UICanvas by builder");
             // ─────────────────────────────────────────────────────────────────────
 
-            WireMainMenu(main, navigator, daily);
-            WireNavigator(navigator, main, cases.gameObject, inventory.gameObject, shop.gameObject, settings.gameObject, weapons.gameObject, upgrade.gameObject, lobby.gameObject, earn.gameObject, tools.gameObject, market.gameObject);
+            WireNavigator(navigator, cases.gameObject, inventory.gameObject, shop.gameObject, settings.gameObject, weapons.gameObject, upgrade.gameObject, lobby.gameObject, earn.gameObject, tools.gameObject, market.gameObject);
 
             return SavePrefab(root, UiCanvasPrefabPath);
         }
@@ -371,17 +373,36 @@ namespace ValoCase.Editor
             bgSo.ApplyModifiedPropertiesWithoutUndo();
             // ─────────────────────────────────────────────────────────────────
 
-            var openBtn = CreateMenuButton(screen, "OpenCaseButton", "OPEN CASE", AccentRed, new Vector2(0, 120), new Vector2(520, 100));
-            var invBtn = CreateMenuButton(screen, "InventoryButton", "INVENTORY", Panel, new Vector2(-140, -40), new Vector2(240, 88));
-            var shopBtn = CreateMenuButton(screen, "ShopButton", "SHOP", Panel, new Vector2(140, -40), new Vector2(240, 88));
-            var setBtn = CreateMenuButton(screen, "SettingsButton", "SETTINGS", Panel, new Vector2(-140, -150), new Vector2(240, 88));
-            var weaponsBtn = CreateMenuButton(screen, "WeaponsButton", "SİLAHLAR", Panel, new Vector2(140, -150), new Vector2(240, 88));
+            // ── Bounded, auto-fitting menu cluster ────────────────────────────
+            // MenuRoot fills the already-safe screen; MenuInner holds the fixed
+            // button layout and is scaled down by ContentScaleFitter so the cluster
+            // can never overflow behind the navbars on short/wide aspect ratios.
+            var menuRoot = CreateRect("MenuRoot", screen, Vector2.zero);
+            StretchFull(menuRoot);
+            DestroyImage(menuRoot);
+
+            var menuInner = CreateRect("MenuInner", menuRoot, new Vector2(560f, 1060f));
+            menuInner.anchorMin        = new Vector2(0.5f, 0.5f);
+            menuInner.anchorMax        = new Vector2(0.5f, 0.5f);
+            menuInner.pivot            = new Vector2(0.5f, 0.5f);
+            menuInner.anchoredPosition = Vector2.zero;
+            menuInner.sizeDelta        = new Vector2(560f, 1060f);
+            DestroyImage(menuInner);
+
+            var menuFitter = menuRoot.gameObject.AddComponent<ContentScaleFitter>();
+            SetField(menuFitter, "content", menuInner);
+
+            var openBtn = CreateMenuButton(menuInner, "OpenCaseButton", "OPEN CASE", AccentRed, new Vector2(0, 120), new Vector2(520, 100));
+            var invBtn = CreateMenuButton(menuInner, "InventoryButton", "INVENTORY", Panel, new Vector2(-140, -40), new Vector2(240, 88));
+            var shopBtn = CreateMenuButton(menuInner, "ShopButton", "SHOP", Panel, new Vector2(140, -40), new Vector2(240, 88));
+            var setBtn = CreateMenuButton(menuInner, "SettingsButton", "SETTINGS", Panel, new Vector2(-140, -150), new Vector2(240, 88));
+            var weaponsBtn = CreateMenuButton(menuInner, "WeaponsButton", "SİLAHLAR", Panel, new Vector2(140, -150), new Vector2(240, 88));
             // Wide UPGRADE / GAMBLE call-to-action between weapons row and daily.
-            var upgradeBtn = CreateMenuButton(screen, "UpgradeButton", "YÜKSELT", NeonPurple, new Vector2(0, -250), new Vector2(520, 76));
+            var upgradeBtn = CreateMenuButton(menuInner, "UpgradeButton", "YÜKSELT", NeonPurple, new Vector2(0, -250), new Vector2(520, 76));
             // Redirects to the new Lobby flow (CaseBattleScreen retired).
-            var battleBtn  = CreateMenuButton(screen, "CaseBattleButton", "KASA SAVAŞI", NeonGreen, new Vector2(0, -332), new Vector2(520, 76));
-            var dailyBtn  = CreateMenuButton(screen, "DailyButton",  "DAILY REWARD", Panel,    new Vector2(0, -414), new Vector2(320, 64));
-            var earnVpBtn = CreateMenuButton(screen, "EarnVpButton", "◆ VP KAZAN",  NeonGold, new Vector2(0, -494), new Vector2(520, 64));
+            var battleBtn  = CreateMenuButton(menuInner, "CaseBattleButton", "KASA SAVAŞI", NeonGreen, new Vector2(0, -332), new Vector2(520, 76));
+            var dailyBtn  = CreateMenuButton(menuInner, "DailyButton",  "DAILY REWARD", Panel,    new Vector2(0, -414), new Vector2(320, 64));
+            var earnVpBtn = CreateMenuButton(menuInner, "EarnVpButton", "◆ VP KAZAN",  NeonGold, new Vector2(0, -494), new Vector2(520, 64));
 
             var player = CreateTmp("PlayerName", screen, "Agent", 22, TextAlignmentOptions.Left);
             player.rectTransform.anchorMin = new Vector2(0, 1);
@@ -498,11 +519,13 @@ namespace ValoCase.Editor
             // Baked weapon tab buttons removed — WeaponsScreen.BuildWeaponDropdown()
             // creates a runtime dropdown inside tabStrip at OnShown. No static children needed.
 
-            // Skin grid scroll area
+            // Skin grid scroll area. Bottom inset is the shared content padding; the
+            // navbar space is already reserved by the Screens host. Top is pushed
+            // below the chrome at runtime by WeaponsScreen.EnsureScrollLayout().
             var grid = CreateVerticalGridScrollContent(
                 "WeaponsScroll",
                 screen,
-                new Vector2(16, 140),
+                new Vector2(16, ScreenContentFitter.ContentPadding),
                 new Vector2(-16, -16),
                 new Vector2(200, 290),
                 new Vector2(12, 12),
@@ -601,17 +624,8 @@ namespace ValoCase.Editor
             var screen = CreateScreenPanel(parent, "ToolsScreen", ScreenType.Tools, out var group);
             var comp   = screen.gameObject.AddComponent<ToolsScreen>();
 
-            // Back button (bottom-centre, above BottomNavBar)
-            var back = CreateMenuButton(screen, "Back", "BACK", Panel, new Vector2(0, -80), new Vector2(200, 72));
-            var backRt = back.GetComponent<RectTransform>();
-            backRt.anchorMin        = new Vector2(0.5f, 0);
-            backRt.anchorMax        = new Vector2(0.5f, 0);
-            backRt.pivot            = new Vector2(0.5f, 0);
-            backRt.anchoredPosition = new Vector2(0, 32);
-
             var so = new SerializedObject(comp);
             so.FindProperty("navigator").objectReferenceValue   = navigator;
-            so.FindProperty("backButton").objectReferenceValue  = back;
             so.FindProperty("canvasGroup").objectReferenceValue = group;
             so.FindProperty("screenType").enumValueIndex        = (int)ScreenType.Tools;
             so.ApplyModifiedPropertiesWithoutUndo();
@@ -626,17 +640,8 @@ namespace ValoCase.Editor
             var screen = CreateScreenPanel(parent, "MarketScreen", ScreenType.Market, out var group);
             var comp   = screen.gameObject.AddComponent<MarketScreen>();
 
-            // Back button (bottom-centre, above BottomNavBar)
-            var back = CreateMenuButton(screen, "Back", "BACK", Panel, new Vector2(0, -80), new Vector2(200, 72));
-            var backRt = back.GetComponent<RectTransform>();
-            backRt.anchorMin        = new Vector2(0.5f, 0);
-            backRt.anchorMax        = new Vector2(0.5f, 0);
-            backRt.pivot            = new Vector2(0.5f, 0);
-            backRt.anchoredPosition = new Vector2(0, 32);
-
+            // Market is reached only through the BottomNavBar — no back button.
             var so = new SerializedObject(comp);
-            so.FindProperty("navigator").objectReferenceValue   = navigator;
-            so.FindProperty("backButton").objectReferenceValue  = back;
             so.FindProperty("canvasGroup").objectReferenceValue = group;
             so.FindProperty("screenType").enumValueIndex        = (int)ScreenType.Market;
             so.ApplyModifiedPropertiesWithoutUndo();
@@ -667,17 +672,11 @@ namespace ValoCase.Editor
 
         static void WireInventoryExtras(RectTransform inventory, GameObject skinCardPrefab)
         {
-            // ── Layout constants ─────────────────────────────────────────────────
-            // BottomNavBar runtime height = 90 px (see BottomNavBar.BuildUI NavH).
-            // Back button: height=72, positioned at y=96 (just above BottomNav top at y=90).
-            //   Back button spans y=96 → y=168 from SafeArea bottom.
-            // Scroll starts at y=180 (8 px gap above back button top at y=168).
-            //   Items are clipped at y=180 — clearly above BottomNav at y=90.
-            const float navH       = 90f;   // must match BottomNavBar.BuildUI NavH
+            // BottomNavBar space is reserved by the shared Screens host (ScreenContentFitter);
+            // these are content-edge offsets within the usable area.
             const float btnH       = 72f;   // back button height (set in BuildSimpleScreen)
-            const float btnBottom  = navH + 6f;          // 96 — just above BottomNav
-            const float scrollBot  = btnBottom + btnH + 8f; // 180 — above back button top
-            Debug.Log("[BOTTOM_NAV_LAYOUT] reserved bottom padding for screen content: scrollBot=" + scrollBot);
+            const float btnBottom  = 16f;
+            const float scrollBot  = btnBottom + btnH + 8f; // above back button top
 
             var comp = inventory.GetComponent<InventoryScreen>();
             var grid = CreateVerticalGridScrollContent(

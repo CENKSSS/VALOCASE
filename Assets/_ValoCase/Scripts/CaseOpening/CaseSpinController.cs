@@ -52,6 +52,16 @@ namespace ValoCase.CaseOpening
         const float ResolveSpinDuration  = 3.25f; // decel time once the winner is in
         const int   ResolveTrailingItems = GameConstants.ReelVisibleItemCount;
 
+        // Mobile card pitch == card width (220 × ReelItemView.CardScale 0.6) so the
+        // slots connect into one continuous strip with no gap between neighbours.
+        const float MobileItemWidth = 132f;
+
+        // Land the winner at a random horizontal spot under the marker instead of dead
+        // center every open, so the selector triangle stops somewhere different on the
+        // winning card each time. Bounded to the card's middle band (±35% of the card
+        // width) so the winner is always unambiguously the card under the triangle.
+        const float MarkerJitterFraction = 0.7f;
+
         public bool IsSpinning => _isSpinning;
         public bool WarmupActive => _warmupActive;
 
@@ -65,6 +75,7 @@ namespace ValoCase.CaseOpening
             }
 
             ClearReel();  // release any previous reel state before setting new
+            itemWidth = MobileItemWidth;
             // Mobile style: hide the old flashing center line — the focus frame
             // (built by CaseOpeningScreen) and item scaling handle the highlight.
             if (centerLine != null) centerLine.enabled = false;
@@ -104,7 +115,7 @@ namespace ValoCase.CaseOpening
                 var winnerInViewport = viewport.InverseTransformPoint(winnerWorld);
                 var markerInViewport = viewport.InverseTransformPoint(markerWorld);
                 var deltaX = markerInViewport.x - winnerInViewport.x;
-                _targetX = reelContent.anchoredPosition.x + deltaX;
+                _targetX = reelContent.anchoredPosition.x + deltaX + RandomLandingJitter();
 
                 Debug.Log($"[SPIN] BeginSpin — winner='{predeterminedWinner.SkinName}' " +
                           $"winnerIndex={_winnerIndex} placedSkin='{_activeItems[_winnerIndex].Skin?.SkinName}' " +
@@ -139,6 +150,7 @@ namespace ValoCase.CaseOpening
             if (reelContent == null || PoolManager.Instance == null) return;
 
             ClearReel();
+            itemWidth = MobileItemWidth;
             if (centerLine != null) centerLine.enabled = false;
             _fillerPool = CaseReelBuilder.BuildPool(caseDef);
             _isSpinning   = true;
@@ -269,7 +281,7 @@ namespace ValoCase.CaseOpening
                 var winnerInViewport = viewport.InverseTransformPoint(winnerWorld);
                 var markerInViewport = viewport.InverseTransformPoint(markerWorld);
                 var deltaX           = markerInViewport.x - winnerInViewport.x;
-                _targetX = reelContent.anchoredPosition.x + deltaX;
+                _targetX = reelContent.anchoredPosition.x + deltaX + RandomLandingJitter();
             }
             else
             {
@@ -282,6 +294,13 @@ namespace ValoCase.CaseOpening
             if (_highlightRoutine == null)
                 _highlightRoutine = StartCoroutine(HighlightCenterItem());
         }
+
+        // Random horizontal offset added to the landing target so the selector triangle
+        // stops at a different point on the winning card each open instead of always
+        // dead-center. Bounded to the card's middle band so the winner stays clearly
+        // under the triangle (never drifts onto a neighbouring slot).
+        float RandomLandingJitter()
+            => UnityEngine.Random.Range(-0.5f, 0.5f) * itemWidth * MarkerJitterFraction;
 
         // Stops any in-progress spin/warmup and tears the reel down without firing the
         // completion callback (used when a backend open fails before a winner exists).
@@ -332,29 +351,13 @@ namespace ValoCase.CaseOpening
             OnSpinComplete();
         }
 
-        // Mobile style: scale up whichever reel item is closest to the center
-        // marker, scaling neighbours down — a smooth "focus" feel instead of a
-        // flashing line.
+        // Focus zoom removed — all cards stay a uniform size during the spin.
+        // The centered slot is highlighted by a static soft marker built by
+        // CaseOpeningScreen, so no per-frame scaling is needed here.
         IEnumerator HighlightCenterItem()
         {
             if (centerLine != null) centerLine.enabled = false;
-
-            while (_isSpinning)
-            {
-                var markerX = centerMarker != null ? centerMarker.position.x
-                            : (reelContent != null && reelContent.parent is RectTransform vp ? vp.position.x : 0f);
-
-                foreach (var item in _activeItems)
-                {
-                    if (item == null) continue;
-                    var rt = item.RectTransform;
-                    var dist = Mathf.Abs(rt.position.x - markerX);
-                    var norm = Mathf.Clamp01(dist / (itemWidth * 1.2f));
-                    var scale = Mathf.Lerp(1.06f, 0.94f, norm);
-                    rt.localScale = new Vector3(scale, scale, 1f);
-                }
-                yield return null;
-            }
+            yield break;
         }
 
         void OnSpinComplete()

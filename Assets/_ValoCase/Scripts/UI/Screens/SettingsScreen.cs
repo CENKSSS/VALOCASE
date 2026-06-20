@@ -149,16 +149,15 @@ namespace ValoCase.UI.Screens
 
             var rt = (RectTransform)transform;
 
-            // ── Outer panel — centered, with top/bottom reserved zones ──────────
-            // offsetMax.y = -230  → top edge sits 230 px below screen top
-            //                       (TopProfileBar 72 px + 158 px breathing room)
-            // offsetMin.y =  94   → bottom edge sits 94 px above screen bottom
-            //                       (BottomNavBar 90 px + 4 px gap)
+            // ── Outer panel — fills the already-safe screen with shared content
+            // padding only. Navbar space is reserved by the Screens host
+            // (ScreenContentFitter); no navbar offset is duplicated here. The panel
+            // scrolls internally when its content does not fit.
+            const float sidePad = 60f;
             var panel = PR(rt, "ProfilePanel",
                 Vector2.zero, Vector2.one, new Vector2(0.5f, 0.5f));
-            panel.offsetMin = new Vector2(60f, 110f);
-            panel.offsetMax = new Vector2(-60f, -95f);
-            Debug.Log("[SETTINGS_LAYOUT] shifted content down");
+            panel.offsetMin = new Vector2(sidePad,  ScreenContentFitter.ContentPadding);
+            panel.offsetMax = new Vector2(-sidePad, -ScreenContentFitter.ContentPadding);
 
             var panelImg = panel.gameObject.AddComponent<Image>();
             panelImg.color = BgPanel;
@@ -462,7 +461,7 @@ namespace ValoCase.UI.Screens
             iwOl.effectDistance = new Vector2(1f, -1f);
 
             _displayNameInput = BuildInputField(
-                (RectTransform)iwGo.transform, PlayerProfileData.Username);
+                (RectTransform)iwGo.transform, ResolveDisplayNameForUi());
 
             _displayNameInput.onValueChanged.AddListener(_ => MarkDirty());
         }
@@ -625,25 +624,110 @@ namespace ValoCase.UI.Screens
             // SetUsername fires OnProfileChanged → RefreshProfileSection() which
             // overwrites _pendingKey/_pendingSprite with the old saved data.
             // Using locals ensures SetAvatar always receives the user's selection.
-            var newName   = (_displayNameInput != null) ? _displayNameInput.text.Trim() : null;
+            var rawName   = (_displayNameInput != null) ? _displayNameInput.text : null;
             var newKey    = _pendingKey;
             var newSprite = _pendingSprite;
 
             Debug.Log("[SETTINGS_AVATAR] saving key=" + newKey + " spriteNull=" + (newSprite == null));
 
-            if (!string.IsNullOrWhiteSpace(newName))
-                PlayerProfileData.SetUsername(newName);   // fires OnProfileChanged → RefreshProfileSection
+            // Validate locally before any backend request — invalid names never leave the client.
+            if (!TryValidateNickname(rawName, out var newName, out var validationError))
+            {
+                GameEvents.RaiseToast(validationError);
+                SetSaveButtonActive(true);
+                return;
+            }
 
-            if (newSprite != null)
-                PlayerProfileData.SetAvatar(newSprite, newKey);  // uses local copy — safe
+            var ctx = GameContext.Instance;
 
-            Debug.Log("[SETTINGS_AVATAR] after save key=" + PlayerProfileData.AvatarKey);
+            // Both nickname and avatar are server-authoritative: save the name, then the
+            // avatar, and update the local cache only on success. Never persist either
+            // locally first, so other players always see what the backend stored.
+            if (ctx != null && ctx.BackendEnabled)
+            {
+                SetSaveButtonActive(false);
+                ctx.SaveDisplayNameBackend(newName,
+                    nameSaved => SaveAvatarThenFinish(ctx, newKey, newSprite),
+                    err =>
+                    {
+                        GameEvents.RaiseToast(string.IsNullOrEmpty(err) ? "İsim kaydedilemedi." : err);
+                        SetSaveButtonActive(true);   // allow retry
+                    });
+                return;
+            }
+
+            // Local fallback (no backend available, e.g. offline editor session).
+            if (newSprite != null) PlayerProfileData.SetAvatar(newSprite, newKey);
+            PlayerProfileData.SetUsername(newName);
 
             GameEvents.RaiseToast("Profile saved.");
 
             _hasUnsavedChanges = false;
             SetSaveButtonActive(false);
             Debug.Log("[SETTINGS] Saved changes — save button disabled");
+        }
+
+        // Persists the chosen avatar to the backend after the name save succeeded, then
+        // adopts it into the local cache. With no avatar selected there is nothing to
+        // push, so the profile save is already complete.
+        void SaveAvatarThenFinish(GameContext ctx, string avatarKey, Sprite avatarSprite)
+        {
+            if (string.IsNullOrEmpty(avatarKey) || avatarSprite == null)
+            {
+                FinishProfileSaved();
+                return;
+            }
+
+            ctx.SaveAvatarBackend(avatarKey,
+                saved =>
+                {
+                    PlayerProfileData.SetAvatar(avatarSprite, avatarKey);
+                    FinishProfileSaved();
+                },
+                err =>
+                {
+                    GameEvents.RaiseToast(string.IsNullOrEmpty(err) ? "Avatar kaydedilemedi." : err);
+                    SetSaveButtonActive(true);   // name saved; allow retry for the avatar
+                });
+        }
+
+        void FinishProfileSaved()
+        {
+            GameEvents.RaiseToast("Profil kaydedildi.");
+            _hasUnsavedChanges = false;
+            SetSaveButtonActive(false);
+            Debug.Log("[SETTINGS] Profile saved to backend — save button disabled");
+        }
+
+        // Mirrors the backend rules: 3–20 chars, English letters/digits/underscore only.
+        static bool TryValidateNickname(string raw, out string trimmed, out string error)
+        {
+            trimmed = (raw ?? string.Empty).Trim();
+            error = null;
+
+            if (string.IsNullOrEmpty(trimmed)) { error = "İsim boş bırakılamaz."; return false; }
+            if (trimmed.Length < 3)            { error = "İsim en az 3 karakter olmalı."; return false; }
+            if (trimmed.Length > 20)           { error = "İsim en fazla 20 karakter olmalı."; return false; }
+
+            foreach (var c in trimmed)
+            {
+                bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                          (c >= '0' && c <= '9') || c == '_';
+                if (!ok) { error = "Sadece harf, rakam ve _ kullanabilirsin."; return false; }
+            }
+            return true;
+        }
+
+        // New players have no saved nickname yet — show the backend-style AgentXXXX
+        // default (derived from the guest account id) instead of the bare "Agent".
+        static string ResolveDisplayNameForUi()
+        {
+            var name = PlayerProfileData.Username;
+            if (!string.IsNullOrWhiteSpace(name) && name != "Agent") return name;
+
+            var accountId = GameContext.Instance?.Save?.Data?.guestAccountId;
+            if (string.IsNullOrEmpty(accountId)) return name;
+            return "Agent" + accountId.Substring(0, Mathf.Min(4, accountId.Length));
         }
 
         // ── Dirty-state helpers ───────────────────────────────────────────────
@@ -683,7 +767,7 @@ namespace ValoCase.UI.Screens
                 _bigAvatarImg.sprite = PlayerProfileData.Avatar;
             }
             if (_agentNameLbl     != null) _agentNameLbl.text     = PlayerProfileData.AvatarKey;
-            if (_displayNameInput != null) _displayNameInput.text = PlayerProfileData.Username;
+            if (_displayNameInput != null) _displayNameInput.text = ResolveDisplayNameForUi();
 
             // Grid might not have been populated yet
             if (_gridContent != null && _gridContent.childCount == 0)

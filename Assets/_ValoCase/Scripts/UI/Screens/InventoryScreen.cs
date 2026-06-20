@@ -36,11 +36,13 @@ namespace ValoCase.UI.Screens
         bool _priceDescending = true; // default: highest value first (Price ↓)
         bool _bulkSellInFlight;       // guards backend bulk sells against double-fire
 
-        // Scroll-panel insets (px, 1080×1920 ref). Top is larger than the prefab's 240
-        // so the grid sits below the Price / SELL row; bottom is lowered from 176 into
-        // the freed Back-button band, stopping ~20px above the 90px BottomNavBar.
-        const float GridTopPadding = 330f;
-        const float GridBottomPadding = 110f;
+        // Scroll-panel insets (px, 1080×1920 ref). Top clears the wallet / filter /
+        // Price-SELL header stack; bottom is just the shared content padding since the
+        // BottomNavBar space is already reserved by the Screens host (ScreenContentFitter),
+        // so the last grid row sits right above the navbar instead of leaving a dead band.
+        const float GridTopPadding = 356f;
+        const float GridBottomPadding = ScreenContentFitter.ContentPadding + 8f;
+        const float GridMinHeight = 200f;
 
         // Downward nudge (px, 1080×1920 ref) applied to the Price / SELL buttons relative
         // to the old dropdown slot. Stays above the grid (grid top inset is 330).
@@ -129,8 +131,23 @@ namespace ValoCase.UI.Screens
         {
             var scroll = gridRoot != null ? gridRoot.GetComponentInParent<ScrollRect>() : null;
             if (scroll == null || scroll.transform is not RectTransform rt) return;
+
+            // Header clearance (top) is kept fixed; the bottom reservation yields first so a
+            // short usable area scrolls inside the viewport instead of inverting the grid.
+            float bottom = GridBottomPadding;
+            if (rt.parent is RectTransform prt)
+            {
+                float h = prt.rect.height;
+                if (h > 1f && h - GridTopPadding - bottom < GridMinHeight)
+                    bottom = Mathf.Max(0f, h - GridTopPadding - GridMinHeight);
+            }
             rt.offsetMax = new Vector2(rt.offsetMax.x, -GridTopPadding);
-            rt.offsetMin = new Vector2(rt.offsetMin.x, GridBottomPadding);
+            rt.offsetMin = new Vector2(rt.offsetMin.x, bottom);
+        }
+
+        void OnRectTransformDimensionsChange()
+        {
+            if (_headerBuilt) ResizeGrid();
         }
 
         // Builds a fresh button placed in the given dropdown's former layout slot.

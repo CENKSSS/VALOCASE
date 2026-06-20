@@ -126,9 +126,17 @@ namespace ValoCase.CaseOpening
                 if (error == null || error.HttpStatus == 0)
                     ctx.RequestBackendResync();
                 AbortBackendSession();
-                onFailed?.Invoke(BackendErrorMapper.Map(error));
+                // A 403 locked-category error carries the exact unlock level; show it
+                // rather than the generic forbidden message. No spend or grant ran.
+                var failMsg = (error != null && error.IsLockedCategory)
+                    ? $"Seviye {error.RequiredLevel}'te açılır"
+                    : BackendErrorMapper.Map(error);
+                onFailed?.Invoke(failMsg);
                 yield break;
             }
+
+            // Backend confirmed the open — mirror its level/XP into the UI cache.
+            ProgressionSync.ApplyFromOpen(response, showXpToast: true);
 
             // ── Resolve the backend-selected skin via the stable-ID catalog. ──
             var mapped = BackendResultMapper.ToCaseOpeningResult(response);

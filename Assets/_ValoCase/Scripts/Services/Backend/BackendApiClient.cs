@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.Text;
 using UnityEngine;
 using UnityEngine.Networking;
@@ -63,6 +64,21 @@ namespace ValoCase.Services.Backend
             return Send("POST", path, "{}", auth: true, onSuccess, onError, debugTag: debugTag);
         }
 
+        // ── Account display name (server-authoritative profile) ─────────────────
+        // Backend trims, validates (required, max 20), persists, and echoes the stored
+        // displayName. Unity updates its local cache only after this succeeds.
+        public IEnumerator SetDisplayName(string displayName, Action<DisplayNameResponse> onSuccess, Action<BackendError> onError)
+            => Send("PUT", ApiPrefix + "/account/display-name",
+                    JsonUtility.ToJson(new DisplayNameRequest { displayName = displayName }),
+                    auth: true, onSuccess, onError);
+
+        // Backend trims, validates (required, safe chars, max 50), persists, and echoes
+        // the stored avatarId. Unity updates its local cache only after this succeeds.
+        public IEnumerator SetAvatar(string avatarId, Action<AvatarResponse> onSuccess, Action<BackendError> onError)
+            => Send("PUT", ApiPrefix + "/account/avatar",
+                    JsonUtility.ToJson(new AvatarRequest { avatarId = avatarId }),
+                    auth: true, onSuccess, onError);
+
         // ── Inventory selling (server-authoritative) ────────────────────────────
         // Backend validates ownership, removes inventory, credits VP, writes the
         // transaction, and returns the authoritative wallet. Unity never mutates VP
@@ -85,10 +101,10 @@ namespace ValoCase.Services.Backend
         // Backend consumes the given per-instance itemIds, decides success/failure,
         // and grants the target only on success. Unity sends real itemIds (never
         // skinIds) and never consumes or grants locally.
-        public IEnumerator Upgrade(string[] inputItemIds, string targetSkinId,
+        public IEnumerator Upgrade(string[] inputItemIds, string targetSkinId, string[] targetSkinIds,
                                    Action<UpgradeResponse> onSuccess, Action<BackendError> onError)
             => Send("POST", ApiPrefix + "/upgrade",
-                    JsonUtility.ToJson(new UpgradeRequest { inputItemIds = inputItemIds, targetSkinId = targetSkinId }),
+                    JsonUtility.ToJson(new UpgradeRequest { inputItemIds = inputItemIds, targetSkinId = targetSkinId, targetSkinIds = targetSkinIds }),
                     auth: true, onSuccess, onError);
 
         // ── Case Battle (server-authoritative, bots) ────────────────────────────
@@ -104,6 +120,41 @@ namespace ValoCase.Services.Backend
                         rounds = rounds,
                         participantCount = participantCount
                     }),
+                    auth: true, onSuccess, onError);
+
+        // ── Case Battle public lobbies (server-authoritative, online) ───────────
+        // The backend owns lobby lifecycle, slot assignment, the add-bot delay, the
+        // entry-cost charge, the roll/winner resolution and reward grants. Unity only
+        // creates/joins/cancels, polls for state, and presents the result. The legacy
+        // CreateBotBattle path above stays as a dev/offline fallback.
+        public IEnumerator CreateBattleLobby(List<CaseSelectionRequest> caseSelections, int maxSlots,
+                                             Action<LobbyResponse> onSuccess, Action<BackendError> onError)
+            => Send("POST", ApiPrefix + "/battles/lobbies",
+                    JsonUtility.ToJson(new CreateLobbyRequest { maxSlots = maxSlots, caseSelections = caseSelections }),
+                    auth: true, onSuccess, onError, debugTag: "BATTLE_CREATE");
+
+        // GET returns a bare array; wrap under "lobbies" so JsonUtility can map it.
+        // If the backend already returns { "lobbies": [...] } the wrap is skipped
+        // (only applied when the body starts with '['), so this stays compatible.
+        public IEnumerator GetBattleLobbies(Action<LobbyListResponse> onSuccess, Action<BackendError> onError)
+            => Send("GET", ApiPrefix + "/battles/lobbies", null, auth: true, onSuccess, onError,
+                    wrapArrayKey: "lobbies", debugTag: "BATTLE_LIST");
+
+        public IEnumerator GetBattleLobby(string battleId, Action<LobbyResponse> onSuccess, Action<BackendError> onError)
+            => Send("GET", ApiPrefix + "/battles/lobbies/" + UnityWebRequest.EscapeURL(battleId), null,
+                    auth: true, onSuccess, onError);
+
+        public IEnumerator JoinBattleLobby(string battleId, int slotIndex, Action<LobbyResponse> onSuccess, Action<BackendError> onError)
+            => Send("POST", ApiPrefix + "/battles/lobbies/" + UnityWebRequest.EscapeURL(battleId) + "/join",
+                    JsonUtility.ToJson(new JoinLobbyRequest { slotIndex = slotIndex }),
+                    auth: true, onSuccess, onError);
+
+        public IEnumerator AddBotToBattleLobby(string battleId, Action<LobbyResponse> onSuccess, Action<BackendError> onError)
+            => Send("POST", ApiPrefix + "/battles/lobbies/" + UnityWebRequest.EscapeURL(battleId) + "/add-bot", "{}",
+                    auth: true, onSuccess, onError);
+
+        public IEnumerator CancelBattleLobby(string battleId, Action<LobbyResponse> onSuccess, Action<BackendError> onError)
+            => Send("POST", ApiPrefix + "/battles/lobbies/" + UnityWebRequest.EscapeURL(battleId) + "/cancel", "{}",
                     auth: true, onSuccess, onError);
 
         // ── Daily rewards (server-authoritative) ────────────────────────────────
@@ -152,6 +203,10 @@ namespace ValoCase.Services.Backend
             if (debugTag != null)
                 Debug.Log($"[BACKEND_DEBUG] {debugTag} -> {method} {url} authed={(auth && !string.IsNullOrEmpty(GuestToken))} body={body}");
 #endif
+            // Battle-lobby request trace stays on in player builds so the live multi-device
+            // create/list flow can be diagnosed from device logs (no token value emitted).
+            if (debugTag != null && debugTag.StartsWith("BATTLE"))
+                Debug.Log($"[BATTLE_LOBBY_DIAG] REQ {debugTag} {method} {url} authed={(auth && !string.IsNullOrEmpty(GuestToken))} body={body}");
 
             // Offline pre-check at the shared layer: never even open the socket when the
             // device reports no reachability. Callers map this to the offline message and
@@ -213,6 +268,8 @@ namespace ValoCase.Services.Backend
             if (debugTag != null)
                 Debug.Log($"[BACKEND_DEBUG] {debugTag} <- HTTP {status} rawBody={text}");
 #endif
+            if (debugTag != null && debugTag.StartsWith("BATTLE"))
+                Debug.Log($"[BATTLE_LOBBY_DIAG] RES {debugTag} HTTP {status} rawBody={text}");
 
             // HTTP error status (4xx/5xx)
             if (req.result == UnityWebRequest.Result.ProtocolError || status >= 400)
@@ -225,7 +282,10 @@ namespace ValoCase.Services.Backend
                 if (debugTag != null)
                     Debug.LogError($"[CASE_OPEN_ERROR] {debugTag} HTTP {status} AFTER response — {method} {path} | mappedMessage=\"{message}\" | rawBody={text}");
 #endif
-                onError?.Invoke(new BackendError(status, $"{method} {path} -> HTTP {status}: {message}"));
+                onError?.Invoke(new BackendError(status, $"{method} {path} -> HTTP {status}: {message}",
+                                                 lockedCategory: parsed?.category,
+                                                 requiredLevel: parsed?.requiredLevel ?? 0,
+                                                 currentLevel: parsed?.currentLevel ?? 0));
                 yield break;
             }
 
@@ -292,14 +352,25 @@ namespace ValoCase.Services.Backend
         public readonly string Message;
         public readonly bool IsTimeout; // transport failure caused by a request timeout
         public readonly bool IsOffline; // request not sent / failed due to no reachability
-        public BackendError(int httpStatus, string message, bool isTimeout = false, bool isOffline = false)
+
+        // Populated only for a 403 locked-category error (otherwise null/0).
+        public readonly string LockedCategory;
+        public readonly int RequiredLevel;
+        public readonly int CurrentLevel;
+
+        public BackendError(int httpStatus, string message, bool isTimeout = false, bool isOffline = false,
+                            string lockedCategory = null, int requiredLevel = 0, int currentLevel = 0)
         {
-            HttpStatus = httpStatus;
-            Message    = message;
-            IsTimeout  = isTimeout;
-            IsOffline  = isOffline;
+            HttpStatus     = httpStatus;
+            Message        = message;
+            IsTimeout      = isTimeout;
+            IsOffline      = isOffline;
+            LockedCategory = lockedCategory;
+            RequiredLevel  = requiredLevel;
+            CurrentLevel   = currentLevel;
         }
         public bool IsAuthError => HttpStatus == 401 || HttpStatus == 403;
+        public bool IsLockedCategory => HttpStatus == 403 && !string.IsNullOrEmpty(LockedCategory);
         public override string ToString() => $"BackendError(status={HttpStatus}, timeout={IsTimeout}, offline={IsOffline}, msg={Message})";
     }
 
@@ -316,6 +387,8 @@ namespace ValoCase.Services.Backend
         public string accountId;
         public string guestToken;
         public string token;
+        public string displayName;   // backend-assigned default (AgentXXXX) for new guests
+        public string avatarId;      // backend-assigned default (avatar_1) for new guests
         public int vpBalance;        // server may include the starting wallet here
 
         public string ResolveToken()
@@ -326,11 +399,27 @@ namespace ValoCase.Services.Backend
         }
     }
 
+    // Player level / XP progression. Returned inside the wallet and case-open
+    // responses. All fields are optional from a parsing standpoint — JsonUtility
+    // leaves this object null when the backend omits it, so every reader null-checks.
+    [Serializable]
+    public sealed class ProgressionResponse
+    {
+        public int level;
+        public int currentLevelXp;
+        public int xpRequiredForNextLevel;
+        public int totalXp;
+        public int xpGranted;   // case-open response only
+        public bool leveledUp;  // case-open response only
+        public string[] unlockedCategories;
+    }
+
     [Serializable]
     public sealed class WalletResponse
     {
         public string accountId;     // for same-account verification across boots
         public int vpBalance;
+        public ProgressionResponse progression;   // null on older backends — readers null-check
     }
 
     [Serializable]
@@ -384,8 +473,39 @@ namespace ValoCase.Services.Backend
         public WonSkinResponse wonSkin;
         public int newVpBalance;        // authoritative wallet balance AFTER the open
         public string inventoryItemId;
+        public ProgressionResponse progression;   // level/XP after this open; null on older backends
         // NOTE: the backend does not return a vpSpent field. The amount spent is
         // derived caller-side from the selected case price (see CaseOpeningFlowController).
+    }
+
+    // ── Account display name DTOs ───────────────────────────────────────────────
+
+    [Serializable]
+    public sealed class DisplayNameRequest
+    {
+        public string displayName;
+    }
+
+    [Serializable]
+    public sealed class DisplayNameResponse
+    {
+        public string accountId;
+        public string displayName;
+    }
+
+    // ── Account avatar DTOs ─────────────────────────────────────────────────────
+
+    [Serializable]
+    public sealed class AvatarRequest
+    {
+        public string avatarId;
+    }
+
+    [Serializable]
+    public sealed class AvatarResponse
+    {
+        public string accountId;
+        public string avatarId;
     }
 
     // ── Sell request/response DTOs ──────────────────────────────────────────────
@@ -425,6 +545,7 @@ namespace ValoCase.Services.Backend
     {
         public string[] inputItemIds;
         public string targetSkinId;
+        public string[] targetSkinIds;
     }
 
     [Serializable]
@@ -465,6 +586,7 @@ namespace ValoCase.Services.Backend
         public int index;
         public bool isUser;
         public string name;
+        public string avatarId;
         public int totalVp;
         public BotBattleRoundResponse[] rounds;
     }
@@ -481,6 +603,93 @@ namespace ValoCase.Services.Backend
         public bool userWon;
         public string[] grantedInventoryItemIds; // informational; Unity resyncs inventory
         public BotBattleParticipantResponse[] participants;
+    }
+
+    // ── Public battle lobby DTOs ────────────────────────────────────────────────
+    // Field names mirror the backend LobbyResponse / Slot contract exactly. Parsing is
+    // tolerant: any field the backend omits is left at its default and every reader
+    // null-checks (JsonUtility never throws on missing keys). The slot per-round shape
+    // reuses BotBattleRoundResponse so the completed-lobby → BattleResult mapper can
+    // resolve skins the same way the legacy bot path does.
+
+    [Serializable]
+    public sealed class CaseSelectionRequest
+    {
+        public string caseId;
+        public int quantity;
+    }
+
+    [Serializable]
+    public sealed class CreateLobbyRequest
+    {
+        public int maxSlots;
+        public List<CaseSelectionRequest> caseSelections;
+    }
+
+    [Serializable]
+    public sealed class CaseSelectionResponse
+    {
+        public string caseId;
+        public string caseName;
+        public int quantity;
+        public int priceVp;
+    }
+
+    [Serializable]
+    public sealed class JoinLobbyRequest
+    {
+        public int slotIndex;
+    }
+
+    [Serializable]
+    public sealed class LobbyCreatorResponse
+    {
+        public string accountId;
+        public string displayName;
+        public string avatarId;
+    }
+
+    [Serializable]
+    public sealed class LobbySlotResponse
+    {
+        public int slotIndex;
+        public string type;            // EMPTY | REAL | BOT
+        public string accountId;
+        public string displayName;
+        public string avatarId;
+        public bool addBotAllowed;
+        public int totalVp;
+        public BotBattleRoundResponse[] rounds;   // per-round rolled skins (completed lobby)
+    }
+
+    [Serializable]
+    public sealed class LobbyResponse
+    {
+        public string battleId;
+        public string status;          // WAITING | STARTING | COMPLETED | CANCELLED
+        public LobbyCreatorResponse creator;
+        public string caseId;
+        public string caseName;
+        public CaseSelectionResponse[] caseSelections;
+        public int rounds;
+        public int entryCost;
+        public int maxSlots;
+        public int filledSlots;
+        public LobbySlotResponse[] slots;
+        public string createdAt;
+        public string addBotAvailableAt;
+        public bool addBotAvailable;
+        public string readyAt;
+        public int winnerSlotIndex;
+        public string winnerDisplayName;
+        public string winnerAvatarId;
+        public ProgressionResponse progression;   // present on completed PvP; null otherwise
+    }
+
+    [Serializable]
+    public sealed class LobbyListResponse
+    {
+        public LobbyResponse[] lobbies;
     }
 
     // ── Daily reward DTOs ───────────────────────────────────────────────────────
@@ -519,6 +728,8 @@ namespace ValoCase.Services.Backend
         public int progress;
         public int rewardVp;
         public string status;          // IN_PROGRESS | CLAIMABLE | CLAIMED
+        public string nextResetAt;     // backend-authoritative reset time (ISO-8601 or epoch)
+        public long secondsUntilReset; // backend-provided remaining seconds (preferred when > 0)
     }
 
     [Serializable]
@@ -541,6 +752,11 @@ namespace ValoCase.Services.Backend
         public int status;
         public string error;
         public string message;
+        // Present on a 403 locked-category error so the client can show the exact
+        // unlock level. Absent (null/0) on every other error.
+        public string category;
+        public int requiredLevel;
+        public int currentLevel;
     }
 
     /// <summary>

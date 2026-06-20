@@ -32,6 +32,30 @@ namespace ValoCase.Profile
         /// <summary>All loaded face-card avatars, sorted alphabetically.</summary>
         public static IReadOnlyList<(string name, Sprite sprite)> Avatars => _avatars;
 
+        /// <summary>The sprite shown when an avatarId is null/blank/unknown (e.g. the backend
+        /// "avatar_1" default that has no matching face card). First loaded avatar, or null.</summary>
+        public static Sprite DefaultAvatarSprite
+        {
+            get
+            {
+                EnsureInitialized();
+                return _avatars.Count > 0 ? _avatars[0].sprite : null;
+            }
+        }
+
+        /// <summary>Resolves a backend avatarId (an agent face-card name) to its sprite,
+        /// falling back to <see cref="DefaultAvatarSprite"/> when it does not match a
+        /// loaded avatar. Used to render real players' chosen avatars in PvP.</summary>
+        public static Sprite ResolveAvatarSprite(string avatarId)
+        {
+            EnsureInitialized();
+            if (!string.IsNullOrEmpty(avatarId))
+                foreach (var av in _avatars)
+                    if (string.Equals(av.name, avatarId, System.StringComparison.OrdinalIgnoreCase))
+                        return av.sprite;
+            return DefaultAvatarSprite;
+        }
+
         /// <summary>
         /// Loads FaceCards from disk and restores saved profile from PlayerPrefs.
         /// Idempotent — safe to call multiple times.

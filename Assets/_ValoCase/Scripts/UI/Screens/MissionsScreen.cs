@@ -1,4 +1,6 @@
+using System;
 using System.Collections;
+using System.Globalization;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -47,8 +49,22 @@ namespace ValoCase.UI.Screens
         bool          _built;
         CardRefs[]    _cards;
         RectTransform _contentRt;
+        RectTransform _scrollRt;
         float         _cellW;
         float         _cellH;
+
+        const float MsnTopPad     = 136f;
+        // Bottom nav clearance is now owned by the shared Screens host (ScreenContentFitter),
+        // so this is just a small content margin — not a second full navbar reservation.
+        const float MsnBotPad     = 24f;
+        const float MsnSidePad    =  12f;
+        const float MsnMinScrollH = 120f;
+
+        // Two wide columns (was three) so each card — and its progress ring and texts —
+        // can be ~2x larger and stay readable. The list scrolls when it overflows.
+        const int   MsnCols   = 2;
+        const float MsnColGap = 10f;
+        const float MsnRowGap = 18f;
 
         // Centered "loading / empty" label shown inside the scroll area while there are
         // no cards (backend mode, before the first response or on an empty list). It is
@@ -61,6 +77,11 @@ namespace ValoCase.UI.Screens
         bool              _backend;
         MissionResponse[] _backendMissions;
         bool[]            _claimInFlight;
+
+        // Per-mission unscaled-realtime instant when its 24h cooldown ends (0 = none).
+        // Anchored to the client clock at fetch time; backend remains authoritative.
+        double[]          _resetRealtime;
+        bool              _reloadInFlight;
 
         // ── Public API ────────────────────────────────────────────────────────
         public void Init(MissionSystem system)
@@ -93,6 +114,7 @@ namespace ValoCase.UI.Screens
                 {
                     EnsureCards(_backendMissions.Length);   // cached backend missions
                     SetLoading(false);
+                    ComputeResetAnchors();
                     SortCards();
                     Refresh();
                 }
@@ -138,6 +160,7 @@ namespace ValoCase.UI.Screens
             int count = _backendMissions.Length;
             EnsureCards(count);
             SetLoading(count == 0, "NO MISSIONS");
+            ComputeResetAnchors();
             SortCards();
             Refresh();
         }
@@ -177,10 +200,10 @@ namespace ValoCase.UI.Screens
                 var circle = GetCircleSprite();
                 for (int i = old; i < count; i++)
                 {
-                    int   col  = i % 3;
-                    int   row  = i / 3;
-                    float xPos = col * (_cellW + 8f);
-                    float yPos = 8f + row * (_cellH + 16f);
+                    int   col  = i % MsnCols;
+                    int   row  = i / MsnCols;
+                    float xPos = col * (_cellW + MsnColGap);
+                    float yPos = 8f + row * (_cellH + MsnRowGap);
                     BuildCard(i, _contentRt, xPos, yPos, _cellW, _cellH, circle);
                 }
             }
@@ -200,8 +223,8 @@ namespace ValoCase.UI.Screens
         void ResizeContent(int count)
         {
             if (_contentRt == null) return;
-            int rows = count <= 0 ? 0 : Mathf.CeilToInt(count / 3f);
-            float totalH = count <= 0 ? 0f : 8f + rows * _cellH + (rows - 1) * 16f + 16f;
+            int rows = count <= 0 ? 0 : Mathf.CeilToInt((float)count / MsnCols);
+            float totalH = count <= 0 ? 0f : 8f + rows * _cellH + (rows - 1) * MsnRowGap + 16f;
             _contentRt.sizeDelta = new Vector2(0f, totalH);
         }
 
@@ -276,13 +299,13 @@ namespace ValoCase.UI.Screens
                 panelW = (cRt != null && cRt.rect.width > 0f) ? cRt.rect.width : 390f;
             }
 
-            const float topPad  = 110f;
-            const float botPad  = 110f;
-            const float sidePad =  12f;
-            const float colGap  =   8f;
+            const float topPad  = MsnTopPad;
+            const float botPad  = MsnBotPad;
+            const float sidePad = MsnSidePad;
+            const float colGap  = MsnColGap;
             float usableW = panelW - 2f * sidePad;
-            float cellW   = (usableW - 2f * colGap) / 3f;
-            float cellH   = Mathf.Round(cellW * 1.75f);
+            float cellW   = (usableW - (MsnCols - 1) * colGap) / MsnCols;
+            float cellH   = Mathf.Round(cellW * 1.70f);
             _cellW = cellW; _cellH = cellH;
 
             // Full background
@@ -310,7 +333,7 @@ namespace ValoCase.UI.Screens
             hLine.GetComponent<Image>().color       = new Color(1f, 0.176f, 0.333f, 0.40f);
             hLine.GetComponent<Image>().raycastTarget = false;
 
-            var titleTmp = MakeTmp(hdrGo.transform, "Title", "WEEKLY MISSIONS",
+            var titleTmp = MakeTmp(hdrGo.transform, "Title", "DAILY MISSIONS",
                 17f, FontStyles.Bold, TextBright);
             titleTmp.characterSpacing = 4f;
             titleTmp.alignment        = TextAlignmentOptions.Center;
@@ -344,10 +367,10 @@ namespace ValoCase.UI.Screens
 
             // ── ScrollRect + RectMask2D viewport ──────────────────────────────
             var scrollGo = NewGo("Scroll", rt, typeof(ScrollRect), typeof(Image));
-            var scrollRt = (RectTransform)scrollGo.transform;
-            scrollRt.anchorMin = Vector2.zero; scrollRt.anchorMax = Vector2.one;
-            scrollRt.offsetMin = new Vector2(sidePad, botPad);
-            scrollRt.offsetMax = new Vector2(-sidePad, -topPad);
+            _scrollRt = (RectTransform)scrollGo.transform;
+            _scrollRt.anchorMin = Vector2.zero; _scrollRt.anchorMax = Vector2.one;
+            _scrollRt.offsetMin = new Vector2(sidePad, botPad);
+            _scrollRt.offsetMax = new Vector2(-sidePad, -topPad);
             scrollGo.GetComponent<Image>().color = Color.clear;
 
             var viewportGo = NewGo("Viewport", scrollGo.transform, typeof(RectMask2D));
@@ -388,6 +411,25 @@ namespace ValoCase.UI.Screens
             _loadingGo.SetActive(false);
 
             backGo.transform.SetAsLastSibling();
+            SizeScroll();
+        }
+
+        // Header clearance (top) is kept fixed; the bottom reservation yields first so a
+        // short usable area scrolls inside the viewport instead of inverting it.
+        void SizeScroll()
+        {
+            if (_scrollRt == null) return;
+            float h = ((RectTransform)transform).rect.height;
+            float bottom = MsnBotPad;
+            if (h > 1f && h - MsnTopPad - bottom < MsnMinScrollH)
+                bottom = Mathf.Max(0f, h - MsnTopPad - MsnMinScrollH);
+            _scrollRt.offsetMax = new Vector2(-MsnSidePad, -MsnTopPad);
+            _scrollRt.offsetMin = new Vector2(MsnSidePad, bottom);
+        }
+
+        void OnRectTransformDimensionsChange()
+        {
+            if (_built) SizeScroll();
         }
 
         void BuildCard(int index, RectTransform parent,
@@ -420,7 +462,7 @@ namespace ValoCase.UI.Screens
             // Mission title
             float titleH = Mathf.Round(cardH * 0.175f);
             var titleTmp = MakeTmp(card.transform, "Title", CardTitle(index),
-                11f, FontStyles.Bold, TextBright);
+                23f, FontStyles.Bold, TextBright);
             titleTmp.enableWordWrapping = true;
             titleTmp.alignment          = TextAlignmentOptions.Center;
             titleTmp.raycastTarget      = false;
@@ -433,10 +475,10 @@ namespace ValoCase.UI.Screens
 
             // ── Circular donut progress ring ──────────────────────────────────
             // Ring: pivot=(0.5,1) top-center. Hole: pivot=(0.5,0.5) centered on ring.
-            float ringSize    = Mathf.Round(cardW * 0.67f);
+            float ringSize    = Mathf.Round(cardW * 0.72f);
             float ringTopY    = Mathf.Round(5f + titleH + cardH * 0.04f);
             float ringCenterY = ringTopY + ringSize * 0.5f;
-            float holeSize    = Mathf.Round(ringSize * 0.54f);
+            float holeSize    = Mathf.Round(ringSize * 0.60f);
 
             // Track: dark full circle (fill=1)
             var rTrack = MakeRingImg("RingTrack", card.transform, circle,
@@ -463,30 +505,31 @@ namespace ValoCase.UI.Screens
             hoImg.raycastTarget = false;
 
             // ── Texts centered inside the donut hole ──────────────────────────
-            float textW = holeSize - 4f;
+            float textW = holeSize - 6f;
 
             var pctTmp = MakeTmp(card.transform, "Pct", "0%",
-                13f, FontStyles.Bold, TextBright);
+                27f, FontStyles.Bold, TextBright);
             pctTmp.alignment     = TextAlignmentOptions.Center;
             pctTmp.raycastTarget = false;
-            SetCenterRT(pctTmp.rectTransform, 0f, -(ringCenterY - 9f), textW, 18f);
+            SetCenterRT(pctTmp.rectTransform, 0f, -(ringCenterY - ringSize * 0.07f), textW, 32f);
 
             var progTmp = MakeTmp(card.transform, "Prog", "0/1",
-                7f, FontStyles.Normal, TextDim);
+                15f, FontStyles.Normal, TextDim);
             progTmp.alignment     = TextAlignmentOptions.Center;
             progTmp.raycastTarget = false;
-            SetCenterRT(progTmp.rectTransform, 0f, -(ringCenterY + 10f), textW, 13f);
+            SetCenterRT(progTmp.rectTransform, 0f, -(ringCenterY + ringSize * 0.11f), textW, 20f);
 
             var remTmp = MakeTmp(card.transform, "Rem", "",
-                6.5f, FontStyles.Normal, TextDim);
+                14f, FontStyles.Normal, TextDim);
             remTmp.alignment     = TextAlignmentOptions.Center;
             remTmp.raycastTarget = false;
-            SetCenterRT(remTmp.rectTransform, 0f, -(ringCenterY + 21f), textW, 13f);
+            SetCenterRT(remTmp.rectTransform, 0f, -(ringCenterY + ringSize * 0.24f), textW, 18f);
 
             // ── Reward row ────────────────────────────────────────────────────
             float rewardY = ringTopY + ringSize + Mathf.Round(cardH * 0.05f);
+            const float rewardH = 28f;
             var rewTmp = MakeTmp(card.transform, "Reward", $"+{CardReward(index)} VP",
-                10f, FontStyles.Bold, GoldColor);
+                21f, FontStyles.Bold, GoldColor);
             rewTmp.alignment     = TextAlignmentOptions.Center;
             rewTmp.raycastTarget = false;
             var rwRt = rewTmp.rectTransform;
@@ -494,11 +537,11 @@ namespace ValoCase.UI.Screens
             rwRt.anchorMax        = new Vector2(1f, 1f);
             rwRt.pivot            = new Vector2(0.5f, 1f);
             rwRt.anchoredPosition = new Vector2(0f, -rewardY);
-            rwRt.sizeDelta        = new Vector2(-8f, 20f);
+            rwRt.sizeDelta        = new Vector2(-8f, rewardH);
 
             // ── Claim button ──────────────────────────────────────────────────
-            float btnH = Mathf.Round(cardH * 0.155f);
-            float btnY = rewardY + 20f + 6f;
+            float btnH = Mathf.Round(cardH * 0.165f);
+            float btnY = rewardY + rewardH + 6f;
             var btnGo = NewGo("ClaimBtn", card.transform, typeof(Image), typeof(Button));
             var btnRt = (RectTransform)btnGo.transform;
             btnRt.anchorMin        = new Vector2(0f, 1f);
@@ -510,7 +553,7 @@ namespace ValoCase.UI.Screens
             var btn    = btnGo.GetComponent<Button>();
             btn.transition = Selectable.Transition.None;
 
-            var btnLbl = MakeTmp(btnGo.transform, "Lbl", "", 9f, FontStyles.Bold, Color.white);
+            var btnLbl = MakeTmp(btnGo.transform, "Lbl", "", 19f, FontStyles.Bold, Color.white);
             btnLbl.alignment     = TextAlignmentOptions.Center;
             btnLbl.raycastTarget = false;
             var bllRt = btnLbl.rectTransform;
@@ -551,15 +594,13 @@ namespace ValoCase.UI.Screens
                 if (ca)       return CardClaimOrder(b).CompareTo(CardClaimOrder(a));
                 return a.CompareTo(b);
             });
-            const float colGap = 8f;
-            const float rowGap = 16f;
             for (int slot = 0; slot < count; slot++)
             {
                 int   mi   = order[slot];
-                int   col  = slot % 3;
-                int   row  = slot / 3;
-                float xPos = col * (_cellW + colGap);
-                float yPos = 8f + row * (_cellH + rowGap);
+                int   col  = slot % MsnCols;
+                int   row  = slot / MsnCols;
+                float xPos = col * (_cellW + MsnColGap);
+                float yPos = 8f + row * (_cellH + MsnRowGap);
                 _cards[mi].CardRt.anchoredPosition = new Vector2(xPos, -yPos);
             }
         }
@@ -609,7 +650,7 @@ namespace ValoCase.UI.Screens
             if (claimed)
             {
                 c.BtnImage.color   = DimBtn;
-                c.BtnText.text     = "CLAIMED";
+                c.BtnText.text     = ClaimedButtonText(i);
                 c.BtnText.color    = new Color(1f, 1f, 1f, 0.35f);
                 c.Btn.interactable = false;
             }
@@ -627,6 +668,102 @@ namespace ValoCase.UI.Screens
                 c.BtnText.color    = new Color(1f, 1f, 1f, 0.35f);
                 c.Btn.interactable = false;
             }
+        }
+
+        // ── Mission reset countdown (backend-authoritative) ───────────────────
+        void Update()
+        {
+            if (!_backend || !gameObject.activeSelf || _cards == null || _resetRealtime == null) return;
+
+            bool reached = false;
+            double now = Time.unscaledTimeAsDouble;
+            for (int i = 0; i < _cards.Length && i < _resetRealtime.Length; i++)
+            {
+                if (_resetRealtime[i] <= 0) continue;
+                double remain = _resetRealtime[i] - now;
+                if (remain <= 0) { _resetRealtime[i] = 0; reached = true; continue; }
+                if (_cards[i].BtnText != null) _cards[i].BtnText.text = $"CLAIMED\n({FormatCountdown(remain)})";
+            }
+            if (reached) RefreshFromBackend();
+        }
+
+        void ComputeResetAnchors()
+        {
+            int n = _backendMissions != null ? _backendMissions.Length : 0;
+            _resetRealtime = new double[n];
+            double now = Time.unscaledTimeAsDouble;
+            for (int i = 0; i < n; i++)
+            {
+                var m = _backendMissions[i];
+                long secs = (m != null && m.status == "CLAIMED") ? SecondsUntilReset(m) : 0L;
+                _resetRealtime[i] = secs > 0 ? now + secs : 0d;
+            }
+        }
+
+        bool HasResetAnchor(int i)
+            => _resetRealtime != null && i >= 0 && i < _resetRealtime.Length && _resetRealtime[i] > 0;
+
+        string CountdownText(int i) => FormatCountdown(_resetRealtime[i] - Time.unscaledTimeAsDouble);
+
+        string ClaimedButtonText(int i)
+            => HasResetAnchor(i) ? $"CLAIMED\n({CountdownText(i)})" : "CLAIMED";
+
+        // Resolves the seconds remaining from the backend reset field — prefers an explicit
+        // seconds value; otherwise parses nextResetAt as ISO-8601 or epoch (s or ms).
+        static long SecondsUntilReset(MissionResponse m)
+        {
+            if (m == null) return 0;
+            if (m.secondsUntilReset > 0) return m.secondsUntilReset;
+
+            var s = m.nextResetAt;
+            if (string.IsNullOrEmpty(s)) return 0;
+
+            if (DateTime.TryParse(s, CultureInfo.InvariantCulture,
+                    DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var dt))
+                return (long)Math.Max(0d, (dt - DateTime.UtcNow).TotalSeconds);
+
+            if (long.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out var epoch))
+            {
+                long resetSec = epoch > 1_000_000_000_000L ? epoch / 1000L : epoch;
+                return Math.Max(0L, resetSec - DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            }
+            return 0;
+        }
+
+        static string FormatCountdown(double seconds)
+        {
+            if (seconds < 0) seconds = 0;
+            var ts = TimeSpan.FromSeconds(seconds);
+            if (ts.TotalHours >= 24) return $"{(int)ts.TotalDays}d {ts.Hours}h";
+            return $"{(int)ts.TotalHours:00}:{ts.Minutes:00}:{ts.Seconds:00}";
+        }
+
+        void RefreshFromBackend()
+        {
+            if (!_backend || _reloadInFlight) return;
+            var ctx = GameContext.Instance;
+            if (ctx == null) return;
+
+            _reloadInFlight = true;
+            ctx.RefreshMissionsBackend(
+                missions =>
+                {
+                    if (this == null) return;
+                    _reloadInFlight = false;
+                    if (missions != null) _backendMissions = missions;
+                    int c = _backendMissions != null ? _backendMissions.Length : 0;
+                    EnsureCards(c);
+                    SetLoading(c == 0, "NO MISSIONS");
+                    ComputeResetAnchors();
+                    SortCards();
+                    Refresh();
+                },
+                err =>
+                {
+                    if (this == null) return;
+                    _reloadInFlight = false;
+                    if (!string.IsNullOrEmpty(err)) GameEvents.RaiseToast(err);
+                });
         }
 
         // ── Claim ─────────────────────────────────────────────────────────────
@@ -678,6 +815,8 @@ namespace ValoCase.UI.Screens
                     GameEvents.RaiseToast($"+{reward} VP reward claimed!");
                     SortCards();
                     Refresh();
+                    // Pull the authoritative reset timestamp so the cooldown countdown appears.
+                    RefreshFromBackend();
                 },
                 err =>
                 {

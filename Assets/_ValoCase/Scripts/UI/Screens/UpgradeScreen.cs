@@ -16,17 +16,13 @@ namespace ValoCase.UI.Screens
     /// <summary>
     /// Value-based upgrade screen.
     ///
-    /// Flow:  multi-select inventory skins → combined value updates → target list
-    /// auto-filters to skins worth ≥ 1.5× that value → pick a target → success
-    /// chance (value ratio) updates → UPGRADE.
+    /// Flow:  multi-select inventory skins → combined value updates → pick any target
+    /// → success chance (value ratio) updates → UPGRADE.
     ///
     /// No weapon / rarity / category filters — a single Price sort toggle only.
     /// </summary>
     public sealed class UpgradeScreen : UIScreenBase
     {
-        // 1.5× minimum-target rule and the value-ratio chance live in UpgradeService.
-        const float TargetValueMultiplier = 1.5f;
-
         // ── Inspector refs ────────────────────────────────────────────────────
         [SerializeField] UINavigator         navigator;
         [SerializeField] Button              backButton;
@@ -101,22 +97,12 @@ namespace ValoCase.UI.Screens
             { SkinRarity.Ultra,     new Color(0.22f, 1f,    0.08f, 1f) },
         };
 
-        // ── Multiplier filter (targets tab only) ─────────────────────────────
-        // Each step lists targets whose value falls in [total*lo, total*hi); the
-        // last step is open-ended. Filters the target LIST only — chance is still
-        // computed from selectedTotal / targetValue, and the 1.5× minimum rule in
-        // ValidateTarget / CanUpgradeNow is untouched.
-        static readonly float[]  MultLo     = { 1.5f, 2f, 3f, 5f, 10f };
-        static readonly float[]  MultHi     = { 2f,   3f, 5f, 10f, float.PositiveInfinity };
-        static readonly string[] MultLabels = { "1.5x", "2x", "3x", "5x", "10x" };
-
         // ── State ─────────────────────────────────────────────────────────────
         bool _invPriceDescending = true;   // ENVANTER sort, default Price ↓
         bool _tgtPriceDescending = true;   // HEDEFLER sort, independent of the left side
-        int  _multiplierIdx;               // index into MultLo/MultHi, default 1.5×
 
-        readonly List<SkinDefinitionSO> _selectedInputs = new List<SkinDefinitionSO>();
-        SkinDefinitionSO _selectedTarget;
+        readonly List<SkinDefinitionSO> _selectedInputs  = new List<SkinDefinitionSO>();
+        readonly List<SkinDefinitionSO> _selectedTargets = new List<SkinDefinitionSO>();
 
         bool      _isUpgrading;
         Coroutine _pulseCo;
@@ -135,13 +121,18 @@ namespace ValoCase.UI.Screens
         TextMeshProUGUI _sortLabel;
         Button          _tgtSortButton;    // HEDEFLER price sort
         TextMeshProUGUI _tgtSortLabel;
-        GameObject      _multiplierRow;
-        readonly List<Image>           _multiplierBgs    = new List<Image>();
-        readonly List<TextMeshProUGUI> _multiplierLabels = new List<TextMeshProUGUI>();
         GameObject      _emptyState;
         TextMeshProUGUI _emptyLabel;
         bool            _themed;
         TextMeshProUGUI _chanceCaption;
+
+        // Center module (ring + caption + value + UPGRADE) is held in a container that
+        // fills spinCenter and is uniformly scaled down when the panel is too small, so
+        // the stack can never spill out of the center panel into the lists below.
+        RectTransform   _centerModule;
+        const float     CenterDesignH  = 340f;
+        const float     CenterDesignW  = 252f;
+        const float     CenterMinScale = 0.5f;
 
         // Selected-input slot grid (replaces the large preview): a fixed 2×2 = 4 box
         // grid centered in the panel with very large, slightly rectangular cells (wider
@@ -155,6 +146,8 @@ namespace ValoCase.UI.Screens
         const float SlotCellAspect  = 70f / 55f;              // cell width : height
         RectTransform _slotGridRoot;
         readonly List<InputSlot> _slots = new List<InputSlot>();
+        RectTransform _targetSlotGridRoot;
+        readonly List<InputSlot> _targetSlots = new List<InputSlot>();
 
         readonly List<UpgradeCard> _cardPool   = new List<UpgradeCard>();  // ENVANTER cards
         readonly List<UpgradeCard> _targetPool = new List<UpgradeCard>();  // HEDEFLER cards
@@ -178,24 +171,24 @@ namespace ValoCase.UI.Screens
             GameEvents.OnInventoryChanged += HandleInventoryChanged;
             GameEvents.OnVpChanged        += HandleVpChanged;
             RefreshWallet();
+            if (walletLabel != null) walletLabel.gameObject.SetActive(false);   // wallet shown in top navbar
 
             _skinScrollRect = skinScrollRt != null ? skinScrollRt.GetComponent<ScrollRect>() : null;
 
             _selectedInputs.Clear();
-            _selectedTarget = null;
-            _multiplierIdx  = 0;   // back to the default 1.5× band
+            _selectedTargets.Clear();
 
             RemoveLegacyVpButtons();
             ApplyPanelTheme();
+            BuildCenterModule();
             BuildSplitLists();
             BuildSortButtons();
-            BuildMultiplierRow();
             BuildEmptyState();
             BuildInputSlots();
-            UpdateMultiplierVisuals();
+            BuildTargetSlots();
 
             RefreshInputSummary();
-            UpdateTargetPanel(null);
+            RefreshTargetSummary();
             RebuildGrid();
             RefreshChance();
 
@@ -222,11 +215,11 @@ namespace ValoCase.UI.Screens
             if (ctx?.Inventory != null && _selectedInputs.Count > 0)
             {
                 _selectedInputs.RemoveAll(s => s == null || !ctx.Inventory.Owns(s.SkinId));
-                if (_selectedInputs.Count == 0) _selectedTarget = null;
+                if (_selectedInputs.Count == 0) _selectedTargets.Clear();
             }
-            ValidateTarget();
+            ValidateTargets();
             RefreshInputSummary();
-            UpdateTargetPanel(_selectedTarget);
+            RefreshTargetSummary();
             RebuildGrid();
             RefreshChance();
         }
@@ -248,6 +241,13 @@ namespace ValoCase.UI.Screens
             return total;
         }
 
+        int TargetTotal()
+        {
+            var total = 0;
+            for (int i = 0; i < _selectedTargets.Count; i++) total += _selectedTargets[i].VpValue;
+            return total;
+        }
+
         bool IsSelectedInput(SkinDefinitionSO skin)
         {
             if (skin == null) return false;
@@ -256,14 +256,20 @@ namespace ValoCase.UI.Screens
             return false;
         }
 
-        // Target stays valid only while it still meets the 1.5× rule for the
-        // current combined value; otherwise it is cleared.
-        void ValidateTarget()
+        bool IsSelectedTarget(SkinDefinitionSO skin)
         {
-            if (_selectedTarget == null) return;
-            int total = SelectedTotal();
-            if (total <= 0 || _selectedTarget.VpValue < total * TargetValueMultiplier)
-                _selectedTarget = null;
+            if (skin == null) return false;
+            for (int i = 0; i < _selectedTargets.Count; i++)
+                if (_selectedTargets[i].SkinId == skin.SkinId) return true;
+            return false;
+        }
+
+        // Targets are cleared when no inputs remain; any target that became a selected
+        // input is also dropped so the same item can't be both sides.
+        void ValidateTargets()
+        {
+            if (SelectedTotal() <= 0) { _selectedTargets.Clear(); return; }
+            _selectedTargets.RemoveAll(t => t == null || IsSelectedInput(t));
         }
 
         // ─────────────────────────────────────────────────────────────────────
@@ -552,6 +558,56 @@ namespace ValoCase.UI.Screens
             }
         }
 
+        // Reparents the center stack into a single container that fills spinCenter, so
+        // it can be scaled as one unit. Element positions are preserved, so visuals are
+        // unchanged on panels large enough to hold the design-size stack.
+        void BuildCenterModule()
+        {
+            if (spinCenter == null) return;
+            if (_centerModule != null) { LayoutCenterModule(); return; }
+
+            var go = new GameObject("CenterModule", typeof(RectTransform));
+            go.transform.SetParent(spinCenter, false);
+            _centerModule = (RectTransform)go.transform;
+            _centerModule.anchorMin = Vector2.zero;
+            _centerModule.anchorMax = Vector2.one;
+            _centerModule.offsetMin = Vector2.zero;
+            _centerModule.offsetMax = Vector2.zero;
+            _centerModule.pivot     = new Vector2(0.5f, 0.5f);
+
+            ReparentToModule(chanceLabel   != null ? chanceLabel.rectTransform   : null);
+            ReparentToModule(_chanceCaption != null ? _chanceCaption.rectTransform : null);
+            ReparentToModule(chanceHint     != null ? chanceHint.rectTransform     : null);
+            ReparentToModule(upgradeButton  != null ? (RectTransform)upgradeButton.transform : null);
+
+            LayoutCenterModule();
+        }
+
+        void ReparentToModule(RectTransform rt)
+        {
+            if (rt == null || _centerModule == null) return;
+            var pos = rt.anchoredPosition;
+            rt.SetParent(_centerModule, false);
+            rt.anchoredPosition = pos;
+        }
+
+        // Scales the module by the limiting panel dimension so the ring + value + button
+        // always fit inside spinCenter; clamped to 1 so large panels keep the original size.
+        void LayoutCenterModule()
+        {
+            if (_centerModule == null || spinCenter == null) return;
+            float h = spinCenter.rect.height;
+            float w = spinCenter.rect.width;
+            if (h < 1f || w < 1f) return;
+            float s = Mathf.Clamp(Mathf.Min(h / CenterDesignH, w / CenterDesignW), CenterMinScale, 1f);
+            _centerModule.localScale = new Vector3(s, s, 1f);
+        }
+
+        void OnRectTransformDimensionsChange()
+        {
+            if (_centerModule != null) LayoutCenterModule();
+        }
+
         // The target panel is the reward preview: a large weapon image with name,
         // rarity and value stacked under it — no probability numbers here, chance
         // lives only in the center ring. Re-anchors the existing prefab refs.
@@ -688,86 +744,6 @@ namespace ValoCase.UI.Screens
         }
 
         // ─────────────────────────────────────────────────────────────────────
-        // MULTIPLIER FILTER ROW
-        // ─────────────────────────────────────────────────────────────────────
-
-        // Five equal segments (1.5x … 10x) pinned to the top of the center panel,
-        // directly above the chance ring — the head of the upgrade module:
-        // multipliers → ring → BAŞARI ŞANSI → values → YÜKSELT. Built once and
-        // always visible; it filters the HEDEFLER list regardless of active tab.
-        void BuildMultiplierRow()
-        {
-            if (_multiplierRow != null || spinCenter == null) return;
-
-            _multiplierRow = new GameObject("MultiplierRow", typeof(RectTransform));
-            _multiplierRow.transform.SetParent(spinCenter, false);
-            var rowRt = (RectTransform)_multiplierRow.transform;
-            rowRt.anchorMin = new Vector2(0.05f, 1f);
-            rowRt.anchorMax = new Vector2(0.95f, 1f);
-            rowRt.pivot     = new Vector2(0.5f, 1f);
-            rowRt.sizeDelta = new Vector2(0f, 38f);
-            rowRt.anchoredPosition = new Vector2(0f, -10f);
-
-            for (int i = 0; i < MultLabels.Length; i++)
-            {
-                int idx = i;   // capture per-button
-
-                var go = new GameObject(MultLabels[i], typeof(RectTransform), typeof(Image), typeof(Button));
-                go.transform.SetParent(rowRt, false);
-                var rt = (RectTransform)go.transform;
-                rt.anchorMin = new Vector2(i / (float)MultLabels.Length, 0f);
-                rt.anchorMax = new Vector2((i + 1) / (float)MultLabels.Length, 1f);
-                rt.offsetMin = new Vector2(2, 0);
-                rt.offsetMax = new Vector2(-2, 0);
-
-                var img = go.GetComponent<Image>();
-                img.color = SortBg;
-                var btn = go.GetComponent<Button>();
-                btn.targetGraphic = img;
-                btn.onClick.AddListener(() => OnMultiplierClicked(idx));
-
-                var lgo = new GameObject("Label", typeof(RectTransform));
-                lgo.transform.SetParent(go.transform, false);
-                var lrt = (RectTransform)lgo.transform;
-                lrt.anchorMin = Vector2.zero; lrt.anchorMax = Vector2.one;
-                lrt.offsetMin = Vector2.zero; lrt.offsetMax = Vector2.zero;
-                var lbl = lgo.AddComponent<TextMeshProUGUI>();
-                lbl.text               = MultLabels[i];
-                lbl.alignment          = TextAlignmentOptions.Center;
-                lbl.fontStyle          = FontStyles.Bold;
-                lbl.enableAutoSizing   = true;   // segments can get narrow in the center column
-                lbl.fontSizeMin        = 10;
-                lbl.fontSizeMax        = 16;
-                lbl.raycastTarget      = false;
-                lbl.enableWordWrapping = false;
-
-                _multiplierBgs.Add(img);
-                _multiplierLabels.Add(lbl);
-            }
-        }
-
-        void OnMultiplierClicked(int idx)
-        {
-            if (_isUpgrading || idx == _multiplierIdx) return;
-            _multiplierIdx = idx;
-            SoundManager.Instance?.Play(SoundId.UiClick);
-            UpdateMultiplierVisuals();
-            RebuildTargetGrid();   // multiplier filters the HEDEFLER list only
-            if (_targetScrollRect != null)
-                _targetScrollRect.normalizedPosition = new Vector2(0, 1f);
-        }
-
-        void UpdateMultiplierVisuals()
-        {
-            for (int i = 0; i < _multiplierBgs.Count; i++)
-            {
-                bool active = i == _multiplierIdx;
-                if (_multiplierBgs[i]    != null) _multiplierBgs[i].color    = active ? NeonRed : SortBg;
-                if (_multiplierLabels[i] != null) _multiplierLabels[i].color = active ? Color.white : TabInactive;
-            }
-        }
-
-        // ─────────────────────────────────────────────────────────────────────
         // PANELS
         // ─────────────────────────────────────────────────────────────────────
 
@@ -776,7 +752,7 @@ namespace ValoCase.UI.Screens
             int count = _selectedInputs.Count;
             int total = SelectedTotal();
 
-            UpdateInputSlots(count);
+            UpdateSlots(_slots, _selectedInputs);
 
             // The large preview and old placeholder are gone — the slot grid is the
             // empty/filled state now.
@@ -823,31 +799,7 @@ namespace ValoCase.UI.Screens
             if (inputIcon != null) inputIcon.gameObject.SetActive(false);   // remove large preview
             if (inputPlaceholder != null) inputPlaceholder.SetActive(false);
 
-            // Available area: everything between the panel header and the summary block,
-            // with only slim border margins, so the grid claims most of the panel.
-            var areaGo = new GameObject("InputSlotArea", typeof(RectTransform));
-            areaGo.transform.SetParent(parent, false);
-            var area = areaGo.GetComponent<RectTransform>();
-            area.anchorMin = new Vector2(0.025f, 0.295f);
-            area.anchorMax = new Vector2(0.975f, 0.985f);
-            area.offsetMin = Vector2.zero;
-            area.offsetMax = Vector2.zero;
-            area.SetAsFirstSibling();   // render behind the summary labels
-
-            // The grid itself: auto-sized to the largest fit of the target aspect and
-            // centered, keeping every 1/2 × 1/2 cell slightly wider than tall.
-            var go = new GameObject("InputSlotGrid", typeof(RectTransform));
-            go.transform.SetParent(area, false);
-            _slotGridRoot = go.GetComponent<RectTransform>();
-            _slotGridRoot.anchorMin = new Vector2(0.5f, 0.5f);
-            _slotGridRoot.anchorMax = new Vector2(0.5f, 0.5f);
-            _slotGridRoot.pivot     = new Vector2(0.5f, 0.5f);
-            var fitter = go.AddComponent<AspectRatioFitter>();
-            fitter.aspectMode  = AspectRatioFitter.AspectMode.FitInParent;
-            fitter.aspectRatio = SlotColumns * SlotCellAspect / SlotRows;
-
-            for (int i = 0; i < TotalSlots; i++)
-                _slots.Add(CreateSlot(i));
+            _slotGridRoot = BuildSlotGrid(parent, "InputSlot", _slots, RemoveSelectedInputSlot);
 
             // Push the summary labels into the lower band, full width and centered.
             SetBand(inputName,        0.185f, 0.275f);
@@ -858,22 +810,77 @@ namespace ValoCase.UI.Screens
             CenterLabel(inputVpLabel);
         }
 
-        // Fills the slots with the selected skins in selection order; remaining boxes stay
+        // Mirrors BuildInputSlots for the right (HEDEF SKİN) panel using the same grid.
+        void BuildTargetSlots()
+        {
+            if (_targetSlotGridRoot != null) return;
+
+            Transform parent = targetIcon != null ? targetIcon.transform.parent
+                             : (targetName != null ? targetName.transform.parent : transform);
+            if (parent == null) return;
+
+            if (targetIcon != null) targetIcon.gameObject.SetActive(false);
+            if (targetPlaceholder != null) targetPlaceholder.SetActive(false);
+
+            _targetSlotGridRoot = BuildSlotGrid(parent, "TargetSlot", _targetSlots, RemoveSelectedTargetSlot);
+
+            SetBand(targetName,        0.185f, 0.275f);
+            SetBand(targetRarityLabel, 0.095f, 0.165f);
+            SetBand(targetVpLabel,     0.010f, 0.090f);
+            CenterLabel(targetName);
+            CenterLabel(targetRarityLabel);
+            CenterLabel(targetVpLabel);
+        }
+
+        // Builds the fixed 2×2 slot grid filling most of a panel and returns its root.
+        // The grid is the largest box with SlotCellAspect-shaped cells that fits the
+        // available area, centered — so cells stay slightly wider than tall.
+        RectTransform BuildSlotGrid(Transform parent, string namePrefix,
+                                    List<InputSlot> slots, Action<InputSlot> onSlotClick)
+        {
+            var areaGo = new GameObject(namePrefix + "Area", typeof(RectTransform));
+            areaGo.transform.SetParent(parent, false);
+            var area = areaGo.GetComponent<RectTransform>();
+            area.anchorMin = new Vector2(0.025f, 0.295f);
+            area.anchorMax = new Vector2(0.975f, 0.985f);
+            area.offsetMin = Vector2.zero;
+            area.offsetMax = Vector2.zero;
+            area.SetAsFirstSibling();   // render behind the summary labels
+
+            var go = new GameObject(namePrefix + "Grid", typeof(RectTransform));
+            go.transform.SetParent(area, false);
+            var gridRoot = go.GetComponent<RectTransform>();
+            gridRoot.anchorMin = new Vector2(0.5f, 0.5f);
+            gridRoot.anchorMax = new Vector2(0.5f, 0.5f);
+            gridRoot.pivot     = new Vector2(0.5f, 0.5f);
+            var fitter = go.AddComponent<AspectRatioFitter>();
+            fitter.aspectMode  = AspectRatioFitter.AspectMode.FitInParent;
+            fitter.aspectRatio = SlotColumns * SlotCellAspect / SlotRows;
+
+            for (int i = 0; i < TotalSlots; i++)
+                slots.Add(CreateSlot(gridRoot, i, onSlotClick));
+
+            return gridRoot;
+        }
+
+        // Fills the slots with the given skins in selection order; remaining boxes stay
         // empty. The last box (index 3) is reserved: it shows "+N" once the selection
         // exceeds the 3 visible thumbnail positions.
-        void UpdateInputSlots(int count)
+        static void UpdateSlots(List<InputSlot> slots, List<SkinDefinitionSO> source)
         {
-            if (_slotGridRoot == null || _slots.Count == 0) return;
+            if (slots.Count == 0) return;
 
+            int count = source.Count;
             int visibleThumbs = Mathf.Min(count, MaxThumbSlots);
 
-            for (int i = 0; i < _slots.Count; i++)
+            for (int i = 0; i < slots.Count; i++)
             {
-                var slot = _slots[i];
+                var slot = slots[i];
 
                 if (i < visibleThumbs)
                 {
-                    var skin = _selectedInputs[i];
+                    var skin = source[i];
+                    slot.Skin          = skin;
                     slot.Thumb.sprite  = skin.Icon;
                     slot.Thumb.enabled = skin.Icon != null;
                     slot.Border.effectColor = RarityAccents.TryGetValue(skin.Rarity, out var rc) ? rc : SlotBorder;
@@ -881,7 +888,7 @@ namespace ValoCase.UI.Screens
                 }
                 else if (i == OverflowSlotIdx && count > MaxThumbSlots)
                 {
-                    // More selected than fit — reserved last box shows the remainder.
+                    slot.Skin          = null;
                     slot.Thumb.enabled = false;
                     slot.Border.effectColor = NeonRed;
                     slot.Overflow.gameObject.SetActive(true);
@@ -889,6 +896,7 @@ namespace ValoCase.UI.Screens
                 }
                 else
                 {
+                    slot.Skin          = null;
                     slot.Thumb.enabled = false;
                     slot.Border.effectColor = SlotBorder;
                     slot.Overflow.gameObject.SetActive(false);
@@ -896,13 +904,13 @@ namespace ValoCase.UI.Screens
             }
         }
 
-        InputSlot CreateSlot(int index)
+        InputSlot CreateSlot(RectTransform gridRoot, int index, Action<InputSlot> onSlotClick)
         {
             int col = index % SlotColumns;
             int row = index / SlotColumns;
 
-            var go = new GameObject("Slot", typeof(RectTransform), typeof(Image));
-            go.transform.SetParent(_slotGridRoot, false);
+            var go = new GameObject("Slot", typeof(RectTransform), typeof(Image), typeof(Button));
+            go.transform.SetParent(gridRoot, false);
             var rt = (RectTransform)go.transform;
             rt.anchorMin = new Vector2(col / (float)SlotColumns,        1f - (row + 1) / (float)SlotRows);
             rt.anchorMax = new Vector2((col + 1) / (float)SlotColumns,  1f - row / (float)SlotRows);
@@ -912,7 +920,9 @@ namespace ValoCase.UI.Screens
 
             var bg = go.GetComponent<Image>();
             bg.color = SlotBg;
-            bg.raycastTarget = false;
+            bg.raycastTarget = true;
+            var btn = go.GetComponent<Button>();
+            btn.transition = Selectable.Transition.None;
 
             var border = go.AddComponent<Outline>();
             border.effectColor    = SlotBorder;
@@ -944,7 +954,41 @@ namespace ValoCase.UI.Screens
             ov.enableWordWrapping = false;
             ovGo.SetActive(false);
 
-            return new InputSlot { Root = go, Bg = bg, Thumb = thumb, Border = border, Overflow = ov };
+            var slot = new InputSlot { Root = go, Bg = bg, Thumb = thumb, Border = border, Overflow = ov, Button = btn };
+            btn.onClick.AddListener(() => onSlotClick(slot));
+            return slot;
+        }
+
+        // Clicking a filled selected-input slot returns that skin to the inventory list.
+        void RemoveSelectedInputSlot(InputSlot slot)
+        {
+            if (_isUpgrading || slot?.Skin == null) return;
+            int idx = _selectedInputs.FindIndex(s => s.SkinId == slot.Skin.SkinId);
+            if (idx < 0) return;
+
+            _selectedInputs.RemoveAt(idx);
+            SoundManager.Instance?.Play(SoundId.UiClick);
+
+            ValidateTargets();
+            RefreshInputSummary();
+            RefreshTargetSummary();
+            RebuildGrid();
+            RefreshChance();
+        }
+
+        // Clicking a filled selected-target slot returns that skin to the target list.
+        void RemoveSelectedTargetSlot(InputSlot slot)
+        {
+            if (_isUpgrading || slot?.Skin == null) return;
+            int idx = _selectedTargets.FindIndex(s => s.SkinId == slot.Skin.SkinId);
+            if (idx < 0) return;
+
+            _selectedTargets.RemoveAt(idx);
+            SoundManager.Instance?.Play(SoundId.UiClick);
+
+            RefreshTargetSummary();
+            RebuildTargetGrid();
+            RefreshChance();
         }
 
         // Anchors a label to a horizontal band [yMin, yMax] of its parent, full width
@@ -964,24 +1008,37 @@ namespace ValoCase.UI.Screens
             if (t != null) t.alignment = TextAlignmentOptions.Center;
         }
 
-        void UpdateTargetPanel(SkinDefinitionSO skin)
+        // Right panel mirrors the input summary: selected target count + combined value.
+        void RefreshTargetSummary()
         {
-            bool has = skin != null;
-            if (targetPlaceholder != null) targetPlaceholder.SetActive(!has);
-            if (targetIcon  != null) { targetIcon.gameObject.SetActive(has);  if (has && skin.Icon != null) targetIcon.sprite = skin.Icon; }
-            if (targetName  != null) { targetName.gameObject.SetActive(has);  if (has) targetName.text = skin.SkinName; }
+            int count = _selectedTargets.Count;
+            int total = TargetTotal();
+
+            UpdateSlots(_targetSlots, _selectedTargets);
+
+            if (targetPlaceholder != null) targetPlaceholder.SetActive(false);
+            if (targetIcon != null && targetIcon.gameObject.activeSelf) targetIcon.gameObject.SetActive(false);
+
+            if (targetName != null)
+            {
+                targetName.gameObject.SetActive(true);
+                targetName.text  = count == 0 ? "HEDEF SEÇİLMEDİ" : $"{count} HEDEF SEÇİLDİ";
+                targetName.color = count == 0 ? Muted : TabActive;
+            }
             if (targetRarityLabel != null)
             {
-                targetRarityLabel.gameObject.SetActive(has);
-                if (has)
-                {
-                    targetRarityLabel.text  = RaritySystem.Labels.TryGetValue(skin.Rarity, out var n) ? n : skin.Rarity.ToString();
-                    targetRarityLabel.color = RarityAccents.TryGetValue(skin.Rarity, out var c) ? c : Color.white;
-                }
+                targetRarityLabel.gameObject.SetActive(true);
+                targetRarityLabel.text  = "TOPLAM DEĞER";
+                targetRarityLabel.color = Muted;
             }
-            if (targetVpLabel != null) { targetVpLabel.gameObject.SetActive(has); if (has) targetVpLabel.text = $"{skin.VpValue:N0} VP"; }
-            if (targetRarityStrip != null && has)
-                targetRarityStrip.color = RarityAccents.TryGetValue(skin.Rarity, out var sc) ? sc : Color.white;
+            if (targetVpLabel != null)
+            {
+                targetVpLabel.gameObject.SetActive(true);
+                targetVpLabel.text  = $"{total:N0} VP";
+                targetVpLabel.color = count == 0 ? Muted : TabActive;
+            }
+            if (targetRarityStrip != null)
+                targetRarityStrip.color = count > 0 ? NeonRed : BtnOff;
         }
 
         // ─────────────────────────────────────────────────────────────────────
@@ -1022,23 +1079,18 @@ namespace ValoCase.UI.Screens
             var ctx = GameContext.Instance;
             var skins = new List<SkinDefinitionSO>();
 
-            // Targets: only skins inside the selected multiplier band
-            // [total*lo, total*hi). The default band (1.5×–2×) preserves the
-            // original 1.5× minimum rule; the last band (10×) is open-ended.
+            // Targets: every skin (no minimum-value rule), excluding the skins already
+            // selected as inputs so the same item can't be both input and target.
             int total = SelectedTotal();
             if (total > 0 && ctx?.Content != null)
             {
-                float minValue = total * MultLo[_multiplierIdx];
-                float maxValue = total * MultHi[_multiplierIdx];   // ∞ for the 10× band
-
                 IReadOnlyList<SkinDefinitionSO> allSkins = ctx.Content.Skins;
                 if (allSkins == null || allSkins.Count == 0)
                     allSkins = ctx.Content.GetFilteredSkins(null, null);
 
                 foreach (var s in allSkins)
                 {
-                    if (s == null) continue;
-                    if (s.VpValue < minValue || s.VpValue >= maxValue) continue;
+                    if (s == null || IsSelectedInput(s)) continue;
                     skins.Add(s);
                 }
             }
@@ -1196,9 +1248,7 @@ namespace ValoCase.UI.Screens
             var pass = card.Root.GetComponent<ScrollRectPassthrough>();
             if (pass != null) pass.Target = card.IsTarget ? _targetScrollRect : _skinScrollRect;
 
-            bool isSelected = card.IsTarget
-                ? (_selectedTarget != null && _selectedTarget.SkinId == skin.SkinId)
-                : IsSelectedInput(skin);
+            bool isSelected = card.IsTarget ? IsSelectedTarget(skin) : IsSelectedInput(skin);
 
             if (card.SelectFrame != null)
             {
@@ -1226,9 +1276,9 @@ namespace ValoCase.UI.Screens
                 if (idx >= 0) _selectedInputs.RemoveAt(idx);
                 else          _selectedInputs.Add(card.Skin);
 
-                ValidateTarget();
+                ValidateTargets();
                 RefreshInputSummary();
-                UpdateTargetPanel(_selectedTarget);
+                RefreshTargetSummary();
                 RebuildGrid();
             }
             else
@@ -1238,9 +1288,11 @@ namespace ValoCase.UI.Screens
                     GameEvents.RaiseToast("Önce ENVANTERden skin seç");
                     return;
                 }
-                _selectedTarget = card.Skin;
-                UpdateTargetPanel(_selectedTarget);
-                RebuildTargetGrid();   // selection frame moves; inventory side unaffected
+                int idx = _selectedTargets.FindIndex(s => s.SkinId == card.Skin.SkinId);
+                if (idx >= 0) _selectedTargets.RemoveAt(idx);
+                else          _selectedTargets.Add(card.Skin);
+                RefreshTargetSummary();
+                RebuildTargetGrid();   // selection frames update; inventory side unaffected
             }
 
             RefreshChance();
@@ -1292,9 +1344,8 @@ namespace ValoCase.UI.Screens
 
         bool CanUpgradeNow()
         {
-            if (_selectedInputs.Count == 0 || _selectedTarget == null) return false;
-            int total = SelectedTotal();
-            return total > 0 && _selectedTarget.VpValue >= total * TargetValueMultiplier;
+            if (_selectedInputs.Count == 0 || _selectedTargets.Count == 0) return false;
+            return TargetTotal() > SelectedTotal();
         }
 
         void RefreshChance()
@@ -1302,10 +1353,11 @@ namespace ValoCase.UI.Screens
             var upgrade = GameContext.Instance?.Upgrade;
             bool valid  = CanUpgradeNow();
             int  total  = SelectedTotal();
+            int  tgtTotal = TargetTotal();
 
             float chance = 0f;
             if (upgrade != null && valid)
-                chance = upgrade.ComputeValueChance(total, _selectedTarget.VpValue);
+                chance = upgrade.ComputeValueChance(total, tgtTotal);
 
             // Always a two-decimal percentage — "0.00%" when nothing is selected,
             // never a "--%" placeholder. Color follows the red/orange/green bands.
@@ -1323,9 +1375,9 @@ namespace ValoCase.UI.Screens
             if (chanceHint != null)
             {
                 if (_selectedInputs.Count == 0) chanceHint.text = "ENVANTERden skin seç";
-                else if (_selectedTarget == null) chanceHint.text = "Hedef skin seç";
-                else if (!valid) chanceHint.text = "!! Hedef değeri çok düşük";
-                else chanceHint.text = $"{total:N0} VP → {_selectedTarget.VpValue:N0} VP";
+                else if (_selectedTargets.Count == 0) chanceHint.text = "Hedef skin seç";
+                else if (!valid) chanceHint.text = "Yükseltilemez";
+                else chanceHint.text = $"{total:N0} VP → {tgtTotal:N0} VP";
 
                 // Bright value line when a real pairing is shown, muted guidance otherwise.
                 chanceHint.color = valid ? TabActive : Muted;
@@ -1365,14 +1417,28 @@ namespace ValoCase.UI.Screens
             _isUpgrading = true;
             SoundManager.Instance?.Play(SoundId.UiClick);
             RefreshChance();
-            StartCoroutine(UpgradeSequence(ctx, new List<SkinDefinitionSO>(_selectedInputs), _selectedTarget));
+            StartCoroutine(UpgradeSequence(ctx,
+                new List<SkinDefinitionSO>(_selectedInputs),
+                new List<SkinDefinitionSO>(_selectedTargets)));
         }
 
-        IEnumerator UpgradeSequence(GameContext ctx, List<SkinDefinitionSO> inputs, SkinDefinitionSO target)
+        // The single skin shown in the win popup / toasts when several targets are won.
+        static SkinDefinitionSO RepresentativeTarget(List<SkinDefinitionSO> targets)
+        {
+            SkinDefinitionSO best = null;
+            for (int i = 0; i < targets.Count; i++)
+                if (targets[i] != null && (best == null || targets[i].VpValue > best.VpValue))
+                    best = targets[i];
+            return best;
+        }
+
+        IEnumerator UpgradeSequence(GameContext ctx, List<SkinDefinitionSO> inputs, List<SkinDefinitionSO> targets)
         {
             int total = 0;
             for (int i = 0; i < inputs.Count; i++) total += inputs[i].VpValue;
-            float chance = ctx.Upgrade.ComputeValueChance(total, target.VpValue);
+            int targetTotal = 0;
+            for (int i = 0; i < targets.Count; i++) targetTotal += targets[i].VpValue;
+            float chance = ctx.Upgrade.ComputeValueChance(total, targetTotal);
             _spinAnimator?.SetChance(chance);
 
             // Backend mode: the server decides + commits. Play the existing animation
@@ -1380,7 +1446,7 @@ namespace ValoCase.UI.Screens
             // left exactly as it was.
             if (ctx.BackendEnabled)
             {
-                yield return BackendUpgradeSequence(ctx, inputs, target, chance);
+                yield return BackendUpgradeSequence(ctx, inputs, targets, chance);
                 yield break;
             }
 
@@ -1391,7 +1457,7 @@ namespace ValoCase.UI.Screens
             // on-screen state frozen through the animation/popup, then reconcile once.
             GameEvents.OnInventoryChanged -= HandleInventoryChanged;
 
-            if (!ctx.Upgrade.TryUpgradeMulti(inputs, target, out var success))
+            if (!ctx.Upgrade.TryUpgradeMultiTarget(inputs, targets, out var success))
             {
                 GameEvents.OnInventoryChanged += HandleInventoryChanged;
                 _isUpgrading = false;
@@ -1409,9 +1475,10 @@ namespace ValoCase.UI.Screens
             // Result popup — the target preview is still visible behind it.
             if (success)
             {
+                var rep = RepresentativeTarget(targets);
                 var popup = ValoCase.UI.SkinWinPopup.EnsureExists();
-                if (popup != null) popup.Show(target, null);
-                else GameEvents.RaiseToast("Tebrikler! " + target.SkinName + " kazanildi");
+                if (popup != null && rep != null) popup.Show(rep, null);
+                else if (rep != null) GameEvents.RaiseToast("Tebrikler! " + rep.SkinName + " kazanildi");
             }
             else
             {
@@ -1421,15 +1488,15 @@ namespace ValoCase.UI.Screens
             // ── Reconcile with the real inventory (single, controlled rebuild) ──────
             GameEvents.OnInventoryChanged += HandleInventoryChanged;
 
-            // Every selected input was consumed (one unit each), so the whole selection
-            // clears. The target preview is intentionally kept on screen.
+            // Inputs were consumed and targets resolved, so both selections clear.
             _selectedInputs.Clear();
+            _selectedTargets.Clear();
 
             _isUpgrading = false;
             _spinAnimator?.ResetNeedle();
 
             RefreshInputSummary();
-            UpdateTargetPanel(_selectedTarget);   // keep target preview
+            RefreshTargetSummary();
             RebuildGrid();                          // lists refresh from real inventory data
             RefreshChance();
         }
@@ -1440,7 +1507,7 @@ namespace ValoCase.UI.Screens
         // — Unity never calls TryUpgradeMulti and never guesses success/fail. The wheel
         // free-spins until the server answers, then lands on the authoritative result.
         IEnumerator BackendUpgradeSequence(GameContext ctx, List<SkinDefinitionSO> inputs,
-            SkinDefinitionSO target, float localChance)
+            List<SkinDefinitionSO> targets, float localChance)
         {
             // Freeze on-screen selection/preview through the request + animation, exactly
             // like the local path, so the win/lose flow renders against stable state.
@@ -1449,7 +1516,7 @@ namespace ValoCase.UI.Screens
             // Start the spin NOW (instant feedback) and fire the request in parallel.
             UpgradeBackendResult result = null;
             bool requestDone = false;
-            StartCoroutine(RequestUpgrade(ctx, inputs, target, r => { result = r; requestDone = true; }));
+            StartCoroutine(RequestUpgrade(ctx, inputs, targets, r => { result = r; requestDone = true; }));
 
             bool spinFinished = false;
             var spinCo = StartCoroutine(
@@ -1468,14 +1535,14 @@ namespace ValoCase.UI.Screens
                 _spinAnimator?.ResetNeedle();
                 if (!string.IsNullOrEmpty(result?.Error)) GameEvents.RaiseToast(result.Error);
                 RefreshInputSummary();
-                UpdateTargetPanel(_selectedTarget);
+                RefreshTargetSummary();
                 RebuildGrid();
                 RefreshChance();
                 yield break;
             }
 
             bool success = result.Success;
-            var resolvedTarget = result.Target != null ? result.Target : target;
+            var resolvedTarget = result.Target != null ? result.Target : RepresentativeTarget(targets);
 
             // Hand the authoritative result to the wheel so it decelerates onto it.
             // The chance keeps the same local estimate the player saw before clicking.
@@ -1505,21 +1572,22 @@ namespace ValoCase.UI.Screens
             ctx.RequestBackendResync();
 
             _selectedInputs.Clear();
+            _selectedTargets.Clear();
             _isUpgrading = false;
             _spinAnimator?.ResetNeedle();
 
             RefreshInputSummary();
-            UpdateTargetPanel(_selectedTarget);   // keep target preview
+            RefreshTargetSummary();
             RebuildGrid();
             RefreshChance();
         }
 
         // Runs the backend upgrade request to completion and reports the result.
         IEnumerator RequestUpgrade(GameContext ctx, List<SkinDefinitionSO> inputs,
-            SkinDefinitionSO target, Action<UpgradeBackendResult> onDone)
+            List<SkinDefinitionSO> targets, Action<UpgradeBackendResult> onDone)
         {
             UpgradeBackendResult r = null;
-            yield return ctx.UpgradeBackendRoutine(inputs, target, x => r = x);
+            yield return ctx.UpgradeBackendRoutine(inputs, targets, x => r = x);
             onDone?.Invoke(r);
         }
 
@@ -1530,7 +1598,7 @@ namespace ValoCase.UI.Screens
         IEnumerator InitSpinAnimator()
         {
             yield return null;
-            _spinAnimator?.Initialize(spinCenter, chanceLabel?.rectTransform);
+            _spinAnimator?.Initialize(_centerModule != null ? _centerModule : spinCenter, chanceLabel?.rectTransform);
             _spinAnimator?.ResetNeedle();
         }
 
@@ -1626,6 +1694,8 @@ namespace ValoCase.UI.Screens
             public Image            Thumb;
             public Outline          Border;
             public TextMeshProUGUI  Overflow;
+            public Button           Button;
+            public SkinDefinitionSO Skin;
         }
 
         /// <summary>

@@ -21,6 +21,9 @@ namespace ValoCase.UI
         /// <summary>The ScreenType that was displayed before the current one.</summary>
         public ScreenType PreviousScreen { get; private set; }
 
+        /// <summary>While true, all navigation requests are ignored (e.g. during a case spin).</summary>
+        public bool NavigationLocked { get; set; }
+
         void Awake()
         {
             foreach (var screen in screens)
@@ -40,13 +43,16 @@ namespace ValoCase.UI
 
         public void Navigate(ScreenType type, bool instant = false)
         {
+            if (NavigationLocked) return;
             Debug.Log($"[UINavigator] Navigate → {type} | found: {_map.ContainsKey(type)}");
             if (!_map.TryGetValue(type, out var next))
             {
                 Debug.LogWarning($"[UINavigator] Navigate failed: '{type}' not in map. Registered: {string.Join(", ", _map.Keys)}");
                 return;
             }
-            if (_current == next) return;
+            // Re-tapping the current screen (e.g. the active bottom-nav tab) lets the
+            // screen reset its own sub-state instead of being a dead no-op.
+            if (_current == next) { _current.OnReselected(); return; }
 
             // Screens like Settings request a zero-delay open; promote the whole
             // transition (outgoing hide + incoming show) to instant.

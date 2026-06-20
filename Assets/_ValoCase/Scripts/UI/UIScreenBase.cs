@@ -138,5 +138,10 @@ namespace ValoCase.UI
 
         protected virtual void OnShown() { }
         protected virtual void OnHidden() { }
+
+        /// <summary>Called when the already-active screen is navigated to again (e.g. the
+        /// user taps the current tab in the bottom nav). Lets a screen reset its internal
+        /// sub-state. Default is a no-op.</summary>
+        public virtual void OnReselected() { }
     }
 }
