@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -8,271 +9,218 @@ using static ValoCase.UI.UIBuild;
 
 namespace ValoCase.UI
 {
-    /// <summary>
-    /// Premium bot-lobby card.
-    /// </summary>
     public sealed class LobbyCard : MonoBehaviour
     {
-        public const float Height = 180f;
+        public const float Height = 142f;
+        public const float CasesA = 0f;
+        public const float CostA = 0.645f;
+        public const float PlayersA = 0.765f;
+        public const float ActionA = 0.85f;
+        public const float EndA = 0.985f;
+        public const float CostCenterA = (CostA + PlayersA) * 0.5f;
+        public const float PlayersCenterA = PlayersA + (ActionA - PlayersA) * 0.5f;
 
-        const float Pad          = 54f;
-        const float AccentW      = 4f;
-        const float ThumbSz      = 64f;
-        const float TextLeft     = AccentW + Pad + ThumbSz + 12f;
-        const float TextWidthD   = -(TextLeft + Pad);
-        const float FooterH      = 58f;
-        const float JoinW        = 104f;
-        const float JoinH        = 42f;
-        const float ThumbTopInset = (Height - FooterH - ThumbSz) * 0.5f;
+        public const int MaxCaseSlots = 5;
+        const float CasesLeftPad = 22f;
 
-        static readonly Color RefCard       = HexColor("#07090F");
-        static readonly Color RefSecondary  = HexColor("#181922");
-        static readonly Color RefBorder     = HexColor("#7A1020");
-        static readonly Color RefPrimary    = HexColor("#FF003C");
+        static readonly Color RefCard       = HexColor("#171823");
+        static readonly Color RefAlt        = HexColor("#11131E");
+        static readonly Color RefLine       = HexColor("#2C2038");
+        static readonly Color RefPrimary    = HexColor("#C8253C");
+        static readonly Color RefJoin       = HexColor("#267BC8");
+        static readonly Color RefJoinDark   = HexColor("#16436F");
         static readonly Color RefForeground = HexColor("#FAFAFA");
-        static readonly Color RefMuted      = HexColor("#999999");
-        static readonly Color RefGold       = HexColor("#FFAA88");
-        static readonly Color RefWhite      = HexColor("#FFFFFF");
+        static readonly Color RefMuted      = HexColor("#A4A8B5");
+        static readonly Color RefGold       = HexColor("#E6CF6F");
+        static readonly Color RefGreen      = HexColor("#45DB74");
 
         BattleLobbyData         _data;
         Action<BattleLobbyData> _onJoin;
         AngledCutImage          _joinBg;
         bool                    _locked;
-        Sprite                  _hostAvatar;
 
         public static LobbyCard Create(Transform parent, BattleLobbyData data,
-            Sprite caseIcon, Action<BattleLobbyData> onJoin, bool locked, Sprite hostAvatar = null)
+            IReadOnlyList<Sprite> caseIcons, Action<BattleLobbyData> onJoin, bool locked)
         {
-            var go   = NewGo("LobbyCard_" + data.LobbyId, parent);
+            var go   = NewGo("LobbyRow_" + data.LobbyId, parent);
             var card = go.AddComponent<LobbyCard>();
 
             var le = go.AddComponent<LayoutElement>();
             le.minHeight       = Height;
             le.preferredHeight = Height;
 
-            card.Build(data, caseIcon, onJoin, locked, hostAvatar);
+            card.Build(data, caseIcons, onJoin, locked);
             return card;
         }
 
-        void Build(BattleLobbyData data, Sprite caseIcon, Action<BattleLobbyData> onJoin, bool locked, Sprite hostAvatar)
+        void Build(BattleLobbyData data, IReadOnlyList<Sprite> caseIcons,
+            Action<BattleLobbyData> onJoin, bool locked)
         {
             _data       = data;
             _onJoin     = onJoin;
             _locked     = locked;
-            _hostAvatar = hostAvatar;
 
             var bg = MakeImage("Bg", transform, RefCard, raycast: true);
             Stretch(bg.rectTransform);
 
             var border = bg.gameObject.AddComponent<Outline>();
-            border.effectColor    = RefBorder;
+            border.effectColor    = RefLine;
             border.effectDistance = new Vector2(1f, -1f);
-
-            var glow = bg.gameObject.AddComponent<Shadow>();
-            glow.effectColor = WithAlpha(RefPrimary, 0.60f);
-            glow.effectDistance = new Vector2(0f, -4f);
 
             var cardBtn = bg.gameObject.AddComponent<Button>();
             cardBtn.transition = Selectable.Transition.None;
             cardBtn.onClick.AddListener(OnJoinPressed);
 
-            var accent = MakeImage("Accent", transform, RefPrimary);
-            var aRt = accent.rectTransform;
-            aRt.anchorMin        = new Vector2(0f, 0f);
-            aRt.anchorMax        = new Vector2(0f, 1f);
-            aRt.pivot            = new Vector2(0f, 0.5f);
-            aRt.sizeDelta        = new Vector2(AccentW, 0f);
-            aRt.anchoredPosition = Vector2.zero;
+            var casesCell = MakeCell("CasesCell", CasesA, CostA, Color.clear);
+            var costCell = MakeCell("CostCell", CostA, PlayersA, Color.clear);
+            var playersCell = MakeCell("PlayersCell", PlayersA, ActionA, Color.clear);
+            var actionCell = MakeCell("ActionCell", ActionA, EndA, Color.clear);
 
-            BuildThumb(caseIcon);
-            BuildTextContent(data);
-            BuildDivider();
-            BuildMetaRow(data);
-            BuildJoinButton();
+            AddDivider(CostA);
+            AddDivider(PlayersA);
+            AddDivider(ActionA);
+
+            BuildCasesCell(casesCell, data, caseIcons);
+            BuildCostCell(costCell, data);
+            BuildPlayersCell(playersCell, data);
+            BuildJoinButton(actionCell);
         }
 
-        void BuildThumb(Sprite caseIcon)
+        RectTransform MakeCell(string name, float minX, float maxX, Color color)
         {
-            float x = AccentW + Pad;
+            var img = MakeImage(name, transform, color);
+            var rt = img.rectTransform;
+            rt.anchorMin = new Vector2(minX, 0f);
+            rt.anchorMax = new Vector2(maxX, 1f);
+            rt.pivot = new Vector2(0.5f, 0.5f);
+            rt.offsetMin = Vector2.zero;
+            rt.offsetMax = Vector2.zero;
+            return rt;
+        }
 
-            var tile = MakeImage("ThumbBg", transform, RefSecondary);
-            SetRect(tile.rectTransform,
-                new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f),
-                new Vector2(x, -ThumbTopInset), new Vector2(ThumbSz, ThumbSz));
+        void AddDivider(float x)
+        {
+            var line = MakeImage("Divider", transform, RefLine);
+            var rt = line.rectTransform;
+            rt.anchorMin = new Vector2(x, 0f);
+            rt.anchorMax = new Vector2(x, 1f);
+            rt.pivot = new Vector2(0.5f, 0.5f);
+            rt.anchoredPosition = Vector2.zero;
+            rt.sizeDelta = new Vector2(1f, 0f);
+        }
 
-            var tb = tile.gameObject.AddComponent<Outline>();
-            tb.effectColor    = WithAlpha(RefPrimary, 0.5f);
-            tb.effectDistance = new Vector2(1f, -1f);
+        void BuildCasesCell(RectTransform cell, BattleLobbyData data, IReadOnlyList<Sprite> caseIcons)
+        {
+            var content = NewGo("CasesContent", cell);
+            var contentRt = (RectTransform)content.transform;
+            contentRt.anchorMin = Vector2.zero;
+            contentRt.anchorMax = Vector2.one;
+            contentRt.offsetMin = new Vector2(CasesLeftPad, 0f);
+            contentRt.offsetMax = Vector2.zero;
 
-            if (caseIcon != null)
+            int count = Mathf.Clamp(CaseCount(data), 1, MaxCaseSlots);
+            for (int i = 0; i < count; i++)
             {
-                var icon = MakeImage("Thumb", tile.transform, Color.white);
-                icon.sprite         = caseIcon;
-                icon.preserveAspect = true;
+                float min = i / (float)MaxCaseSlots;
+                float max = (i + 1) / (float)MaxCaseSlots;
+                var slot = MakeImage("CaseSlot_" + i, content.transform, Color.clear);
+                var sRt = slot.rectTransform;
+                sRt.anchorMin = new Vector2(min, 0f);
+                sRt.anchorMax = new Vector2(max, 1f);
+                sRt.offsetMin = new Vector2(5f, 10f);
+                sRt.offsetMax = new Vector2(-5f, -10f);
 
-                var iRt = icon.rectTransform;
-                iRt.anchorMin = new Vector2(0.5f, 0.5f);
-                iRt.anchorMax = new Vector2(0.5f, 0.5f);
-                iRt.pivot     = new Vector2(0.5f, 0.5f);
-                iRt.sizeDelta = new Vector2(ThumbSz - 10f, ThumbSz - 10f);
-            }
+                var box = MakeImage("CaseIconBg", slot.transform, HexColor("#202333"));
+                StretchInset(box.rectTransform, 0f);
 
-            // Host avatar badge (online lobbies only): a small framed portrait at the
-            // thumb's bottom-right showing the real creator's backend avatar.
-            if (_hostAvatar != null)
-            {
-                const float badge = 26f;
-                var frame = MakeImage("HostAvatarFrame", tile.transform, RefCard);
-                SetRect(frame.rectTransform,
-                    new Vector2(1f, 0f), new Vector2(1f, 0f), new Vector2(1f, 0f),
-                    new Vector2(4f, -4f), new Vector2(badge, badge));
-                var fb = frame.gameObject.AddComponent<Outline>();
-                fb.effectColor    = WithAlpha(RefPrimary, 0.8f);
-                fb.effectDistance = new Vector2(1f, -1f);
+                var outline = box.gameObject.AddComponent<Outline>();
+                outline.effectColor    = ColorPalette.WithAlpha(RefGreen, 0.65f);
+                outline.effectDistance = new Vector2(0f, -2f);
 
-                var photo = MakeImage("HostAvatar", frame.transform, Color.white);
-                photo.sprite         = _hostAvatar;
-                photo.preserveAspect = true;
-                var pr = photo.rectTransform;
-                pr.anchorMin = new Vector2(0f, 0f);
-                pr.anchorMax = new Vector2(1f, 1f);
-                pr.offsetMin = new Vector2(1.5f, 1.5f);
-                pr.offsetMax = new Vector2(-1.5f, -1.5f);
+                Sprite icon = caseIcons != null && i < caseIcons.Count ? caseIcons[i] : null;
+                if (icon != null)
+                {
+                    var img = MakeImage("CaseIcon", box.transform, Color.white);
+                    img.sprite = icon;
+                    img.preserveAspect = true;
+                    StretchInset(img.rectTransform, 5f);
+                }
+
+                var qtyBg = MakeAngled("QtyBg", box.transform, HexColor("#090B13"), 4f);
+                SetRect(qtyBg.rectTransform,
+                    new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(1f, 1f),
+                    new Vector2(-4f, -4f), new Vector2(34f, 21f));
+
+                var qty = MakeTmp(qtyBg.transform, "Qty", "x" + CaseQuantity(data, i),
+                    14f, FontStyles.Bold, RefGold);
+                qty.alignment = TextAlignmentOptions.Center;
+                Stretch(qty.rectTransform);
             }
         }
 
-        void BuildTextContent(BattleLobbyData data)
+        void BuildCostCell(RectTransform cell, BattleLobbyData data)
         {
-            var title = MakeTmp(transform, "Title", LobbyTitle(data),
+            var center = MakeCenterBox(cell, "CostCenter", 0.5f, 76f, 48f);
+
+            var cost = MakeTmp(center, "Cost", data.WagerVP.ToString("N0"),
                 15f, FontStyles.Bold, RefForeground);
-            title.alignment = TextAlignmentOptions.MidlineLeft;
-            SetRect(title.rectTransform,
-                new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0f, 1f),
-                new Vector2(TextLeft, -16f), new Vector2(TextWidthD, 22f));
-
-            var botBadge = MakeAngled("StatusBadge", transform, RefPrimary, 3f);
-            SetRect(botBadge.rectTransform,
-                new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f),
-                new Vector2(TextLeft, -44f), new Vector2(76f, 18f));
-
-            var botLbl = MakeTmp(botBadge.transform, "Lbl", StatusText(data),
-                8f, FontStyles.Bold, RefWhite);
-            botLbl.alignment        = TextAlignmentOptions.Center;
-            botLbl.characterSpacing = 1f;
-            Stretch(botLbl.rectTransform);
-
-            var typeBadge = MakeImage("TypeBadge", transform, RefSecondary);
-            SetRect(typeBadge.rectTransform,
-                new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f),
-                new Vector2(TextLeft + 82f, -44f), new Vector2(50f, 18f));
-
-            var typeBorder = typeBadge.gameObject.AddComponent<Outline>();
-            typeBorder.effectColor    = WithAlpha(RefPrimary, 0.6f);
-            typeBorder.effectDistance = new Vector2(1f, -1f);
-
-            var typeLbl = MakeTmp(typeBadge.transform, "Lbl", TypeText(data),
-                8f, FontStyles.Bold, RefPrimary);
-            typeLbl.alignment        = TextAlignmentOptions.Center;
-            typeLbl.characterSpacing = 1f;
-            Stretch(typeLbl.rectTransform);
-
-            var caseLbl = MakeTmp(transform, "CaseName", CaseLine(data),
-                11f, FontStyles.Normal, RefMuted);
-            caseLbl.alignment = TextAlignmentOptions.MidlineLeft;
-            caseLbl.enableWordWrapping = false;
-            caseLbl.overflowMode = TextOverflowModes.Ellipsis;
-            SetRect(caseLbl.rectTransform,
-                new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0f, 1f),
-                new Vector2(TextLeft, -68f), new Vector2(TextWidthD, 18f));
+            cost.alignment = TextAlignmentOptions.Center;
+            SetRect(cost.rectTransform,
+                new Vector2(0f, 0.5f), new Vector2(1f, 0.5f), new Vector2(0.5f, 0.5f),
+                Vector2.zero, new Vector2(0f, 28f));
         }
 
-        void BuildDivider()
+        void BuildPlayersCell(RectTransform cell, BattleLobbyData data)
         {
-            var div = MakeImage("Divider", transform, WithAlpha(RefBorder, 0.7f));
-            SetRect(div.rectTransform,
-                new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(0.5f, 0f),
-                new Vector2(0f, FooterH), new Vector2(-(AccentW + Pad * 2f), 1f));
-        }
-
-        void BuildMetaRow(BattleLobbyData data)
-        {
-            var row = NewGo("MetaRow", transform, typeof(HorizontalLayoutGroup));
-            var hlg = row.GetComponent<HorizontalLayoutGroup>();
-            hlg.spacing                = 6f;
-            hlg.childForceExpandWidth  = false;
-            hlg.childForceExpandHeight = false;
-            hlg.childControlWidth      = false;
-            hlg.childControlHeight     = false;
-            hlg.childAlignment         = TextAnchor.MiddleLeft;
-
-            var rRt = (RectTransform)row.transform;
-            rRt.anchorMin = new Vector2(0f, 0f);
-            rRt.anchorMax = new Vector2(1f, 0f);
-            rRt.pivot     = new Vector2(0f, 0f);
-            rRt.offsetMin = new Vector2(AccentW + Pad, 17f);
-            rRt.offsetMax = new Vector2(-(JoinW + Pad + 8f), 41f);
-
-            string roundTxt = data.Rounds + (data.Rounds == 1 ? " ROUND" : " ROUNDS");
-            // Show the real entry cost (= case price × rounds), which is exactly what
-            // WaitingRoomScreen charges on join (EntryCost => WagerVP). Previously this
-            // displayed the prize pot (WagerVP × players), e.g. 1000 for a 1-round
-            // 500 VP 1V1, which did not match the amount actually charged.
-            int entryCost = data.WagerVP;
-
-            AddMeta(row.transform, RefPrimary,
-                $"{data.CurrentPlayers}/{data.MaxPlayers}", RefForeground, 40f);
-
-            AddMeta(row.transform, WithAlpha(RefMuted, 0.9f),
-                roundTxt, RefMuted, 72f);
-
-            AddMeta(row.transform, RefGold,
-                entryCost.ToString("N0") + " VP", RefGold, 84f);
-        }
-
-        static void AddMeta(Transform parent, Color dotColor, string text, Color textColor, float labelW)
-        {
-            var dot = MakeAngled("Dot", parent, dotColor, 2f);
-            ((RectTransform)dot.transform).sizeDelta = new Vector2(8f, 8f);
-            dot.gameObject.AddComponent<LayoutElement>().minWidth = 8f;
-
-            var lbl = MakeTmp(parent, "Lbl", text, 11f, FontStyles.Bold, textColor);
-            lbl.alignment               = TextAlignmentOptions.MidlineLeft;
-            lbl.rectTransform.sizeDelta = new Vector2(labelW, 20f);
-            lbl.gameObject.AddComponent<LayoutElement>().minWidth = labelW;
-        }
-
-        void BuildJoinButton()
-        {
-            _joinBg = MakeAngled("JoinBtn", transform, _locked ? RefSecondary : RefPrimary, 6f, raycast: true);
-
-            if (_locked)
-            {
-                var lockBorder = _joinBg.gameObject.AddComponent<Outline>();
-                lockBorder.effectColor    = WithAlpha(RefMuted, 0.6f);
-                lockBorder.effectDistance = new Vector2(1f, -1f);
-            }
-            else
-            {
-                var joinGlow = _joinBg.gameObject.AddComponent<Shadow>();
-                joinGlow.effectColor = WithAlpha(RefPrimary, 0.75f);
-                joinGlow.effectDistance = new Vector2(0f, -4f);
-            }
-
-            SetRect(_joinBg.rectTransform,
-                new Vector2(1f, 0f), new Vector2(1f, 0f), new Vector2(1f, 0f),
-                new Vector2(-Pad, (FooterH - JoinH) * 0.5f), new Vector2(JoinW, JoinH));
-
-            var joinBtn = _joinBg.gameObject.AddComponent<Button>();
-            joinBtn.transition = Selectable.Transition.None;
-            joinBtn.onClick.AddListener(OnJoinPressed);
-
-            var lbl = MakeTmp(_joinBg.transform, "Lbl", _locked ? "Yetersiz VP" : "VIEW",
-                _locked ? 9f : 14f, FontStyles.Bold, _locked ? RefMuted : RefWhite);
-            lbl.alignment          = TextAlignmentOptions.Center;
-            lbl.characterSpacing   = _locked ? 0f : 2f;
-            lbl.enableWordWrapping  = false;
-            lbl.overflowMode        = TextOverflowModes.Ellipsis;
+            var center = MakeCenterBox(cell, "PlayersCenter", 0.5f, 54f, 48f);
+            var lbl = MakeTmp(center, "Players", $"{data.CurrentPlayers}/{data.MaxPlayers}",
+                19f, FontStyles.Bold, RefForeground);
+            lbl.alignment = TextAlignmentOptions.Center;
             Stretch(lbl.rectTransform);
+        }
+
+        void BuildJoinButton(RectTransform cell)
+        {
+            bool full = _data.ComputeStatus() != LobbyStatus.Waiting;
+            Color bg = _locked ? HexColor("#151620") : (full ? RefPrimary : RefJoin);
+            _joinBg = MakeAngled("JoinBtn", cell, bg, 12f, raycast: true);
+            _joinBg.rectTransform.anchorMin = new Vector2(0.10f, 0.5f);
+            _joinBg.rectTransform.anchorMax = new Vector2(0.82f, 0.5f);
+            _joinBg.rectTransform.pivot = new Vector2(0.5f, 0.5f);
+            _joinBg.rectTransform.anchoredPosition = Vector2.zero;
+            _joinBg.rectTransform.sizeDelta = new Vector2(0f, 54f);
+
+            var outline = _joinBg.gameObject.AddComponent<Outline>();
+            outline.effectColor    = _locked ? ColorPalette.WithAlpha(RefMuted, 0.45f) : ColorPalette.WithAlpha(bg, 0.85f);
+            outline.effectDistance = new Vector2(1f, -1f);
+
+            if (!_locked)
+            {
+                var shadow = _joinBg.gameObject.AddComponent<Shadow>();
+                shadow.effectColor = ColorPalette.WithAlpha(full ? RefPrimary : RefJoinDark, 0.8f);
+                shadow.effectDistance = new Vector2(0f, -3f);
+            }
+
+            var btn = _joinBg.gameObject.AddComponent<Button>();
+            btn.transition = Selectable.Transition.None;
+            btn.onClick.AddListener(OnJoinPressed);
+
+            string text = _locked ? "LOCKED" : (full ? "VIEW" : "JOIN");
+            var lbl = MakeTmp(_joinBg.transform, "Lbl", text,
+                17f, FontStyles.Bold, _locked ? RefMuted : RefForeground);
+            lbl.alignment = TextAlignmentOptions.Center;
+            lbl.characterSpacing = 1f;
+            Stretch(lbl.rectTransform);
+        }
+
+        Transform MakeCenterBox(RectTransform parent, string name, float centerX, float w, float h)
+        {
+            var go = NewGo(name, parent);
+            var rt = (RectTransform)go.transform;
+            SetRect(rt,
+                new Vector2(centerX, 0.5f), new Vector2(centerX, 0.5f), new Vector2(0.5f, 0.5f),
+                Vector2.zero, new Vector2(w, h));
+            return go.transform;
         }
 
         void OnJoinPressed()
@@ -284,79 +232,40 @@ namespace ValoCase.UI
         IEnumerator Flash()
         {
             if (_joinBg == null) yield break;
-            _joinBg.color = WithAlpha(RefPrimary, 0.8f);
+            Color c = _joinBg.color;
+            _joinBg.color = ColorPalette.WithAlpha(c, 0.75f);
             yield return new WaitForSecondsRealtime(0.09f);
-            if (_joinBg != null) _joinBg.color = RefPrimary;
+            if (_joinBg != null) _joinBg.color = c;
         }
 
         void OnDisable() => StopAllCoroutines();
 
-        // Online lobbies show the creator's display name; the bot fallback keeps its
-        // original labels (HostName is "BOT" for those, so they fall through).
-        static string LobbyTitle(BattleLobbyData d)
+        static int CaseCount(BattleLobbyData d)
         {
-            if (!string.IsNullOrEmpty(d.HostName) &&
-                !string.Equals(d.HostName, "BOT", StringComparison.OrdinalIgnoreCase) &&
-                !string.Equals(d.HostName, "YOU", StringComparison.OrdinalIgnoreCase))
-                return d.HostName;
-
-            return d.MaxPlayers switch
-            {
-                2 => "Basic Vandal Duel",
-                3 => "Basic Vandal Triple Battle",
-                _ => d.CaseName + " Battle",
-            };
+            return d.CaseSelections != null && d.CaseSelections.Count > 0
+                ? d.CaseSelections.Count
+                : 1;
         }
 
-        // Joined "Name xN" per selected case; falls back to the single-case summary.
-        static string CaseLine(BattleLobbyData d)
+        static int CaseQuantity(BattleLobbyData d, int index)
         {
-            string qtyHex = Hex(RefGold);
-            if (d.CaseSelections != null && d.CaseSelections.Count > 0)
-            {
-                var sb = new System.Text.StringBuilder();
-                for (int i = 0; i < d.CaseSelections.Count; i++)
-                {
-                    var s = d.CaseSelections[i];
-                    if (i > 0) sb.Append("   ");
-                    sb.Append(s.CaseName).Append("  <color=#").Append(qtyHex).Append("><b>x")
-                      .Append(s.Quantity).Append("</b></color>");
-                }
-                return sb.ToString();
-            }
-            return $"{d.CaseName}  <color=#{qtyHex}><b>x{d.Rounds}</b></color>";
+            if (d.CaseSelections != null && index < d.CaseSelections.Count)
+                return Mathf.Max(1, d.CaseSelections[index].Quantity);
+            return Mathf.Max(1, d.Rounds);
         }
 
-        static string StatusText(BattleLobbyData d) => d.Status switch
+        static void StretchInset(RectTransform rt, float inset)
         {
-            LobbyStatus.Full => "FULL",
-            LobbyStatus.Live => "LIVE",
-            _                => "WAITING",
-        };
-
-        static string TypeText(BattleLobbyData d) => d.MaxPlayers switch
-        {
-            2 => "1V1",
-            3 => "1V1V1",
-            _ => d.MaxPlayers + "P",
-        };
+            rt.anchorMin = Vector2.zero;
+            rt.anchorMax = Vector2.one;
+            rt.offsetMin = new Vector2(inset, inset);
+            rt.offsetMax = new Vector2(-inset, -inset);
+        }
 
         static Color HexColor(string hex)
         {
             ColorUtility.TryParseHtmlString(hex, out var color);
             return color;
-        }
-
-        static Color WithAlpha(Color color, float alpha)
-        {
-            color.a = alpha;
-            return color;
-        }
-
-        static string Hex(Color c)
-        {
-            Color32 c32 = c;
-            return c32.r.ToString("X2") + c32.g.ToString("X2") + c32.b.ToString("X2");
         }
     }
 }

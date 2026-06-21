@@ -28,6 +28,7 @@ namespace ValoCase.UI.Screens
 
         readonly List<SkinCardView> _cards = new();
 
+        TextMeshProUGUI _emptyLabel;
         SellFlow _sellFlow;
         Button _sortButton;
         TextMeshProUGUI _sortLabel;
@@ -41,7 +42,7 @@ namespace ValoCase.UI.Screens
         // BottomNavBar space is already reserved by the Screens host (ScreenContentFitter),
         // so the last grid row sits right above the navbar instead of leaving a dead band.
         const float GridTopPadding = 356f;
-        const float GridBottomPadding = ScreenContentFitter.ContentPadding + 8f;
+        const float GridBottomPadding = 24f;
         const float GridMinHeight = 200f;
 
         // Downward nudge (px, 1080×1920 ref) applied to the Price / SELL buttons relative
@@ -332,6 +333,34 @@ namespace ValoCase.UI.Screens
                 card.Bind(entry, skin, ctx.RarityVisuals, OnCardClicked);
                 _cards.Add(card);
             }
+
+            EnsureEmptyLabel();
+            if (_emptyLabel != null)
+                _emptyLabel.gameObject.SetActive(_cards.Count == 0);
+        }
+
+        void EnsureEmptyLabel()
+        {
+            if (_emptyLabel != null) return;
+            var scroll = gridRoot != null ? gridRoot.GetComponentInParent<ScrollRect>() : null;
+            Transform parent = scroll != null ? scroll.transform
+                             : (gridRoot != null ? gridRoot.parent : transform);
+            if (parent == null) return;
+
+            var go = new GameObject("InventoryEmptyState", typeof(RectTransform));
+            go.transform.SetParent(parent, false);
+            var rt = (RectTransform)go.transform;
+            rt.anchorMin = Vector2.zero; rt.anchorMax = Vector2.one;
+            rt.offsetMin = new Vector2(24f, 24f); rt.offsetMax = new Vector2(-24f, -24f);
+
+            _emptyLabel = go.AddComponent<TextMeshProUGUI>();
+            _emptyLabel.alignment        = TextAlignmentOptions.Center;
+            _emptyLabel.fontSize         = 26f;
+            _emptyLabel.fontStyle        = FontStyles.Bold;
+            _emptyLabel.color            = SellUIFactory.Muted;
+            _emptyLabel.raycastTarget    = false;
+            _emptyLabel.text             = "No skins yet";
+            go.SetActive(false);
         }
 
         static int SkinValue(GameContext ctx, string skinId)

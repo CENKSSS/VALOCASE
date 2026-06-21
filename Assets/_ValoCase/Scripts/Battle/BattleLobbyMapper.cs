@@ -73,8 +73,8 @@ namespace ValoCase.Battle
 
         // Completed LobbyResponse → BattleResult, reusing the exact structure the reel
         // animation, totals count-up, winner highlight and win/lose popup already read.
-        // The local player's slot is placed at index 0 so the staged "YOU" panel order
-        // is preserved; UserWon and WinnerIndex come straight from winnerSlotIndex.
+        // Player order follows the authoritative server slot order so every device sees
+        // the same host/joiner positions.
         public static BattleResult ToBattleResult(LobbyResponse r, ContentDatabaseSO content, string myAccountId)
         {
             var battle = new BattleResult();
@@ -93,14 +93,9 @@ namespace ValoCase.Battle
                     if (s != null && !string.Equals(s.type, "EMPTY", System.StringComparison.OrdinalIgnoreCase))
                         slots.Add(s);
 
-            // Local player first (matches the staged-panel convention), then by slotIndex.
-            slots.Sort((a, b) =>
-            {
-                bool aMine = IsMine(a, myAccountId);
-                bool bMine = IsMine(b, myAccountId);
-                if (aMine != bMine) return aMine ? -1 : 1;
-                return a.slotIndex.CompareTo(b.slotIndex);
-            });
+            slots.Sort((a, b) => a.slotIndex.CompareTo(b.slotIndex));
+
+            int winningSlot = ResolveWinnerSlotIndex(r, slots);
 
             int pot = 0;
             foreach (var s in slots)
@@ -110,7 +105,7 @@ namespace ValoCase.Battle
                 {
                     Name     = ResolveName(s, isUser),
                     IsUser   = isUser,
-                    IsWinner = s.slotIndex == r.winnerSlotIndex,
+                    IsWinner = winningSlot >= 0 && s.slotIndex == winningSlot,
                     TotalVp  = s.totalVp,            // authoritative — never recomputed
                     Avatar   = ValoCase.Profile.ProfileManager.ResolveAvatarSprite(s.avatarId),
                 };
@@ -156,6 +151,19 @@ namespace ValoCase.Battle
                 foreach (var s in r.slots)
                     if (s != null && s.rounds != null) max = Mathf.Max(max, s.rounds.Length);
             return max > 0 ? max : Mathf.Max(1, r.rounds);
+        }
+
+        // Winner identity must resolve to the SAME participant on every device. winnerDisplayName
+        // is assigned once by the server; winnerSlotIndex is only a fallback for older lobbies.
+        static int ResolveWinnerSlotIndex(LobbyResponse r, List<LobbySlotResponse> slots)
+        {
+            if (!string.IsNullOrEmpty(r.winnerDisplayName))
+                foreach (var s in slots)
+                    if (s != null && string.Equals(s.displayName, r.winnerDisplayName, System.StringComparison.OrdinalIgnoreCase))
+                        return s.slotIndex;
+            foreach (var s in slots)
+                if (s != null && s.slotIndex == r.winnerSlotIndex) return s.slotIndex;
+            return -1;
         }
 
         static bool IsMine(LobbySlotResponse s, string myAccountId)

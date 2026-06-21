@@ -147,7 +147,7 @@ namespace ValoCase.Battle
             if (battle == null || _stats == null) return;
 
             var outcome  = battle.UserWon ? BattleOutcome.PlayerWins : BattleOutcome.OpponentWins;
-            int earnings = battle.UserWon ? battle.TotalPotVp - battle.Players[0].TotalVp : 0;
+            int earnings = battle.UserWon ? battle.TotalPotVp - BattleStatsRecorder.UserTotalVp(battle) : 0;
 
             _stats.RecordBattleResult(outcome, earnings);
             _statsRecorded = true;
@@ -325,10 +325,19 @@ namespace ValoCase.Battle
             if (battle == null || stats == null || battle.Players.Count == 0) return;
 
             var outcome  = battle.UserWon ? BattleOutcome.PlayerWins : BattleOutcome.OpponentWins;
-            int earnings = battle.UserWon ? battle.TotalPotVp - battle.Players[0].TotalVp : 0;
+            int earnings = battle.UserWon ? battle.TotalPotVp - UserTotalVp(battle) : 0;
 
             stats.RecordBattleResult(outcome, earnings);
             save?.Save();
+        }
+
+        public static int UserTotalVp(BattleResult battle)
+        {
+            if (battle == null || battle.Players.Count == 0) return 0;
+            foreach (var player in battle.Players)
+                if (player != null && player.IsUser)
+                    return player.TotalVp;
+            return 0;
         }
     }
 

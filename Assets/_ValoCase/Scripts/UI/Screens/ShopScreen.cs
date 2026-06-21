@@ -24,13 +24,20 @@ namespace ValoCase.UI.Screens
         [SerializeField] TextMeshProUGUI rotationTimerLabel;
 
         readonly List<GameObject> _cards = new();
-        // Visible case cards paired with their case id, so lock overlays can be
+        // Visible case cards paired with their definition, so lock overlays can be
         // re-evaluated per card whenever PlayerProgression changes (no grid rebuild).
-        readonly List<(GameObject card, string caseId)> _lockCards = new();
+        readonly List<(GameObject card, CaseDefinitionSO caseDef)> _lockCards = new();
         readonly List<GridLayoutGroup> _groupGrids = new();
         bool _builtOnce;
-        bool _gridSized;          // true once SizeGridToViewport has set real cell sizes
+        bool _gridSized;          // true once the grid has real cell sizes applied
         bool _dealsSectionHidden;
+
+        RectTransform _viewportRt;
+        RectTransform _contentRt;
+        Vector2 _lastViewportSize;
+
+        GameObject _placeholder;
+        TextMeshProUGUI _placeholderLabel;
 
         // ── Palette ───────────────────────────────────────────────────────────
         static readonly Color GreenBadge = new Color(0.09f,  0.55f,  0.26f,  1f);
@@ -58,7 +65,7 @@ namespace ValoCase.UI.Screens
             if (backButton != null)
             {
                 backButton.gameObject.SetActive(false);
-                Debug.Log("[SHOP] Old bottom BACK button hidden");
+                Log("[SHOP] Old bottom BACK button hidden");
             }
         }
 
@@ -79,18 +86,25 @@ namespace ValoCase.UI.Screens
 
         void Refresh()
         {
-            Debug.Log("[SHOP_DEBUG] Refresh called");
+            Log("[SHOP_DEBUG] Refresh called");
             var ctx = GameContext.Instance;
-            Debug.Log("[SHOP_DEBUG] ctx null=" + (ctx == null));
-            Debug.Log("[SHOP_DEBUG] ctx.Content null=" + (ctx?.Content == null));
-            Debug.Log("[SHOP_DEBUG] ctx.Content.Cases null=" + (ctx?.Content?.Cases == null));
-            Debug.Log("[SHOP_DEBUG] ctx.Content.Cases count=" + (ctx?.Content?.Cases?.Count ?? -1));
-            Debug.Log("[SHOP_DEBUG] ctx.Shop null=" + (ctx?.Shop == null));
-            Debug.Log("[SHOP_DEBUG] ctx.Shop.AllPurchasableCases count=" +
-                      (ctx?.Shop?.AllPurchasableCases == null ? -1
-                       : ctx.Shop.AllPurchasableCases.Count()));
-            if (ctx == null || ctx.Shop == null || ctx.CaseProgression == null) return;
+            if (ctx == null || ctx.Shop == null || ctx.CaseProgression == null)
+            {
+                ShowPlaceholder("Cases are loading...");
+                return;
+            }
             ctx.Shop.EnsureRotation();
+
+            int caseCount = (ctx.Content?.Cases?.Count(c => c != null)) ?? 0;
+            if (caseCount == 0)
+            {
+                ShowPlaceholder("No cases available.");
+                return;
+            }
+            HidePlaceholder();
+
+            // _builtOnce is only set once the grid is built with cases present, so an
+            // empty first pass never latches the screen into a permanent blank state.
             if (!_builtOnce)
             {
                 HideLegacyBuilderUI();
@@ -105,6 +119,43 @@ namespace ValoCase.UI.Screens
             // the grid is already sized, so re-evaluate locks live here.
             if (_gridSized)
                 RefreshLockStates();
+        }
+
+        void ShowPlaceholder(string message)
+        {
+            if (_placeholder == null)
+            {
+                FullscreenBackground.AttachShared(gameObject);
+                _placeholder = Child(transform, "ShopPlaceholder");
+                StretchFill(_placeholder.GetComponent<RectTransform>());
+                _placeholderLabel = _placeholder.AddComponent<TextMeshProUGUI>();
+                _placeholderLabel.fontSize       = 26f;
+                _placeholderLabel.fontStyle      = FontStyles.Bold;
+                _placeholderLabel.alignment      = TextAlignmentOptions.Center;
+                _placeholderLabel.color          = TextBright;
+                _placeholderLabel.raycastTarget  = false;
+            }
+            _placeholderLabel.text = message;
+            _placeholder.SetActive(true);
+            _placeholder.transform.SetAsLastSibling();
+        }
+
+        void HidePlaceholder()
+        {
+            if (_placeholder != null && _placeholder.activeSelf)
+                _placeholder.SetActive(false);
+        }
+
+        // Recomputes cell size when the viewport changes (orientation / safe-area).
+        void Update()
+        {
+            if (!_gridSized || _viewportRt == null) return;
+            var size = _viewportRt.rect.size;
+            if (Mathf.Abs(size.x - _lastViewportSize.x) < 1f &&
+                Mathf.Abs(size.y - _lastViewportSize.y) < 1f) return;
+
+            ApplyGridSizing();
+            RebuildLockOverlays();
         }
 
         // ── Legacy UI teardown ────────────────────────────────────────────────
@@ -127,14 +178,15 @@ namespace ValoCase.UI.Screens
         // Hides every Daily Deals element the builder could have created. Idempotent.
         void HideDailyDealsSection()
         {
-            Debug.Log("[SHOP_DEBUG] HideDailyDealsSection called");
+            Log("[SHOP_DEBUG] HideDailyDealsSection called");
 
-            // Enumerate ALL direct children so the full scene hierarchy is visible in logs
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
             for (var i = 0; i < transform.childCount; i++)
             {
                 var ch = transform.GetChild(i);
-                Debug.Log("[SHOP_DEBUG] child=" + ch.name + " active=" + ch.gameObject.activeSelf);
+                Log("[SHOP_DEBUG] child=" + ch.name + " active=" + ch.gameObject.activeSelf);
             }
+#endif
 
             if (dealsRoot != null)
             {
@@ -142,21 +194,21 @@ namespace ValoCase.UI.Screens
                 var scrollRoot = dealsRoot.parent?.parent;
                 if (scrollRoot != null)
                 {
-                    Debug.Log("[SHOP_DEBUG] hiding daily deals object=" + scrollRoot.name);
+                    Log("[SHOP_DEBUG] hiding daily deals object=" +scrollRoot.name);
                     scrollRoot.gameObject.SetActive(false);
                 }
                 // Hide Viewport too in case hierarchy depth differs
                 if (dealsRoot.parent != null)
                 {
-                    Debug.Log("[SHOP_DEBUG] hiding daily deals object=" + dealsRoot.parent.name);
+                    Log("[SHOP_DEBUG] hiding daily deals object=" +dealsRoot.parent.name);
                     dealsRoot.parent.gameObject.SetActive(false);
                 }
-                Debug.Log("[SHOP_DEBUG] hiding daily deals object=" + dealsRoot.name);
+                Log("[SHOP_DEBUG] hiding daily deals object=" +dealsRoot.name);
                 dealsRoot.gameObject.SetActive(false);
             }
             else
             {
-                Debug.Log("[SHOP_DEBUG] dealsRoot is null — searching by name");
+                Log("[SHOP_DEBUG] dealsRoot is null — searching by name");
             }
 
             // Cover every name the builder might use for the Deals section
@@ -165,20 +217,20 @@ namespace ValoCase.UI.Screens
             {
                 var t = transform.Find(n);
                 if (t != null)
-                    Debug.Log("[SHOP_DEBUG] hiding daily deals object=" + t.name);
+                    Log("[SHOP_DEBUG] hiding daily deals object=" +t.name);
                 Deactivate(n);
             }
 
             if (rotationTimerLabel != null)
             {
-                Debug.Log("[SHOP_DEBUG] hiding daily deals object=rotationTimerLabel");
+                Log("[SHOP_DEBUG] hiding daily deals object=rotationTimerLabel");
                 rotationTimerLabel.gameObject.SetActive(false);
             }
 
             if (!_dealsSectionHidden)
             {
                 _dealsSectionHidden = true;
-                Debug.Log("[SHOP] Daily Deals hidden");
+                Log("[SHOP] Daily Deals hidden");
             }
         }
 
@@ -202,7 +254,7 @@ namespace ValoCase.UI.Screens
             var allCases = ctx.Content?.Cases;
             var cases = (allCases ?? Enumerable.Empty<CaseDefinitionSO>())
                 .Where(c => c != null).ToList();
-            Debug.Log("[SHOP_GRID] total cases from content=" + cases.Count);
+            Log("[SHOP_GRID] total cases from content=" + cases.Count);
 
             // ── ScrollRect ────────────────────────────────────────────────────
             var scrollGo = new GameObject("CaseGrid_Scroll", typeof(RectTransform));
@@ -279,16 +331,20 @@ namespace ValoCase.UI.Screens
                 _groupGrids.Add(grid);
             }
 
-            StartCoroutine(SizeGridToViewport(vpRt, ctRt));
+            _viewportRt = vpRt;
+            _contentRt  = ctRt;
+            StartCoroutine(SizeGridToViewport());
         }
 
-        // Splits cases into ordered weapon sections inferred from their drop pools.
+        // Splits cases into ordered weapon sections. The category source is shared with
+        // the lock logic (PlayerProgression.TryResolveCategory) so a card's section and its
+        // lock requirement can never come from two different classifiers.
         List<(string header, List<CaseDefinitionSO> cases)> GroupCasesByWeapon(List<CaseDefinitionSO> cases)
         {
             var byGroup = new Dictionary<string, List<CaseDefinitionSO>>(StringComparer.OrdinalIgnoreCase);
             foreach (var c in cases)
             {
-                var key = InferWeaponGroup(c);
+                var key = PlayerProgression.TryResolveCategory(c.CaseId) ?? "Other";
                 if (!byGroup.TryGetValue(key, out var list))
                     byGroup[key] = list = new List<CaseDefinitionSO>();
                 list.Add(c);
@@ -314,28 +370,6 @@ namespace ValoCase.UI.Screens
             Debug.Log("[SHOP_SECTION_ORDER] " + string.Join(" > ", ordered.Select(o => o.header)));
 #endif
             return ordered;
-        }
-
-        // Dominant weapon among the case's pool skins (>= 50% share), else "Other".
-        static string InferWeaponGroup(CaseDefinitionSO caseDef)
-        {
-            var drops = caseDef?.DropTable?.PossibleDrops;
-            if (drops == null || drops.Count == 0) return "Other";
-
-            var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            int total = 0;
-            foreach (var d in drops)
-            {
-                var w = d?.skin?.WeaponName;
-                if (string.IsNullOrEmpty(w)) continue;
-                counts.TryGetValue(w, out var n);
-                counts[w] = n + 1;
-                total++;
-            }
-            if (total == 0) return "Other";
-
-            var best = counts.OrderByDescending(kv => kv.Value).First();
-            return best.Value >= total * 0.5f ? best.Key : "Other";
         }
 
         void BuildSectionHeader(Transform parent, string title)
@@ -373,14 +407,26 @@ namespace ValoCase.UI.Screens
         // Decides one compact, capped cell size and column count from the real Viewport
         // rect, then applies it to every section grid. Card width is capped so cards stay
         // compact (centered) instead of stretching to fill wide screens.
-        IEnumerator SizeGridToViewport(RectTransform vpRt, RectTransform ctRt)
+        IEnumerator SizeGridToViewport()
         {
             yield return null;
-            for (int i = 0; i < 8 && (vpRt == null || vpRt.rect.width < 1f); i++)
+            for (int i = 0; i < 8 && (_viewportRt == null || _viewportRt.rect.width < 1f); i++)
                 yield return null;
-            if (vpRt == null) yield break;
+            if (_viewportRt == null) yield break;
 
-            float vpW = vpRt.rect.width;
+            ApplyGridSizing();
+
+            // Cards now have their real size — build the chain/padlock overlays at the
+            // correct diagonal length, and from here on let Refresh() keep them current.
+            _gridSized = true;
+            RefreshLockStates();
+        }
+
+        void ApplyGridSizing()
+        {
+            if (_viewportRt == null) return;
+            float vpW = _viewportRt.rect.width;
+            if (vpW < 1f) return;
 
             int cols = MaxColumns;
             while (cols > DefaultColumns && (vpW - SidePad * 2f - Gap * (cols - 1)) / cols < MinCardW)
@@ -400,14 +446,24 @@ namespace ValoCase.UI.Screens
                 grid.cellSize        = new Vector2(cellW, cellH);
                 grid.padding         = new RectOffset(pad, pad, 4, 6);
             }
-            Debug.Log("[SHOP_GRID] sized vpW=" + vpW + " cols=" + cols + " cellW=" + cellW + " cellH=" + cellH);
+            Log("[SHOP_GRID] sized vpW=" + vpW + " cols=" + cols + " cellW=" + cellW + " cellH=" + cellH);
 
-            if (ctRt != null)
-                LayoutRebuilder.ForceRebuildLayoutImmediate(ctRt);
+            if (_contentRt != null)
+                LayoutRebuilder.ForceRebuildLayoutImmediate(_contentRt);
 
-            // Cards now have their real size — build the chain/padlock overlays at the
-            // correct diagonal length, and from here on let Refresh() keep them current.
-            _gridSized = true;
+            _lastViewportSize = _viewportRt.rect.size;
+        }
+
+        // Destroys existing lock overlays so RefreshLockStates rebuilds them at the new
+        // card size after a viewport change. Only locked cards pay for this.
+        void RebuildLockOverlays()
+        {
+            foreach (var (card, _) in _lockCards)
+            {
+                if (card == null) continue;
+                var ov = card.transform.Find("LockOverlay");
+                if (ov != null) DestroyImmediate(ov.gameObject);
+            }
             RefreshLockStates();
         }
 
@@ -422,10 +478,7 @@ namespace ValoCase.UI.Screens
 
         void BuildCard(Transform parent, CaseDefinitionSO caseDef)
         {
-            // ── Entry diagnostics ─────────────────────────────────────────────
-            Debug.Log("[SHOP_CARD_DEBUG] BuildCard started");
-            Debug.Log("[SHOP_CARD_DEBUG] parent null=" + (parent == null));
-            Debug.Log("[SHOP_CARD_DEBUG] caseDef null=" + (caseDef == null));
+            Log("[SHOP_CARD_DEBUG] BuildCard started parent=" + (parent != null) + " caseDef=" + (caseDef != null));
 
             if (caseDef == null)
             {
@@ -440,8 +493,8 @@ namespace ValoCase.UI.Screens
                 ? caseDef.DisplayName
                 : (caseId.Length > 0 ? caseId.Replace('_', ' ') : "Unknown Case");
 
-            Debug.Log("[SHOP_CARD] Build start case=" + caseName +
-                      " iconNull=" + iconNull + " dropTableNull=" + dropTableNull);
+            Log("[SHOP_CARD] Build start case=" + caseName +
+                " iconNull=" + iconNull + " dropTableNull=" + dropTableNull);
 
             try
             {
@@ -470,23 +523,23 @@ namespace ValoCase.UI.Screens
                 bc.highlightedColor = new Color(0.08f, 0.12f, 0.22f, 1f);
                 bc.pressedColor     = new Color(0.06f, 0.10f, 0.18f, 1f);
                 btn.colors = bc;
-                Debug.Log("[SHOP_CARD] Button added case=" + caseName);
+                Log("[SHOP_CARD] Button added case=" + caseName);
 
                 // Wire click BEFORE child widgets — navigation works even if a widget throws.
+                // Uses the same lock source as the overlay so visual and click never disagree.
                 btn.onClick.AddListener(() =>
                 {
-                    Debug.Log("[SHOP_CARD] clicked case=" + caseName + " id=" + caseId);
-                    // Locked categories are never openable — show the unlock level instead.
-                    if (!PlayerProgression.IsCaseUnlocked(caseId))
+                    Log("[SHOP_CARD] clicked case=" + caseName + " id=" + caseId);
+                    if (!PlayerProgression.IsCaseUnlocked(caseId, caseDef.UnlockType, caseDef.UnlockRequirement))
                     {
-                        int req = PlayerProgression.RequiredLevelForCaseId(caseId);
-                        GameEvents.RaiseToast($"Seviye {req}'te açılır");
+                        int req = PlayerProgression.RequiredLevelForCase(caseId, caseDef.UnlockType, caseDef.UnlockRequirement);
+                        GameEvents.RaiseToast(req > 0 ? $"Seviye {req}'te açılır" : "Kilitli");
                         return;
                     }
                     CaseOpeningScreen.PendingCaseId = caseId;
                     navigator?.Navigate(ScreenType.CaseOpening);
                 });
-                Debug.Log("[SHOP_CARD] Click bound case=" + caseName + " id=" + caseId);
+                Log("[SHOP_CARD] Click bound case=" + caseName + " id=" + caseId);
 
                 // ── Top theme strip (3 px) ────────────────────────────────────
                 {
@@ -531,7 +584,7 @@ namespace ValoCase.UI.Screens
                         q.alignment = TextAlignmentOptions.Center;
                         q.color     = TextBright;
                     }
-                    Debug.Log("[SHOP_CARD_DEBUG] icon image created");
+                    Log("[SHOP_CARD_DEBUG] icon image created");
                 }
 
                 // ── Case name (14 %) ──────────────────────────────────────────
@@ -552,7 +605,7 @@ namespace ValoCase.UI.Screens
                     tmp.color              = TextBright;
                     tmp.enableWordWrapping = true;
                     tmp.overflowMode       = TextOverflowModes.Ellipsis;
-                    Debug.Log("[SHOP_CARD_DEBUG] name text created");
+                    Log("[SHOP_CARD_DEBUG] name text created");
                 }
 
                 // ── Price badge (15 %) ────────────────────────────────────────
@@ -580,7 +633,7 @@ namespace ValoCase.UI.Screens
                     tmp.alignment          = TextAlignmentOptions.Center;
                     tmp.color              = Color.white;
                     tmp.enableWordWrapping = false;
-                    Debug.Log("[SHOP_CARD_DEBUG] price text created");
+                    Log("[SHOP_CARD_DEBUG] price text created");
                 }
 
                 // Drop-rate text intentionally omitted from the shop card for a cleaner
@@ -589,7 +642,7 @@ namespace ValoCase.UI.Screens
                 // Lock overlay is applied/refreshed by RefreshLockStates() once the
                 // card has its real size, and again on every PlayerProgression change.
                 _cards.Add(card);
-                _lockCards.Add((card, caseId));
+                _lockCards.Add((card, caseDef));
             }
             catch (Exception ex)
             {
@@ -605,11 +658,12 @@ namespace ValoCase.UI.Screens
         void RefreshLockStates()
         {
             int current = PlayerProgression.Level;
-            foreach (var (card, caseId) in _lockCards)
+            foreach (var (card, caseDef) in _lockCards)
             {
-                if (card == null) continue;
-                bool locked   = !PlayerProgression.IsCaseUnlocked(caseId);
-                int  required = PlayerProgression.RequiredLevelForCaseId(caseId);
+                if (card == null || caseDef == null) continue;
+                var  caseId   = caseDef.CaseId;
+                bool locked   = !PlayerProgression.IsCaseUnlocked(caseId, caseDef.UnlockType, caseDef.UnlockRequirement);
+                int  required = PlayerProgression.RequiredLevelForCase(caseId, caseDef.UnlockType, caseDef.UnlockRequirement);
                 var  overlay  = card.transform.Find("LockOverlay");
 
                 if (locked)
@@ -617,7 +671,7 @@ namespace ValoCase.UI.Screens
                     if (overlay == null)
                     {
                         BuildLockOverlay(card.transform, required);
-                        Debug.Log($"[SHOP_LOCK] overlay created case={caseId} required={required} current={current} screen=ShopScreen");
+                        Log($"[SHOP_LOCK] overlay created case={caseId} required={required} current={current} screen=ShopScreen");
                     }
                     else if (!overlay.gameObject.activeSelf)
                     {
@@ -627,7 +681,7 @@ namespace ValoCase.UI.Screens
                 else if (overlay != null && overlay.gameObject.activeSelf)
                 {
                     overlay.gameObject.SetActive(false);
-                    Debug.Log($"[SHOP_LOCK] overlay hidden (unlocked) case={caseId} required={required} current={current} screen=ShopScreen");
+                    Log($"[SHOP_LOCK] overlay hidden (unlocked) case={caseId} required={required} current={current} screen=ShopScreen");
                 }
             }
         }
@@ -688,7 +742,7 @@ namespace ValoCase.UI.Screens
             lblRt.anchorMin = Vector2.zero; lblRt.anchorMax = Vector2.one;
             lblRt.offsetMin = new Vector2(4f, 0f); lblRt.offsetMax = new Vector2(-4f, 0f);
             var tmp = lbl.AddComponent<TextMeshProUGUI>();
-            tmp.text               = $"LEVEL {requiredLevel}";
+            tmp.text               = requiredLevel > 0 ? $"LEVEL {requiredLevel}" : "LOCKED";
             tmp.fontStyle          = FontStyles.Bold;
             tmp.enableAutoSizing   = true;
             tmp.fontSizeMin        = 9f;
@@ -784,6 +838,11 @@ namespace ValoCase.UI.Screens
             rt.offsetMin = Vector2.zero;
             rt.offsetMax = Vector2.zero;
         }
+
+        // Verbose shop diagnostics — compiled out of production builds.
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
+        [System.Diagnostics.Conditional("DEVELOPMENT_BUILD")]
+        static void Log(string message) => Debug.Log(message);
 
         // Builds "Select %65 | Deluxe %15 | ..." from the case's RarityWeights.
         // Returns "Drop rates unavailable" when DropTable is null or empty.

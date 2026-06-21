@@ -71,7 +71,9 @@ namespace ValoCase.UI.Screens
         RectTransform   _selectedRoot;
         LayoutElement   _selectedFrameLe;
         AngledCutImage  _ctaBg;
+        Button          _ctaButton;
         TextMeshProUGUI _ctaLbl;
+        bool            _confirmInFlight;
 
         GridLayoutGroup _caseGrid;
 
@@ -87,6 +89,7 @@ namespace ValoCase.UI.Screens
             gameObject.SetActive(true);
             BuildOnce();
 
+            SetConfirmInFlight(false);
             _playerCount = BattlePlayerCount.OneVOne;
             ResetSelectionDefault();
             RefreshAll();
@@ -101,11 +104,23 @@ namespace ValoCase.UI.Screens
 
         public void Hide()
         {
+            SetConfirmInFlight(false);
             StopAllCoroutines();
             gameObject.SetActive(false);
         }
 
-        void OnDisable() => StopAllCoroutines();
+        void OnDisable()
+        {
+            _confirmInFlight = false;
+            if (_ctaButton != null) _ctaButton.interactable = true;
+            StopAllCoroutines();
+        }
+
+        public void SetConfirmInFlight(bool inFlight)
+        {
+            _confirmInFlight = inFlight;
+            if (_ctaButton != null) _ctaButton.interactable = !inFlight;
+        }
 
         // ── Build ──────────────────────────────────────────────────────────────
         void BuildOnce()
@@ -542,9 +557,9 @@ namespace ValoCase.UI.Screens
             glow.effectColor = ColorPalette.WithAlpha(ColorPalette.ActiveRed, 0.7f);
             glow.effectDistance = new Vector2(0f, -4f);
 
-            var btn = _ctaBg.gameObject.AddComponent<Button>();
-            btn.transition = Selectable.Transition.None;
-            btn.onClick.AddListener(OnConfirmPressed);
+            _ctaButton = _ctaBg.gameObject.AddComponent<Button>();
+            _ctaButton.transition = Selectable.Transition.None;
+            _ctaButton.onClick.AddListener(OnConfirmPressed);
 
             _ctaLbl = MakeTmp(_ctaBg.transform, "Lbl", "CREATE BATTLE", 15f, FontStyles.Bold, Color.white);
             _ctaLbl.characterSpacing = 1f;
@@ -653,6 +668,8 @@ namespace ValoCase.UI.Screens
         // ── Confirm ──────────────────────────────────────────────────────────────
         void OnConfirmPressed()
         {
+            if (_confirmInFlight) return;
+
             if (!_anyUnlocked)
             {
                 GameEvents.RaiseToast("Açık kasa yok — seviye atla");
@@ -698,6 +715,7 @@ namespace ValoCase.UI.Screens
                 Rarity         = SkinRarity.Select,
                 WagerVP        = CurrentCost(),
             };
+            SetConfirmInFlight(true);
             OnConfirm?.Invoke(data);
         }
 

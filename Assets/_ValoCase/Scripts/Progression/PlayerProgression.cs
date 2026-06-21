@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using ValoCase.Data;
 
 namespace ValoCase.Progression
 {
@@ -98,6 +99,41 @@ namespace ValoCase.Progression
         }
 
         public static bool IsCaseUnlocked(string caseId) => IsCategoryUnlocked(CategoryForCaseId(caseId));
+
+        /// <summary>Resolves a case id to a weapon category, or null when it matches none
+        /// (unlike <see cref="CategoryForCaseId"/>, which defaults unknown ids to Classic).</summary>
+        public static string TryResolveCategory(string caseId)
+        {
+            if (string.IsNullOrEmpty(caseId)) return null;
+            var id = caseId.ToLowerInvariant();
+            foreach (var key in CategoryKeys)
+                if (id.Contains(key))
+                    return char.ToUpperInvariant(key[0]) + key.Substring(1);
+            return null;
+        }
+
+        /// <summary>Required unlock level for a case. Authored Level data wins; otherwise the
+        /// weapon-category map is used. Returns 0 when neither resolves (treated as locked).</summary>
+        public static int RequiredLevelForCase(string caseId, CaseUnlockType unlockType, int unlockRequirement)
+        {
+            if (unlockType == CaseUnlockType.Level && unlockRequirement > 0)
+                return unlockRequirement;
+            var category = TryResolveCategory(caseId);
+            return category != null ? GetUnlockLevelForCategory(category) : 0;
+        }
+
+        /// <summary>Unlock state for a case. Authored Level/Achievement data is authoritative;
+        /// otherwise the weapon-category map is used. Unknown category with no authored data
+        /// stays locked rather than defaulting to Classic.</summary>
+        public static bool IsCaseUnlocked(string caseId, CaseUnlockType unlockType, int unlockRequirement)
+        {
+            if (unlockType == CaseUnlockType.Level && unlockRequirement > 0)
+                return Level >= unlockRequirement;
+            if (unlockType == CaseUnlockType.Achievement)
+                return false;
+            var category = TryResolveCategory(caseId);
+            return category != null && IsCategoryUnlocked(category);
+        }
 
         // Strict unlock for actions the backend authorizes (battle create). Unknown
         // progression is locked except the always-open base tier, so the client never

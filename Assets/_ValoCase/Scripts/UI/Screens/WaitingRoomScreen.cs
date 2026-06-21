@@ -39,6 +39,9 @@ namespace ValoCase.UI.Screens
         const float CtaH       = 54f;
         const float NavReserve = 150f;
         const float SummaryH   = 270f;
+        const float AddBotCooldownSeconds = 0.25f;
+        const float PollErrorToastCooldown = 12f;
+        const int PollErrorFeedbackThreshold = 3;
 
         enum RoomState { Ready, Running, Finished }
 
@@ -92,6 +95,10 @@ namespace ValoCase.UI.Screens
         bool            _amHost;
         bool            _amSeated;
         bool            _joining;
+        bool            _addingBot;
+        int             _pollFailures;
+        float           _nextPollErrorToastAt;
+        readonly List<Button> _addBotButtons = new List<Button>();
 
         // Battle entry cost = Case Price × Round Count, already baked into WagerVP
         // when the lobby is created (see LobbyListScreen.MakeBotLobby).
@@ -136,6 +143,10 @@ namespace ValoCase.UI.Screens
             _lastLobby     = null;
             _lastStatus    = null;
             _slotsRoot     = null;
+            _addingBot     = false;
+            _pollFailures  = 0;
+            _nextPollErrorToastAt = 0f;
+            _addBotButtons.Clear();
             if (_online) _completedHandled = false;
             DismissResultPopup();
 
@@ -199,6 +210,10 @@ namespace ValoCase.UI.Screens
             _lastLobby     = null;
             _lastStatus    = null;
             _slotsRoot     = null;
+            _addingBot     = false;
+            _pollFailures  = 0;
+            _nextPollErrorToastAt = 0f;
+            _addBotButtons.Clear();
             gameObject.SetActive(false);
         }
 
@@ -227,6 +242,10 @@ namespace ValoCase.UI.Screens
         void OnDisable()
         {
             ForceSettleIfNeeded();
+            _addingBot = false;
+            _pollFailures = 0;
+            _nextPollErrorToastAt = 0f;
+            _addBotButtons.Clear();
             StopAllCoroutines();
         }
 
@@ -1067,13 +1086,34 @@ namespace ValoCase.UI.Screens
                 BackendError  err  = null;
                 yield return ctx.Backend.GetBattleLobby(_battleId, r => resp = r, e => err = e);
 
-                if (resp != null) HandleLobbyUpdate(resp);
-                // Transient fetch errors are tolerated silently — the next tick retries
-                // so a single dropped poll never tears down the room or spams toasts.
+                if (resp != null)
+                {
+                    ClearPollNetworkError();
+                    HandleLobbyUpdate(resp);
+                }
+                else if (err != null) HandlePollNetworkError(err);
 
                 if (!_online || _completedHandled) yield break;
                 yield return new WaitForSecondsRealtime(1f);
             }
+        }
+
+        void ClearPollNetworkError()
+        {
+            _pollFailures = 0;
+        }
+
+        void HandlePollNetworkError(BackendError err)
+        {
+            _pollFailures++;
+            Debug.LogWarning("[ONLINE_BATTLE] lobby poll failed — " + err);
+            if (_pollFailures < PollErrorFeedbackThreshold) return;
+
+            SetRoomStatus("Lobi bilgileri güncellenemedi, tekrar deneniyor...", ColorPalette.TextDim);
+            if (Time.unscaledTime < _nextPollErrorToastAt) return;
+
+            GameEvents.RaiseToast("Lobi bilgileri güncellenemedi, tekrar deneniyor...");
+            _nextPollErrorToastAt = Time.unscaledTime + PollErrorToastCooldown;
         }
 
         void HandleLobbyUpdate(LobbyResponse lobby)
@@ -1184,6 +1224,7 @@ namespace ValoCase.UI.Screens
             var host = _slotsRoot.transform;
             for (int i = host.childCount - 1; i >= 0; i--)
                 Destroy(host.GetChild(i).gameObject);
+            _addBotButtons.Clear();
 
             Canvas.ForceUpdateCanvases();
             LayoutRebuilder.ForceRebuildLayoutImmediate(_battleArea);
@@ -1336,12 +1377,14 @@ namespace ValoCase.UI.Screens
 
             if (canJoin)
             {
-                int captured = index;
+                int captured = slot != null ? slot.slotIndex : index;
                 BuildPanelButton(pRt, "KATIL", new Color(0.20f, 0.62f, 1f), () => OnJoinSlotPressed(captured));
             }
             else if (canAddBot)
             {
-                BuildPanelButton(pRt, "BOT EKLE", ColorPalette.ActiveRed, OnAddBotPressed);
+                var btn = BuildPanelButton(pRt, "BOT EKLE", ColorPalette.ActiveRed, OnAddBotPressed);
+                _addBotButtons.Add(btn);
+                btn.interactable = !_addingBot;
             }
             else
             {
@@ -1495,7 +1538,7 @@ namespace ValoCase.UI.Screens
         // Bottom-centered action button inside an empty participant panel. The opaque
         // Image is the only raycast target, the label is non-blocking, and the button is
         // forced last sibling so no panel element can swallow the tap on mobile.
-        void BuildPanelButton(RectTransform pRt, string label, Color color, UnityEngine.Events.UnityAction onClick)
+        Button BuildPanelButton(RectTransform pRt, string label, Color color, UnityEngine.Events.UnityAction onClick)
         {
             var go  = NewGo("PanelBtn", pRt, typeof(Image), typeof(Button));
             var img = go.GetComponent<Image>();
@@ -1518,6 +1561,7 @@ namespace ValoCase.UI.Screens
             lbl.alignment        = TextAlignmentOptions.Center;
             lbl.characterSpacing = 1f;
             Stretch(lbl.rectTransform);
+            return btn;
         }
 
         void OnJoinSlotPressed(int slotIndex)
@@ -1554,7 +1598,9 @@ namespace ValoCase.UI.Screens
         void OnAddBotPressed()
         {
             var ctx = GameContext.Instance;
-            if (ctx == null || ctx.Backend == null || string.IsNullOrEmpty(_battleId)) return;
+            if (_addingBot || ctx == null || ctx.Backend == null || string.IsNullOrEmpty(_battleId)) return;
+            _addingBot = true;
+            SetAddBotButtonsInteractable(false);
             StartCoroutine(AddBotRoutine());
         }
 
@@ -1563,15 +1609,36 @@ namespace ValoCase.UI.Screens
             var ctx = GameContext.Instance;
             LobbyResponse resp = null;
             BackendError  err  = null;
+            float startedAt = Time.unscaledTime;
             yield return ctx.Backend.AddBotToBattleLobby(_battleId, r => resp = r, e => err = e);
+            float remainingCooldown = AddBotCooldownSeconds - (Time.unscaledTime - startedAt);
+            if (remainingCooldown > 0f)
+                yield return new WaitForSecondsRealtime(remainingCooldown);
+
+            _addingBot = false;
 
             if (err != null || resp == null)
             {
                 Debug.LogWarning("[BATTLE_LOBBY] add-bot failed — " + (err?.ToString() ?? "null response"));
+                SetAddBotButtonsInteractable(true);
                 GameEvents.RaiseToast(MapLobbyError(err));
                 yield break;
             }
             HandleLobbyUpdate(resp);   // reflect the filled slot immediately
+        }
+
+        void SetAddBotButtonsInteractable(bool interactable)
+        {
+            for (int i = _addBotButtons.Count - 1; i >= 0; i--)
+            {
+                var btn = _addBotButtons[i];
+                if (btn == null)
+                {
+                    _addBotButtons.RemoveAt(i);
+                    continue;
+                }
+                btn.interactable = interactable;
+            }
         }
 
         // Lobby/battle completed: map the authoritative result and reuse the existing

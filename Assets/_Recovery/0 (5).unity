@@ -393,6 +393,23 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 16115113}
   m_CullTransparentMesh: 1
+--- !u!1 &33968439 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 5384956390516792296, guid: 404ccbc53e9e57d44ab008a2b38fe3b5, type: 3}
+  m_PrefabInstance: {fileID: 1090743227}
+  m_PrefabAsset: {fileID: 0}
+--- !u!114 &33968443
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 33968439}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4b3a29c79b183e249bc654bf320de9b8, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::ValoCase.UI.ScreenContentFitter
 --- !u!1 &77795288
 GameObject:
   m_ObjectHideFlags: 0
@@ -2793,6 +2810,10 @@ PrefabInstance:
       propertyPath: m_SizeDelta.x
       value: 0
       objectReference: {fileID: 0}
+    - target: {fileID: 8531967055355354395, guid: 404ccbc53e9e57d44ab008a2b38fe3b5, type: 3}
+      propertyPath: m_SizeDelta.y
+      value: 0
+      objectReference: {fileID: 0}
     - target: {fileID: 8666432901112435819, guid: 404ccbc53e9e57d44ab008a2b38fe3b5, type: 3}
       propertyPath: m_Pivot.x
       value: 0
@@ -2916,7 +2937,10 @@ PrefabInstance:
     m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects: []
-    m_AddedComponents: []
+    m_AddedComponents:
+    - targetCorrespondingSourceObject: {fileID: 5384956390516792296, guid: 404ccbc53e9e57d44ab008a2b38fe3b5, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 33968443}
   m_SourcePrefab: {fileID: 100100000, guid: 404ccbc53e9e57d44ab008a2b38fe3b5, type: 3}
 --- !u!1 &1138820908
 GameObject:

@@ -591,7 +591,7 @@
             ]
         },
         {
-            "caseId": "protocol_melee",
+            "caseId": "melee_protocol",
             "displayName": "Protocol Melee Case",
             "price": 3000,
             "resourceKey": "Art/Cases/Protocol_Melee_Case",
@@ -637,7 +637,7 @@
             ]
         },
         {
-            "caseId": "radiant_melee",
+            "caseId": "melee_radiant",
             "displayName": "Radiant Melee Case",
             "price": 5000,
             "resourceKey": "Art/Cases/Radiant_Melee_Case",
@@ -1516,7 +1516,7 @@
             ]
         },
         {
-            "caseId": "protocol_bulldog",
+            "caseId": "bulldog_protocol",
             "displayName": "Protocol Bulldog Case",
             "price": 1400,
             "resourceKey": "Art/Cases/Protocol_Bulldog_Case",

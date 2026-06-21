@@ -54,15 +54,15 @@ namespace ValoCase.UI.Screens
         float         _cellH;
 
         const float MsnTopPad     = 136f;
-        // Bottom nav clearance is now owned by the shared Screens host (ScreenContentFitter),
-        // so this is just a small content margin — not a second full navbar reservation.
+        // Bottom nav clearance is owned by the bounded Screens host, so this is just a
+        // small content margin — not a second full navbar reservation.
         const float MsnBotPad     = 24f;
         const float MsnSidePad    =  12f;
         const float MsnMinScrollH = 120f;
 
-        // Two wide columns (was three) so each card — and its progress ring and texts —
-        // can be ~2x larger and stay readable. The list scrolls when it overflows.
-        const int   MsnCols   = 2;
+        // Three columns (default portrait), enlarged internal text for readability.
+        // 9 missions render as 3 rows of 3; the list scrolls when it overflows.
+        const int   MsnCols   = 3;
         const float MsnColGap = 10f;
         const float MsnRowGap = 18f;
 
@@ -82,6 +82,7 @@ namespace ValoCase.UI.Screens
         // Anchored to the client clock at fetch time; backend remains authoritative.
         double[]          _resetRealtime;
         bool              _reloadInFlight;
+        float             _countdownTick;
 
         // ── Public API ────────────────────────────────────────────────────────
         public void Init(MissionSystem system)
@@ -305,7 +306,7 @@ namespace ValoCase.UI.Screens
             const float colGap  = MsnColGap;
             float usableW = panelW - 2f * sidePad;
             float cellW   = (usableW - (MsnCols - 1) * colGap) / MsnCols;
-            float cellH   = Mathf.Round(cellW * 1.70f);
+            float cellH   = Mathf.Round(cellW * 1.62f);
             _cellW = cellW; _cellH = cellH;
 
             // Full background
@@ -475,7 +476,7 @@ namespace ValoCase.UI.Screens
 
             // ── Circular donut progress ring ──────────────────────────────────
             // Ring: pivot=(0.5,1) top-center. Hole: pivot=(0.5,0.5) centered on ring.
-            float ringSize    = Mathf.Round(cardW * 0.72f);
+            float ringSize    = Mathf.Round(cardW * 0.74f);
             float ringTopY    = Mathf.Round(5f + titleH + cardH * 0.04f);
             float ringCenterY = ringTopY + ringSize * 0.5f;
             float holeSize    = Mathf.Round(ringSize * 0.60f);
@@ -674,6 +675,10 @@ namespace ValoCase.UI.Screens
         void Update()
         {
             if (!_backend || !gameObject.activeSelf || _cards == null || _resetRealtime == null) return;
+
+            _countdownTick += Time.unscaledDeltaTime;
+            if (_countdownTick < 1f) return;
+            _countdownTick = 0f;
 
             bool reached = false;
             double now = Time.unscaledTimeAsDouble;

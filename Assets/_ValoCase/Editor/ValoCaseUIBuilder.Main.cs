@@ -252,8 +252,6 @@ namespace ValoCase.Editor
             var screenHost = CreateRect("Screens", safe, Vector2.zero);
             StretchFull(screenHost);
             DisableRaycast(screenHost);
-            // Shared content root: insets between the top/bottom navbars at runtime.
-            screenHost.gameObject.AddComponent<ScreenContentFitter>();
             screenHost.offsetMin = new Vector2(0f, BottomNavBar.Height);
             screenHost.offsetMax = new Vector2(0f, -TopProfileBar.Height);
 
@@ -525,7 +523,7 @@ namespace ValoCase.Editor
             var grid = CreateVerticalGridScrollContent(
                 "WeaponsScroll",
                 screen,
-                new Vector2(16, ScreenContentFitter.ContentPadding),
+                new Vector2(16, 16f),
                 new Vector2(-16, -16),
                 new Vector2(200, 290),
                 new Vector2(12, 12),

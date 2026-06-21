@@ -304,19 +304,15 @@ namespace ValoCase.UI
             gearRt.anchorMin        = new Vector2(1f, 0.5f);
             gearRt.anchorMax        = new Vector2(1f, 0.5f);
             gearRt.pivot            = new Vector2(1f, 0.5f);
-            gearRt.anchoredPosition = new Vector2(-12f, 0f);
-            gearRt.sizeDelta        = new Vector2(56f, 56f);
-            gearGo.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0f); // transparent hit area
+            gearRt.anchoredPosition = new Vector2(-10f, 0f);
+            gearRt.sizeDelta        = new Vector2(64f, 64f);
+            var gearBg = gearGo.GetComponent<Image>();
+            gearBg.color = new Color(0f, 0f, 0f, 0f);
             var gearBtn = gearGo.GetComponent<Button>();
             gearBtn.transition = Selectable.Transition.None;
             gearBtn.onClick.AddListener(OnGearClicked);
 
-            var gearIco  = MakeTmp(gearGo.transform, "GearIco", "⚙", 30f, DimWhite);
-            gearIco.alignment     = TextAlignmentOptions.Center;
-            gearIco.raycastTarget = false;
-            var gIcoRt = gearIco.rectTransform;
-            gIcoRt.anchorMin = Vector2.zero; gIcoRt.anchorMax = Vector2.one;
-            gIcoRt.offsetMin = Vector2.zero; gIcoRt.offsetMax = Vector2.zero;
+            BuildGearIcon(gearGo.transform, 38f);
 
             // ── VP balance label (right of gear) ──────────────────────────────
             var vpGo = new GameObject("VpRow", typeof(RectTransform));
@@ -325,7 +321,7 @@ namespace ValoCase.UI
             vpRt.anchorMin        = new Vector2(1f, 0.5f);
             vpRt.anchorMax        = new Vector2(1f, 0.5f);
             vpRt.pivot            = new Vector2(1f, 0.5f);
-            vpRt.anchoredPosition = new Vector2(-74f, 0f);  // 12 pad + 56 gear + 6 gap
+            vpRt.anchoredPosition = new Vector2(-82f, 0f);
             vpRt.sizeDelta        = new Vector2(220f, 40f);
 
             _vpLabel              = MakeTmp(vpGo.transform, "VpLbl", "0 VP", 18f, TextBright);
@@ -362,6 +358,54 @@ namespace ValoCase.UI
             v.sizeDelta        = new Vector2(1f, 8f);
             v.gameObject.AddComponent<Image>().color       = ActiveRed;
             v.GetComponent<Image>().raycastTarget          = false;
+        }
+
+        static void BuildGearIcon(Transform parent, float size)
+        {
+            var root = new GameObject("GearIco", typeof(RectTransform));
+            root.transform.SetParent(parent, false);
+            var rt = (RectTransform)root.transform;
+            rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(0.5f, 0.5f);
+            rt.anchoredPosition = Vector2.zero;
+            rt.sizeDelta = new Vector2(size, size);
+
+            for (int i = 0; i < 8; i++)
+            {
+                float angle = i * 45f;
+                float rad = angle * Mathf.Deg2Rad;
+                var tooth = new GameObject("Tooth", typeof(RectTransform), typeof(Image));
+                tooth.transform.SetParent(root.transform, false);
+                var tr = (RectTransform)tooth.transform;
+                tr.anchorMin = tr.anchorMax = tr.pivot = new Vector2(0.5f, 0.5f);
+                tr.anchoredPosition = new Vector2(Mathf.Sin(rad), Mathf.Cos(rad)) * (size * 0.38f);
+                tr.sizeDelta = new Vector2(size * 0.13f, size * 0.27f);
+                tr.localRotation = Quaternion.Euler(0f, 0f, -angle);
+                var img = tooth.GetComponent<Image>();
+                img.color = TextBright;
+                img.raycastTarget = false;
+            }
+
+            var outer = new GameObject("Outer", typeof(RectTransform), typeof(Image));
+            outer.transform.SetParent(root.transform, false);
+            var or = (RectTransform)outer.transform;
+            or.anchorMin = or.anchorMax = or.pivot = new Vector2(0.5f, 0.5f);
+            or.anchoredPosition = Vector2.zero;
+            or.sizeDelta = new Vector2(size * 0.72f, size * 0.72f);
+            var outerImg = outer.GetComponent<Image>();
+            outerImg.sprite = MakeCircleSprite(64);
+            outerImg.color = TextBright;
+            outerImg.raycastTarget = false;
+
+            var inner = new GameObject("Inner", typeof(RectTransform), typeof(Image));
+            inner.transform.SetParent(root.transform, false);
+            var ir = (RectTransform)inner.transform;
+            ir.anchorMin = ir.anchorMax = ir.pivot = new Vector2(0.5f, 0.5f);
+            ir.anchoredPosition = Vector2.zero;
+            ir.sizeDelta = new Vector2(size * 0.36f, size * 0.36f);
+            var innerImg = inner.GetComponent<Image>();
+            innerImg.sprite = MakeCircleSprite(64);
+            innerImg.color = NavBg;
+            innerImg.raycastTarget = false;
         }
 
         // ── Rect helpers ──────────────────────────────────────────────────────

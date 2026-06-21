@@ -175,6 +175,10 @@ namespace ValoCase.UI.Screens
 
             _skinScrollRect = skinScrollRt != null ? skinScrollRt.GetComponent<ScrollRect>() : null;
 
+            // A mid-upgrade tab switch deactivates this screen and kills the upgrade
+            // coroutine before it can clear this flag; reset on entry or the button stays
+            // permanently disabled.
+            _isUpgrading = false;
             _selectedInputs.Clear();
             _selectedTargets.Clear();
 

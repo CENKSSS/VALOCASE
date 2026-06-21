@@ -37,12 +37,16 @@ namespace ValoCase.UI.Screens
         const float TopInset    = 14f;
         const float HeaderH     = 48f;
         const float Gap         = 12f;
-        const float StatsH      = 78f;
-        const float CreateH     = 52f;
+        const float StatsH      = 117f;
+        const float CreateH     = 104f;
         const float SectionH    = 44f;
         const float NavReserve  = 16f;    // bottom nav space reserved by shared Screens host
-        const float ListChromeTop = TopInset + HeaderH + Gap + StatsH + Gap + CreateH + Gap + SectionH;
+        const float CreateW     = 440f;
+        const float CreateBottomInset = 58f;
+        const float ListChromeTop = TopInset + HeaderH + Gap + StatsH + Gap + SectionH;
         const float MinListH    = 120f;
+        const int TableHorizontalPad = 14;
+        const float LobbyListErrorToastCooldown = 12f;
 
         bool _built;
         RectTransform _scrollRt;
@@ -63,6 +67,10 @@ namespace ValoCase.UI.Screens
         // dev/offline fallback (the old /battles/bot flow stays available behind them).
         bool      _onlineMode;
         bool      _botFallbackShown;
+        bool      _creating;
+        bool      _lobbyListHadSuccessfulFetch;
+        int       _lobbyListFetchFailures;
+        float     _nextLobbyListErrorToastAt;
         Coroutine _refreshCo;
 
         // Resolved once from the content database.
@@ -133,6 +141,8 @@ namespace ValoCase.UI.Screens
         protected override void OnHidden()
         {
             StopAllCoroutines();
+            _creating = false;
+            _createPanel?.SetConfirmInFlight(false);
 
             // Battle room stays alive while Settings (or another screen) is open;
             // its coroutines keep running because the GameObject is not deactivated.
@@ -142,7 +152,12 @@ namespace ValoCase.UI.Screens
             _waitingPanel?.Hide();
         }
 
-        void OnDisable() => StopAllCoroutines();
+        void OnDisable()
+        {
+            StopAllCoroutines();
+            _creating = false;
+            _createPanel?.SetConfirmInFlight(false);
+        }
 
         // ── Build ──────────────────────────────────────────────────────────────
         void BuildOnce()
@@ -159,9 +174,9 @@ namespace ValoCase.UI.Screens
 
             BuildHeader(rt);
             BuildStatsRow(rt);
-            BuildCreateButton(rt);
             BuildSectionHeader(rt);
             BuildScrollList(rt);
+            BuildCreateButton(rt);
             BuildSubPanels(rt);
 
             // The lobby list is filled by StartLobbyRefresh() (online fetch or, when the
@@ -249,7 +264,8 @@ namespace ValoCase.UI.Screens
             var iconRoot = NewGo("Icon", card.transform);
             var iconRt   = (RectTransform)iconRoot.transform;
             SetRect(iconRt, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0.5f, 1f),
-                new Vector2(0f, -11f), new Vector2(15f, 15f));
+                new Vector2(0f, -17f), new Vector2(15f, 15f));
+            iconRt.localScale = Vector3.one * 1.5f;
             switch (iconType)
             {
                 case StatIcon.Trophy:    BuildTrophyIcon(iconRoot.transform, iconColor);    break;
@@ -259,16 +275,16 @@ namespace ValoCase.UI.Screens
                 case StatIcon.Star:      BuildStarIcon(iconRoot.transform, iconColor);      break;
             }
 
-            var val = MakeTmp(card.transform, "Value", value, 15f, FontStyles.Bold, valueColor);
+            var val = MakeTmp(card.transform, "Value", value, 22.5f, FontStyles.Bold, valueColor);
             val.alignment = TextAlignmentOptions.Center;
             SetRect(val.rectTransform, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
-                new Vector2(0f, -30f), new Vector2(-4f, 20f));
+                new Vector2(0f, -46f), new Vector2(-4f, 30f));
 
-            var lbl = MakeTmp(card.transform, "Label", label, 8f, FontStyles.Bold, ColorPalette.TextDim);
+            var lbl = MakeTmp(card.transform, "Label", label, 12f, FontStyles.Bold, ColorPalette.TextDim);
             lbl.alignment = TextAlignmentOptions.Center;
             lbl.characterSpacing = 1f;
             SetRect(lbl.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(0.5f, 0f),
-                new Vector2(0f, 9f), new Vector2(-2f, 12f));
+                new Vector2(0f, 14f), new Vector2(-2f, 18f));
 
             return val;
         }
@@ -354,10 +370,13 @@ namespace ValoCase.UI.Screens
             
             var createGlow = _createBg.gameObject.AddComponent<Shadow>();
             createGlow.effectColor = ColorPalette.WithAlpha(createRed, 0.75f);
-            createGlow.effectDistance = new Vector2(0f, -4f);            var cRt = _createBg.rectTransform;
-            TopStrip(cRt, CreateH, -(TopInset + HeaderH + Gap + StatsH + Gap));
-            cRt.offsetMin = new Vector2(SidePad, cRt.offsetMin.y);
-            cRt.offsetMax = new Vector2(-SidePad, cRt.offsetMax.y);
+            createGlow.effectDistance = new Vector2(0f, -4f);
+
+            var cRt = _createBg.rectTransform;
+            cRt.anchorMin = cRt.anchorMax = cRt.pivot = new Vector2(0.5f, 0f);
+            cRt.anchoredPosition = new Vector2(0f, NavReserve + CreateBottomInset);
+            cRt.sizeDelta = new Vector2(CreateW, CreateH);
+            _createBg.transform.SetAsLastSibling();
 
             var btn = _createBg.gameObject.AddComponent<Button>();
             btn.transition = Selectable.Transition.None;
@@ -378,28 +397,53 @@ namespace ValoCase.UI.Screens
         {
             var sec = NewGo("SectionHeader", rt);
             var sRt = (RectTransform)sec.transform;
-            TopStrip(sRt, SectionH, -(TopInset + HeaderH + Gap + StatsH + Gap + CreateH + Gap));
+            TopStrip(sRt, SectionH, -(TopInset + HeaderH + Gap + StatsH + Gap));
 
-            // Red accent tick.
-            var tick = MakeImage("Tick", sec.transform, ColorPalette.ActiveRed);
-            SetRect(tick.rectTransform, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f),
-                new Vector2(SidePad, -4f), new Vector2(3f, 16f));
+            var panel = MakeImage("LobbyTableHeader", sec.transform, ColorPalette.Surface);
+            var pRt = panel.rectTransform;
+            pRt.anchorMin = Vector2.zero;
+            pRt.anchorMax = Vector2.one;
+            pRt.offsetMin = new Vector2(TableHorizontalPad, 5f);
+            pRt.offsetMax = new Vector2(-TableHorizontalPad, -5f);
 
-            var title = MakeTmp(sec.transform, "Title", "ACTIVE BATTLES", 13f, FontStyles.Bold, ColorPalette.TextBright);
-            title.characterSpacing = 2f;
-            title.alignment = TextAlignmentOptions.MidlineLeft;
-            SetRect(title.rectTransform, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0f, 1f),
-                new Vector2(SidePad + 10f, -2f), new Vector2(-150f, 18f));
+            var border = panel.gameObject.AddComponent<Outline>();
+            border.effectColor    = ColorPalette.Border;
+            border.effectDistance = new Vector2(1f, -1f);
 
-            _activeCountLbl = MakeTmp(sec.transform, "Count", "", 11f, FontStyles.Bold, ColorPalette.ActiveRed);
-            _activeCountLbl.alignment = TextAlignmentOptions.MidlineRight;
-            SetRect(_activeCountLbl.rectTransform, new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(1f, 1f),
-                new Vector2(-SidePad, -2f), new Vector2(80f, 18f));
+            AddCasesHeaderCell(panel.transform);
+            AddCenteredHeaderCell(panel.transform, "COST", LobbyCard.CostCenterA, 0.10f);
+            AddCenteredHeaderCell(panel.transform, "PLAYERS", LobbyCard.PlayersCenterA, 0.085f);
+        }
 
-            var sub = MakeTmp(sec.transform, "Sub", "Default bot lobbies available", 10f, FontStyles.Normal, ColorPalette.TextDim);
-            sub.alignment = TextAlignmentOptions.MidlineLeft;
-            SetRect(sub.rectTransform, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0f, 1f),
-                new Vector2(SidePad + 10f, -24f), new Vector2(-30f, 14f));
+        void AddHeaderCell(Transform parent, string text, float minX, float maxX, TextAlignmentOptions align)
+        {
+            var cell = NewGo("Header_" + (string.IsNullOrEmpty(text) ? "Action" : text), parent);
+            var cRt = (RectTransform)cell.transform;
+            cRt.anchorMin = new Vector2(minX, 0f);
+            cRt.anchorMax = new Vector2(maxX, 1f);
+            cRt.offsetMin = Vector2.zero;
+            cRt.offsetMax = Vector2.zero;
+
+            var lbl = MakeTmp(cell.transform, "Lbl", text, 11.5f, FontStyles.Bold, ColorPalette.TextDim);
+            lbl.alignment = align;
+            lbl.characterSpacing = 1f;
+            Stretch(lbl.rectTransform);
+            if (align == TextAlignmentOptions.MidlineLeft)
+            {
+                lbl.rectTransform.offsetMin = Vector2.zero;
+                lbl.rectTransform.offsetMax = Vector2.zero;
+            }
+        }
+
+        void AddCasesHeaderCell(Transform parent)
+        {
+            float slotW = (LobbyCard.CostA - LobbyCard.CasesA) / LobbyCard.MaxCaseSlots;
+            AddHeaderCell(parent, "CASES", LobbyCard.CasesA, LobbyCard.CasesA + slotW * 0.72f, TextAlignmentOptions.Center);
+        }
+
+        void AddCenteredHeaderCell(Transform parent, string text, float centerX, float width)
+        {
+            AddHeaderCell(parent, text, centerX - width * 0.5f, centerX + width * 0.5f, TextAlignmentOptions.Center);
         }
 
         void BuildScrollList(RectTransform rt)
@@ -422,9 +466,10 @@ namespace ValoCase.UI.Screens
             _listContent.anchorMax        = new Vector2(1f, 1f);
             _listContent.pivot            = new Vector2(0.5f, 1f);
             _listContent.anchoredPosition = Vector2.zero;
+            _listContent.sizeDelta        = Vector2.zero;
             var vlg = content.GetComponent<VerticalLayoutGroup>();
-            vlg.padding               = new RectOffset(14, 14, 8, 20);
-            vlg.spacing               = 16f;
+            vlg.padding               = new RectOffset(TableHorizontalPad, TableHorizontalPad, 0, 160);
+            vlg.spacing               = 0f;
             vlg.childForceExpandWidth  = true;
             vlg.childForceExpandHeight = false;
             vlg.childControlWidth      = true;
@@ -483,11 +528,8 @@ namespace ValoCase.UI.Screens
 
             foreach (var lobby in _lobbies)
             {
-                Sprite hostAvatar = _onlineMode && !string.IsNullOrEmpty(lobby.HostAvatarId)
-                    ? ValoCase.Profile.ProfileManager.ResolveAvatarSprite(lobby.HostAvatarId)
-                    : null;
-                var card = LobbyCard.Create(_listContent, lobby, ResolveCaseIcon(lobby), OnJoinLobby,
-                    !CanAffordLobby(lobby), hostAvatar);
+                var card = LobbyCard.Create(_listContent, lobby, ResolveCaseIcons(lobby), OnJoinLobby,
+                    !CanAffordLobby(lobby));
                 _cardGos.Add(card.gameObject);
             }
 
@@ -510,11 +552,36 @@ namespace ValoCase.UI.Screens
             return _basicCaseIcon;
         }
 
+        List<Sprite> ResolveCaseIcons(BattleLobbyData lobby)
+        {
+            var icons = new List<Sprite>(5);
+            var content = GameContext.Instance?.Content;
+            if (lobby?.CaseSelections != null && lobby.CaseSelections.Count > 0)
+            {
+                for (int i = 0; i < lobby.CaseSelections.Count && icons.Count < 5; i++)
+                {
+                    var id = lobby.CaseSelections[i].CaseId;
+                    var icon = content != null && !string.IsNullOrEmpty(id)
+                        ? content.GetCase(id)?.CaseIcon
+                        : null;
+                    icons.Add(icon != null ? icon : ResolveCaseIcon(lobby));
+                }
+            }
+
+            if (icons.Count == 0)
+                icons.Add(ResolveCaseIcon(lobby));
+
+            return icons;
+        }
+
         // ── Online lobby list (GET /api/v1/battles/lobbies, auto-refresh ~3s) ────────
         void StartLobbyRefresh()
         {
             StopLobbyRefresh();
             _botFallbackShown = false;
+            _lobbyListHadSuccessfulFetch = false;
+            _lobbyListFetchFailures = 0;
+            _nextLobbyListErrorToastAt = 0f;
             _refreshCo = StartCoroutine(LobbyAutoRefresh());
         }
 
@@ -543,8 +610,12 @@ namespace ValoCase.UI.Screens
                     BackendError      err  = null;
                     yield return ctx.Backend.GetBattleLobbies(r => resp = r, e => err = e);
 
-                    if (resp != null) ApplyOnlineLobbies(resp);
-                    else if (err != null) Debug.LogWarning("[BATTLE_LOBBY_DIAG] list fetch FAILED — " + err);
+                    if (resp != null)
+                    {
+                        ClearLobbyListNetworkError();
+                        ApplyOnlineLobbies(resp);
+                    }
+                    else if (err != null) HandleLobbyListNetworkError(err);
                 }
                 else if (!_botFallbackShown)
                 {
@@ -559,6 +630,27 @@ namespace ValoCase.UI.Screens
                 }
 
                 yield return new WaitForSecondsRealtime(3f);
+            }
+        }
+
+        void ClearLobbyListNetworkError()
+        {
+            _lobbyListHadSuccessfulFetch = true;
+            _lobbyListFetchFailures = 0;
+        }
+
+        void HandleLobbyListNetworkError(BackendError err)
+        {
+            _lobbyListFetchFailures++;
+            Debug.LogWarning("[BATTLE_LOBBY_DIAG] list fetch FAILED — " + err);
+
+            if (Time.unscaledTime < _nextLobbyListErrorToastAt) return;
+            if (!_lobbyListHadSuccessfulFetch || _lobbyListFetchFailures >= 3)
+            {
+                GameEvents.RaiseToast(_lobbyListHadSuccessfulFetch
+                    ? "Lobi bilgileri güncellenemedi, tekrar deneniyor..."
+                    : "Bağlantı yenileniyor...");
+                _nextLobbyListErrorToastAt = Time.unscaledTime + LobbyListErrorToastCooldown;
             }
         }
 
@@ -749,13 +841,18 @@ namespace ValoCase.UI.Screens
         {
             if (_onlineMode)
             {
+                if (_creating) return;
                 // POST /battles/lobbies, then open the waiting room on the returned id.
                 StartCoroutine(CreateOnlineRoutine(lobby));
                 return;
             }
 
             // ── legacy local fallback ──
-            if (!CanAffordEntry(lobby)) return;
+            if (!CanAffordEntry(lobby))
+            {
+                _createPanel.SetConfirmInFlight(false);
+                return;
+            }
             _createPanel.Hide();
             SetLobbyChromeActive(false);
             _waitingPanel.Show(lobby, isHost: true);
@@ -764,8 +861,18 @@ namespace ValoCase.UI.Screens
         // ── Online create / join ────────────────────────────────────────────────
         IEnumerator CreateOnlineRoutine(BattleLobbyData lobby)
         {
+            if (_creating) yield break;
+            _creating = true;
+            _createPanel.SetConfirmInFlight(true);
+
             var ctx = GameContext.Instance;
-            if (ctx == null || ctx.Backend == null) { GameEvents.RaiseToast("Sunucu kullanılamıyor."); yield break; }
+            if (ctx == null || ctx.Backend == null)
+            {
+                _creating = false;
+                _createPanel.SetConfirmInFlight(false);
+                GameEvents.RaiseToast("Sunucu kullanılamıyor.");
+                yield break;
+            }
 
             var selections = new List<CaseSelectionRequest>();
             if (lobby.CaseSelections != null)
@@ -793,11 +900,14 @@ namespace ValoCase.UI.Screens
                                  " requiredLevel=" + (err != null ? err.RequiredLevel : 0) +
                                  " msg=" + (err != null ? err.Message : "null response"));
                 GameEvents.RaiseToast(WaitingRoomScreen.MapLobbyError(err));
+                _creating = false;
+                _createPanel.SetConfirmInFlight(false);
                 yield break;
             }
 
             Debug.Log("[BATTLE_LOBBY_DIAG] CREATE ok battleId=" + resp.battleId + " status=" + resp.status);
             ctx.RequestBackendResync();   // entry cost is charged server-side on create
+            _creating = false;
             _createPanel.Hide();
             OpenOnlineRoom(resp.battleId, BattleLobbyMapper.ToLobbyData(resp));
         }

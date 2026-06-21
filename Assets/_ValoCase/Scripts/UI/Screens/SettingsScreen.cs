@@ -3,9 +3,7 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
-using ValoCase.Audio;
 using ValoCase.Core;
-using ValoCase.Haptics;
 using ValoCase.Profile;
 
 namespace ValoCase.UI.Screens
@@ -26,9 +24,6 @@ namespace ValoCase.UI.Screens
         // ── Serialized refs wired by ValoCaseUIBuilder ────────────────────────
         [SerializeField] UINavigator     navigator;
         [SerializeField] Button          backButton;
-        [SerializeField] Toggle          sfxToggle;
-        [SerializeField] Toggle          musicToggle;
-        [SerializeField] Toggle          hapticsToggle;
         [SerializeField] TMP_InputField  playerNameInput;
         [SerializeField] Button          saveProfileButton;
         [SerializeField] Button          resetSaveButton;
@@ -50,15 +45,15 @@ namespace ValoCase.UI.Screens
         TextMeshProUGUI _saveBtnLbl;
 
         // ── Palette ───────────────────────────────────────────────────────────
-        static readonly Color BgPanel       = new Color(0.022f, 0.015f, 0.060f, 0.97f);
-        static readonly Color BgCard        = new Color(0.055f, 0.042f, 0.110f, 1.00f);
-        static readonly Color BgInput       = new Color(0.018f, 0.012f, 0.050f, 1.00f);
-        static readonly Color AccentPink    = new Color(1.00f, 0.18f, 0.55f, 1.00f);
-        static readonly Color AccentPinkSoft= new Color(1.00f, 0.18f, 0.55f, 0.22f);
-        static readonly Color AccentPinkGlow= new Color(1.00f, 0.18f, 0.55f, 0.07f);
-        static readonly Color TextWhite     = new Color(0.97f, 0.97f, 1.00f, 1.00f);
-        static readonly Color TextDim       = new Color(0.48f, 0.45f, 0.62f, 1.00f);
-        static readonly Color BorderPink    = new Color(1.00f, 0.18f, 0.55f, 0.55f);
+        static readonly Color BgPanel       = new Color(0.031f, 0.055f, 0.102f, 0.97f);
+        static readonly Color BgCard        = new Color(0.043f, 0.055f, 0.086f, 1.00f);
+        static readonly Color BgInput       = new Color(0.027f, 0.035f, 0.059f, 1.00f);
+        static readonly Color AccentPink    = new Color(1.00f, 0.122f, 0.224f, 1.00f);
+        static readonly Color AccentPinkSoft= new Color(1.00f, 0.122f, 0.224f, 0.20f);
+        static readonly Color AccentPinkGlow= new Color(1.00f, 0.122f, 0.224f, 0.07f);
+        static readonly Color TextWhite     = new Color(0.925f, 0.910f, 0.882f, 1.00f);
+        static readonly Color TextDim       = new Color(0.58f, 0.59f, 0.61f, 1.00f);
+        static readonly Color BorderPink    = new Color(1.00f, 0.122f, 0.224f, 0.50f);
 
         // ═════════════════════════════════════════════════════════════════════
         // LIFECYCLE
@@ -66,16 +61,15 @@ namespace ValoCase.UI.Screens
 
         void Awake()
         {
-            if (backButton        != null) backButton.onClick.AddListener(OnBackClicked);
+            if (backButton        != null) backButton.gameObject.SetActive(false);
             if (saveProfileButton != null) saveProfileButton.onClick.AddListener(SaveLegacyProfile);
             if (resetSaveButton   != null) resetSaveButton.onClick.AddListener(ResetSave);
-            if (sfxToggle     != null) sfxToggle.onValueChanged.AddListener(OnSfxToggle);
-            if (musicToggle   != null) musicToggle.onValueChanged.AddListener(OnMusicToggle);
-            if (hapticsToggle != null) hapticsToggle.onValueChanged.AddListener(OnHapticsToggle);
         }
 
         protected override void OnShown()
         {
+            if (backButton != null) backButton.gameObject.SetActive(false);
+
             var previousScreen = (navigator != null) ? navigator.PreviousScreen : ScreenType.MainMenu;
             Debug.Log("[SETTINGS] Opened from: " + previousScreen);
 
@@ -132,10 +126,6 @@ namespace ValoCase.UI.Screens
             GameEvents.RaiseToast("Save reset.");
         }
 
-        public void OnSfxToggle(bool on)     { SoundManager.Instance?.SetSfxEnabled(on);  MarkDirty(); }
-        public void OnMusicToggle(bool on)   { SoundManager.Instance?.SetMusicEnabled(on); MarkDirty(); }
-        public void OnHapticsToggle(bool on) { HapticManager.Instance?.SetEnabled(on);     MarkDirty(); }
-
         // ═════════════════════════════════════════════════════════════════════
         // PROFILE SECTION — built once, right-anchored panel
         // ═════════════════════════════════════════════════════════════════════
@@ -156,8 +146,8 @@ namespace ValoCase.UI.Screens
             const float sidePad = 60f;
             var panel = PR(rt, "ProfilePanel",
                 Vector2.zero, Vector2.one, new Vector2(0.5f, 0.5f));
-            panel.offsetMin = new Vector2(sidePad,  ScreenContentFitter.ContentPadding);
-            panel.offsetMax = new Vector2(-sidePad, -ScreenContentFitter.ContentPadding);
+            panel.offsetMin = new Vector2(sidePad,  16f);
+            panel.offsetMax = new Vector2(-sidePad, -16f);
 
             var panelImg = panel.gameObject.AddComponent<Image>();
             panelImg.color = BgPanel;
@@ -174,8 +164,7 @@ namespace ValoCase.UI.Screens
                 new Vector2(0f, 1f), Vector2.one, new Vector2(0.5f, 1f));
             header.anchoredPosition = Vector2.zero;
             header.sizeDelta        = new Vector2(0f, 44f);
-            header.gameObject.AddComponent<Image>().color =
-                new Color(1f, 0.18f, 0.55f, 0.10f);
+            header.gameObject.AddComponent<Image>().color = AccentPinkGlow;
 
             var hLbl = PT(header, "HLbl", "SETTINGS",
                 18f, FontStyles.Bold, TextAlignmentOptions.Center, TextWhite);
@@ -186,8 +175,7 @@ namespace ValoCase.UI.Screens
                 Vector2.zero, new Vector2(1f, 0f), new Vector2(0.5f, 0f));
             hLine.anchoredPosition = Vector2.zero;
             hLine.sizeDelta        = new Vector2(0f, 1f);
-            hLine.gameObject.AddComponent<Image>().color =
-                new Color(1f, 0.18f, 0.55f, 0.20f);
+            hLine.gameObject.AddComponent<Image>().color = AccentPinkSoft;
 
             // ── Scrollable content below header ───────────────────────────────
             var scroll = PR(panel, "Scroll",
@@ -230,7 +218,7 @@ namespace ValoCase.UI.Screens
 
             var vlg = cGo.GetComponent<VerticalLayoutGroup>();
             vlg.childAlignment        = TextAnchor.UpperCenter;
-            vlg.spacing               = 6f;
+            vlg.spacing               = 8f;
             vlg.childForceExpandWidth  = true;
             vlg.childForceExpandHeight = false;
             vlg.padding = new RectOffset(14, 14, 10, 16);
@@ -244,40 +232,18 @@ namespace ValoCase.UI.Screens
             // ── Display name block ────────────────────────────────────────────
             BuildDisplayNameBlock(cRt.transform);
 
-            // ── Divider ───────────────────────────────────────────────────────
-            BuildDivider(cRt.transform);
-
-            // ── "SELECT AVATAR" label ─────────────────────────────────────────
             var selHint = PT(cRt, "GridHint", "SELECT AVATAR",
-                8f, FontStyles.Bold, TextAlignmentOptions.Left, AccentPink);
+                9f, FontStyles.Bold, TextAlignmentOptions.Center, AccentPink);
             selHint.characterSpacing = 3.5f;
             selHint.gameObject.AddComponent<LayoutElement>().minHeight = 18f;
 
             // ── Avatar grid ───────────────────────────────────────────────────
             BuildAvatarGrid(cRt.transform);
 
-            // ── Spacer ────────────────────────────────────────────────────────
             var sp1 = new GameObject("Sp1", typeof(RectTransform), typeof(LayoutElement));
             sp1.transform.SetParent(cRt.transform, false);
             sp1.GetComponent<LayoutElement>().minHeight = 8f;
 
-            // ── Audio section header ──────────────────────────────────────────
-            var audioHdr = PT(cRt, "AudioHdr", "AUDIO",
-                8f, FontStyles.Bold, TextAlignmentOptions.Left, AccentPink);
-            audioHdr.characterSpacing = 3.5f;
-            audioHdr.gameObject.AddComponent<LayoutElement>().minHeight = 18f;
-
-            BuildDivider(cRt.transform);
-
-            // ── Toggles ───────────────────────────────────────────────────────
-            sfxToggle     = BuildSettingsToggle(cRt.transform, "SFX");
-            musicToggle   = BuildSettingsToggle(cRt.transform, "Music");
-            hapticsToggle = BuildSettingsToggle(cRt.transform, "Haptics");
-            sfxToggle.onValueChanged.AddListener(OnSfxToggle);
-            musicToggle.onValueChanged.AddListener(OnMusicToggle);
-            hapticsToggle.onValueChanged.AddListener(OnHapticsToggle);
-
-            // ── Spacer ────────────────────────────────────────────────────────
             var sp2 = new GameObject("Sp2", typeof(RectTransform), typeof(LayoutElement));
             sp2.transform.SetParent(cRt.transform, false);
             sp2.GetComponent<LayoutElement>().minHeight = 12f;
@@ -310,53 +276,6 @@ namespace ValoCase.UI.Screens
             playerNameInput = _displayNameInput;
         }
 
-        // ── Audio toggle row (LayoutGroup driven) ─────────────────────────────
-        Toggle BuildSettingsToggle(Transform parent, string label)
-        {
-            var row = new GameObject($"Toggle_{label}",
-                typeof(RectTransform), typeof(Toggle), typeof(LayoutElement));
-            row.transform.SetParent(parent, false);
-            row.GetComponent<LayoutElement>().minHeight = 32f;
-
-            var toggle = row.GetComponent<Toggle>();
-            toggle.transition = Selectable.Transition.None;
-
-            // Checkbox background
-            var bgGo = new GameObject("BG", typeof(RectTransform), typeof(Image));
-            bgGo.transform.SetParent(row.transform, false);
-            var bgRt = (RectTransform)bgGo.transform;
-            bgRt.anchorMin        = new Vector2(0f, 0.5f);
-            bgRt.anchorMax        = new Vector2(0f, 0.5f);
-            bgRt.pivot            = new Vector2(0f, 0.5f);
-            bgRt.anchoredPosition = new Vector2(12f, 0f);
-            bgRt.sizeDelta        = new Vector2(36f, 20f);
-            var bgImg = bgGo.GetComponent<Image>();
-            bgImg.color        = BgCard;
-            toggle.targetGraphic = bgImg;
-
-            // Checkmark fill
-            var ckGo = new GameObject("Checkmark", typeof(RectTransform), typeof(Image));
-            ckGo.transform.SetParent(bgGo.transform, false);
-            var ckRt = (RectTransform)ckGo.transform;
-            ckRt.anchorMin = Vector2.zero; ckRt.anchorMax = Vector2.one;
-            ckRt.offsetMin = new Vector2(2f, 2f); ckRt.offsetMax = new Vector2(-2f, -2f);
-            var ckImg = ckGo.GetComponent<Image>();
-            ckImg.color   = AccentPink;
-            toggle.graphic = ckImg;
-
-            // Label
-            var lbl = PT(row.transform, "Label", label,
-                13f, FontStyles.Bold, TextAlignmentOptions.MidlineLeft, TextWhite);
-            var lRt = lbl.rectTransform;
-            lRt.anchorMin        = Vector2.zero;
-            lRt.anchorMax        = Vector2.one;
-            lRt.offsetMin        = new Vector2(58f, 0f);
-            lRt.offsetMax        = Vector2.zero;
-
-            toggle.isOn = true;
-            return toggle;
-        }
-
         // ── Full-width action button (LayoutGroup driven) ─────────────────────
         Button BuildActionButton(Transform parent, string label, Color tint)
         {
@@ -366,7 +285,7 @@ namespace ValoCase.UI.Screens
             btnGo.transform.SetParent(parent, false);
             btnGo.GetComponent<LayoutElement>().minHeight = 44f;
             var btnImg = btnGo.GetComponent<Image>();
-            btnImg.color = new Color(0.03f, 0.020f, 0.075f, 0.96f);
+            btnImg.color = BgInput;
             var ol = btnGo.GetComponent<Outline>();
             ol.effectColor    = tint;
             ol.effectDistance = new Vector2(1.5f, -1.5f);
@@ -382,7 +301,7 @@ namespace ValoCase.UI.Screens
             AddPE(et, EventTriggerType.PointerEnter,
                 _ => btnImg.color = new Color(tint.r * 0.15f, tint.g * 0.15f, tint.b * 0.15f, 0.96f));
             AddPE(et, EventTriggerType.PointerExit,
-                _ => btnImg.color = new Color(0.03f, 0.020f, 0.075f, 0.96f));
+                _ => btnImg.color = BgInput);
 
             return btn;
         }
@@ -393,7 +312,7 @@ namespace ValoCase.UI.Screens
             var block = new GameObject("AvPreviewBlock", typeof(RectTransform),
                 typeof(LayoutElement));
             block.transform.SetParent(parent, false);
-            block.GetComponent<LayoutElement>().minHeight = 104f;
+            block.GetComponent<LayoutElement>().minHeight = 112f;
 
             const float bigAv = 76f;
 
@@ -404,7 +323,7 @@ namespace ValoCase.UI.Screens
             ringRt.anchorMin        = new Vector2(0.5f, 0.5f);
             ringRt.anchorMax        = new Vector2(0.5f, 0.5f);
             ringRt.pivot            = new Vector2(0.5f, 0.5f);
-            ringRt.anchoredPosition = new Vector2(0f, 8f);
+            ringRt.anchoredPosition = new Vector2(0f, 12f);
             ringRt.sizeDelta        = new Vector2(bigAv + 10f, bigAv + 10f);
             var rImg = ringGo.GetComponent<Image>();
             rImg.sprite        = _circleMaskSprite;
@@ -430,7 +349,7 @@ namespace ValoCase.UI.Screens
             _agentNameLbl.rectTransform.anchorMin        = new Vector2(0f, 0f);
             _agentNameLbl.rectTransform.anchorMax        = new Vector2(1f, 0f);
             _agentNameLbl.rectTransform.pivot            = new Vector2(0.5f, 0f);
-            _agentNameLbl.rectTransform.anchoredPosition = new Vector2(0f, -4f);
+            _agentNameLbl.rectTransform.anchoredPosition = new Vector2(0f, 0f);
             _agentNameLbl.rectTransform.sizeDelta        = new Vector2(0f, 18f);
             _agentNameLbl.enableWordWrapping             = false;
         }
@@ -438,26 +357,22 @@ namespace ValoCase.UI.Screens
         // ── Display name input + save button ──────────────────────────────────
         void BuildDisplayNameBlock(Transform parent)
         {
-            // Küçük üst boşluk
-            var topSp = new GameObject("DisplayNameTopSp", typeof(RectTransform), typeof(LayoutElement));
-            topSp.transform.SetParent(parent, false);
-            topSp.GetComponent<LayoutElement>().minHeight = 2f;
+            var block = new GameObject("DisplayNameBlock",
+                typeof(RectTransform), typeof(LayoutElement));
+            block.transform.SetParent(parent, false);
+            block.GetComponent<LayoutElement>().minHeight = 52f;
 
-            // "DISPLAY NAME" label
-            var hint = PT(parent, "DNHint", "DISPLAY NAME",
-                8f, FontStyles.Bold, TextAlignmentOptions.Left, AccentPink);
-            hint.characterSpacing = 3f;
-            hint.gameObject.AddComponent<LayoutElement>().minHeight = 18f;
-
-            // Input wrapper
             var iwGo = new GameObject("InputWrap",
-                typeof(RectTransform), typeof(Image), typeof(Outline), typeof(LayoutElement));
-            iwGo.transform.SetParent(parent, false);
-            iwGo.GetComponent<LayoutElement>().minHeight = 42f;
+                typeof(RectTransform), typeof(Image), typeof(Outline));
+            iwGo.transform.SetParent(block.transform, false);
+            var iwRt = (RectTransform)iwGo.transform;
+            iwRt.anchorMin = iwRt.anchorMax = iwRt.pivot = new Vector2(0.5f, 0.5f);
+            iwRt.anchoredPosition = Vector2.zero;
+            iwRt.sizeDelta = new Vector2(240f, 42f);
             iwGo.GetComponent<Image>().color = BgInput;
 
             var iwOl = iwGo.GetComponent<Outline>();
-            iwOl.effectColor    = new Color(1f, 0.18f, 0.55f, 0.40f);
+            iwOl.effectColor    = BorderPink;
             iwOl.effectDistance = new Vector2(1f, -1f);
 
             _displayNameInput = BuildInputField(
@@ -472,7 +387,7 @@ namespace ValoCase.UI.Screens
             var div = new GameObject("Div",
                 typeof(RectTransform), typeof(Image), typeof(LayoutElement));
             div.transform.SetParent(parent, false);
-            div.GetComponent<Image>().color = new Color(1f, 0.18f, 0.55f, 0.10f);
+            div.GetComponent<Image>().color = AccentPinkGlow;
             div.GetComponent<LayoutElement>().minHeight = 1f;
         }
 
@@ -488,7 +403,7 @@ namespace ValoCase.UI.Screens
             glg.cellSize        = new Vector2(78f, 98f);
             glg.spacing         = new Vector2(8f, 8f);
             glg.padding         = new RectOffset(4, 4, 4, 4);
-            glg.childAlignment  = TextAnchor.UpperLeft;
+            glg.childAlignment  = TextAnchor.UpperCenter;
             glg.constraint      = GridLayoutGroup.Constraint.FixedColumnCount;
             glg.constraintCount = 4;
 
@@ -531,7 +446,7 @@ namespace ValoCase.UI.Screens
             cellImg.color = BgCard;
 
             var ol = cell.gameObject.AddComponent<Outline>();
-            ol.effectColor    = sel ? AccentPink : new Color(1f, 0.18f, 0.55f, 0.07f);
+            ol.effectColor    = sel ? AccentPink : AccentPinkGlow;
             ol.effectDistance = new Vector2(sel ? 2.5f : 0.6f, -(sel ? 2.5f : 0.6f));
 
             // Hover
@@ -575,14 +490,14 @@ namespace ValoCase.UI.Screens
         void OnCellEnter(string key, Outline ol)
         {
             if (key == _pendingKey) return;
-            ol.effectColor    = new Color(1f, 0.18f, 0.55f, 0.38f);
+            ol.effectColor    = BorderPink;
             ol.effectDistance = new Vector2(1.5f, -1.5f);
         }
 
         void OnCellExit(string key, Outline ol)
         {
             bool sel = key == _pendingKey;
-            ol.effectColor    = sel ? AccentPink : new Color(1f, 0.18f, 0.55f, 0.07f);
+            ol.effectColor    = sel ? AccentPink : AccentPinkGlow;
             ol.effectDistance = new Vector2(sel ? 2.5f : 0.6f, -(sel ? 2.5f : 0.6f));
         }
 
@@ -609,7 +524,7 @@ namespace ValoCase.UI.Screens
                 var ol = child.GetComponent<Outline>();
                 if (ol != null)
                 {
-                    ol.effectColor    = sel ? AccentPink : new Color(1f, 0.18f, 0.55f, 0.07f);
+                    ol.effectColor    = sel ? AccentPink : AccentPinkGlow;
                     ol.effectDistance = new Vector2(sel ? 2.5f : 0.6f, -(sel ? 2.5f : 0.6f));
                 }
                 var lbl = child.Find("Name")?.GetComponent<TextMeshProUGUI>();
@@ -746,8 +661,8 @@ namespace ValoCase.UI.Screens
                 ? AccentPink
                 : new Color(AccentPink.r * 0.35f, AccentPink.g * 0.35f, AccentPink.b * 0.35f, 0.50f);
             Color bgColor = active
-                ? new Color(0.03f, 0.020f, 0.075f, 0.96f)
-                : new Color(0.02f, 0.015f, 0.050f, 0.55f);
+                ? BgInput
+                : new Color(BgInput.r, BgInput.g, BgInput.b, 0.55f);
             if (_saveBtnImg != null) _saveBtnImg.color         = bgColor;
             if (_saveBtnOl  != null) _saveBtnOl.effectColor    = labelColor;
             if (_saveBtnLbl != null) _saveBtnLbl.color         = labelColor;
@@ -856,7 +771,7 @@ namespace ValoCase.UI.Screens
             field.characterLimit = 20;
             field.contentType    = TMP_InputField.ContentType.Standard;
             field.caretColor     = AccentPink;
-            field.selectionColor = new Color(1f, 0.18f, 0.55f, 0.28f);
+            field.selectionColor = AccentPinkSoft;
 
             return field;
         }
