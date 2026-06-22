@@ -43,3 +43,9 @@ MonoBehaviour:
     textColor: {r: 1, g: 1, b: 1, a: 1}
     glowIntensity: 1.6
     cardBgColor: {r: 0.06, g: 0.48, b: 0.1, a: 1}
+  - rarity: 5
+    primaryColor: {r: 1, g: 0.82, b: 0.29, a: 1}
+    glowColor: {r: 1.2, g: 0.984, b: 0.348, a: 1.2}
+    textColor: {r: 1, g: 1, b: 1, a: 1}
+    glowIntensity: 1.6
+    cardBgColor: {r: 0.45, g: 0.34, b: 0.06, a: 1}

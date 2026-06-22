@@ -49,6 +49,8 @@ namespace ValoCase.UI.Screens
         // to the old dropdown slot. Stays above the grid (grid top inset is 330).
         const float HeaderButtonDrop = 25f;
 
+        const int GridColumns = 5;
+
         void Awake()
         {
             if (backButton != null)
@@ -144,6 +146,34 @@ namespace ValoCase.UI.Screens
             }
             rt.offsetMax = new Vector2(rt.offsetMax.x, -GridTopPadding);
             rt.offsetMin = new Vector2(rt.offsetMin.x, bottom);
+
+            ApplyResponsiveGrid();
+        }
+
+        // Fits exactly GridColumns cards per row by deriving the cell width from the live
+        // viewport width, so no horizontal space is left unused at any screen size. The
+        // card aspect ratio is preserved from the authored cell size.
+        void ApplyResponsiveGrid()
+        {
+            if (gridRoot == null) return;
+            var grid = gridRoot.GetComponent<GridLayoutGroup>();
+            if (grid == null || gridRoot.parent is not RectTransform viewport) return;
+
+            float width = viewport.rect.width;
+            if (width < 1f) return;
+
+            float avail = width - grid.padding.left - grid.padding.right
+                          - grid.spacing.x * (GridColumns - 1);
+            if (avail < 1f) return;
+
+            float aspect = grid.cellSize.x > 0f && grid.cellSize.y > 0f
+                ? grid.cellSize.y / grid.cellSize.x
+                : 260f / 180f;
+            float cellW = avail / GridColumns;
+
+            grid.constraint = GridLayoutGroup.Constraint.FixedColumnCount;
+            grid.constraintCount = GridColumns;
+            grid.cellSize = new Vector2(cellW, cellW * aspect);
         }
 
         void OnRectTransformDimensionsChange()

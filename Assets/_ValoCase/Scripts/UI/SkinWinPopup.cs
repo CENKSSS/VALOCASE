@@ -51,6 +51,7 @@ namespace ValoCase.UI
             { SkinRarity.Premium,   new Color(0.65f, 0.13f, 0.98f, 1f) },
             { SkinRarity.Exclusive, new Color(0.86f, 0.16f, 0.26f, 1f) },
             { SkinRarity.Ultra,     new Color(1.00f, 0.63f, 0.00f, 1f) },
+            { SkinRarity.Melee,     new Color(1.00f, 0.82f, 0.29f, 1f) },
         };
 
         Action    _onConfirm;

@@ -30,6 +30,7 @@ namespace ValoCase.UI
         public static readonly Color RarityRare      = Hex(0xA2, 0x59, 0xFF); // Premium
         public static readonly Color RarityEpic      = Hex(0xFF, 0x8C, 0x00); // Exclusive
         public static readonly Color RarityLegendary = Hex(0xFF, 0x1F, 0x39); // Ultra
+        public static readonly Color RarityMelee     = Hex(0xFF, 0xD1, 0x4A); // Melee — gold
 
         /// <summary>Maps the existing SkinRarity enum to its accent color.</summary>
         public static Color ForRarity(SkinRarity rarity)
@@ -40,6 +41,7 @@ namespace ValoCase.UI
                 case SkinRarity.Premium:   return RarityRare;
                 case SkinRarity.Exclusive: return RarityEpic;
                 case SkinRarity.Ultra:     return RarityLegendary;
+                case SkinRarity.Melee:     return RarityMelee;
                 default:                   return RarityCommon;
             }
         }

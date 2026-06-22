@@ -196,6 +196,7 @@ namespace ValoCase.Data
             if (n.Contains("ihtis") || n == "premium")   return SkinRarity.Premium;
             if (n.Contains("seckin")|| n == "exclusive") return SkinRarity.Exclusive;
             if (n.Contains("ultra"))                      return SkinRarity.Ultra;
+            if (n.Contains("melee"))                      return SkinRarity.Melee;
 
             return null;
         }

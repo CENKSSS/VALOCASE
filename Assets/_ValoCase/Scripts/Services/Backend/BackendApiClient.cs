@@ -934,6 +934,7 @@ namespace ValoCase.Services.Backend
     public sealed class AdRewardClaimRequest
     {
         public string   rewardType;      // EARN_VP_2X | UPGRADE_PLUS_5
+        public string   adToken;         // per-watch token from the rewarded ad; backend requires it to arm the reward
         public string   earnSessionId;   // EARN_VP_2X context
         public string[] inputItemIds;    // UPGRADE_PLUS_5 context
         public string   targetSkinId;

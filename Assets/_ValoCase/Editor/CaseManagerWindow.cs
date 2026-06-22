@@ -15,7 +15,7 @@ namespace ValoCase.EditorTools
         const string CaseArtDir = "Assets/_ValoCase/Resources/Art/Cases";
         const string CaseArtResourcePrefix = "Art/Cases/";
 
-        static readonly string[] RarityOrder = { "Select", "Deluxe", "Premium", "Exclusive", "Ultra" };
+        static readonly string[] RarityOrder = { "Select", "Deluxe", "Premium", "Exclusive", "Ultra", "Melee" };
 
         sealed class SkinRow
         {
@@ -324,9 +324,9 @@ namespace ValoCase.EditorTools
                     if (total > 0f) foreach (var w in c.rarityWeights) w.weight = w.weight / total * 100f;
                     _dirty = true;
                 }
-                if (GUILayout.Button("Melee Exclusive 100"))
+                if (GUILayout.Button("Melee 100"))
                 {
-                    foreach (var w in c.rarityWeights) w.weight = w.rarity == "Exclusive" ? 100f : 0f;
+                    foreach (var w in c.rarityWeights) w.weight = w.rarity == "Melee" ? 100f : 0f;
                     _dirty = true;
                 }
             }
@@ -340,6 +340,50 @@ namespace ValoCase.EditorTools
                 if (w.weight > 0f && !poolRarities.Contains(r))
                     EditorGUILayout.HelpBox($"Rarity '{r}' has weight {w.weight:0.##} but no skin of that rarity is in the pool.", MessageType.Warning);
             }
+
+            EditorGUILayout.Space(2);
+            var ev = ComputeExpectedValue(c, out var evMissing);
+            EditorGUILayout.LabelField("Average Reward Value",
+                ev.HasValue ? $"{ev.Value:N0} VP" : "—", EditorStyles.boldLabel);
+            if (!string.IsNullOrEmpty(evMissing))
+                EditorGUILayout.HelpBox(evMissing, MessageType.Info);
+        }
+
+        // Display-only EV: per-rarity average pool VP weighted by the rarity weights,
+        // normalized over rarities that actually have pool skins. Never mutates state.
+        float? ComputeExpectedValue(CaseCatalogEntry c, out string missingWarning)
+        {
+            missingWarning = null;
+            var pool = c.manualDropPool ?? Array.Empty<string>();
+            if (pool.Length == 0 || c.rarityWeights == null) return null;
+
+            var vpByRarity = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var id in pool)
+            {
+                if (string.IsNullOrEmpty(id) || !_skinById.TryGetValue(id, out var s)) continue;
+                if (string.IsNullOrEmpty(s.rarity)) continue;
+                if (!vpByRarity.TryGetValue(s.rarity, out var list))
+                    vpByRarity[s.rarity] = list = new List<int>();
+                list.Add(Mathf.Max(0, s.vpValue));
+            }
+
+            float weightedSum = 0f, totalWeight = 0f;
+            var missing = new List<string>();
+            foreach (var w in c.rarityWeights)
+            {
+                if (w == null || w.weight <= 0f) continue;
+                if (!vpByRarity.TryGetValue(w.rarity, out var vps) || vps.Count == 0)
+                {
+                    missing.Add(w.rarity);
+                    continue;
+                }
+                weightedSum += (float)vps.Average() * w.weight;
+                totalWeight += w.weight;
+            }
+
+            if (missing.Count > 0) missingWarning = "Missing pool for: " + string.Join(", ", missing);
+            if (totalWeight <= 0f) return null;
+            return weightedSum / totalWeight;
         }
 
         void DrawPoolSection(CaseCatalogEntry c)

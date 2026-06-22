@@ -96,6 +96,7 @@ namespace ValoCase.UI.Screens
             { SkinRarity.Premium,   new Color(0.69f, 0.15f, 1f,    1f) },
             { SkinRarity.Exclusive, new Color(1f,    0.18f, 0.67f, 1f) },
             { SkinRarity.Ultra,     new Color(0.22f, 1f,    0.08f, 1f) },
+            { SkinRarity.Melee,     new Color(1f,    0.82f, 0.29f, 1f) },
         };
 
         // ── State ─────────────────────────────────────────────────────────────
@@ -1538,7 +1539,7 @@ namespace ValoCase.UI.Screens
             if (res == null) return;
             if (res.canUpgrade)
             {
-                float chance01 = Mathf.Clamp01(res.chancePercent / 100f);
+                float chance01 = ApplyAdBuffChance(Mathf.Clamp01(res.chancePercent / 100f));
                 ApplyChanceUi(chance01, true, $"{res.inputValue:N0} VP → {res.targetValue:N0} VP", true, loading: false);
             }
             else
@@ -1546,6 +1547,11 @@ namespace ValoCase.UI.Screens
                 ApplyChanceUi(0f, false, "Yükseltilemez", false, loading: false);
             }
         }
+
+        // The backend preview returns the base chance; the armed +5% bonus is applied
+        // server-side at execute time, so the UI must add it on top to match real odds.
+        float ApplyAdBuffChance(float chance01)
+            => _adBuffActive ? Mathf.Clamp01(chance01 + 0.05f) : chance01;
 
         void ApplyChanceUi(float chance01, bool canUpgrade, string hint, bool hintBright, bool loading)
         {
@@ -1789,6 +1795,7 @@ namespace ValoCase.UI.Screens
 
         void ApplyAdBuffStatus(AdRewardPlacementStatus s)
         {
+            bool wasActive = _adBuffActive;
             if (s != null)
             {
                 _adBuffAvailable         = s.isAvailable;
@@ -1806,6 +1813,7 @@ namespace ValoCase.UI.Screens
                 _adBuffCooldownRemaining = 0f;
             }
             RefreshAdBuffButton();
+            if (_adBuffActive != wasActive && _lastPreview != null && !_isUpgrading) ApplyPreview(_lastPreview);
         }
 
         void OnAdBuffClicked()
@@ -1936,7 +1944,7 @@ namespace ValoCase.UI.Screens
             int targetTotal = 0;
             for (int i = 0; i < targets.Count; i++) targetTotal += targets[i].VpValue;
             float chance = ctx.BackendEnabled && _lastPreview != null
-                ? Mathf.Clamp01(_lastPreview.chancePercent / 100f)
+                ? ApplyAdBuffChance(Mathf.Clamp01(_lastPreview.chancePercent / 100f))
                 : ctx.Upgrade.ComputeValueChance(total, targetTotal);
             _spinAnimator?.SetChance(chance);
 

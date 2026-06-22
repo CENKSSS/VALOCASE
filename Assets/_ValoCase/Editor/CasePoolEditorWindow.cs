@@ -38,7 +38,7 @@ namespace ValoCase.EditorTools
         int      _caseIndex;
 
         string   _search = "";
-        string[] _rarityOptions = { "All", "Select", "Deluxe", "Premium", "Exclusive", "Ultra" };
+        string[] _rarityOptions = { "All", "Select", "Deluxe", "Premium", "Exclusive", "Ultra", "Melee" };
         int      _rarityIndex;
         string[] _weaponOptions = { "All" };
         int      _weaponIndex;

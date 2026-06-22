@@ -39,6 +39,7 @@ namespace ValoCase.Data
                 { SkinRarity.Premium,   new[] { "ihtisam", "premium"   } },
                 { SkinRarity.Exclusive, new[] { "seckin",  "exclusive" } },
                 { SkinRarity.Ultra,     new[] { "ultra"               } },
+                { SkinRarity.Melee,     new[] { "melee"               } },
             };
 
         // ── Public API ────────────────────────────────────────────────────────

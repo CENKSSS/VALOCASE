@@ -27,7 +27,8 @@ namespace ValoCase.Data
             SkinRarity.Deluxe,     // Üstün     rank 1
             SkinRarity.Premium,    // İhtişamlı rank 2
             SkinRarity.Exclusive,  // Seçkin    rank 3
-            SkinRarity.Ultra,      // Ultra     rank 4 (highest)
+            SkinRarity.Ultra,      // Ultra     rank 4
+            SkinRarity.Melee,      // Melee     rank 5 (highest)
         };
 
         // ── Rank lookup ───────────────────────────────────────────────────────
@@ -71,6 +72,7 @@ namespace ValoCase.Data
                 { SkinRarity.Premium,   "İhtişamlı Seri" },
                 { SkinRarity.Ultra,     "Ultra Seri"      },
                 { SkinRarity.Exclusive, "Seçkin Seri"    },
+                { SkinRarity.Melee,     "Melee Seri"     },
             };
 
         /// <summary>Short Turkish labels ("Özel", "Seçkin", …) for pills and chips.</summary>
@@ -82,6 +84,7 @@ namespace ValoCase.Data
                 { SkinRarity.Premium,   "İhtişamlı" },
                 { SkinRarity.Ultra,     "Ultra"     },
                 { SkinRarity.Exclusive, "Seçkin"    },
+                { SkinRarity.Melee,     "Melee"     },
             };
 
         // ── Upgrade eligibility ───────────────────────────────────────────────

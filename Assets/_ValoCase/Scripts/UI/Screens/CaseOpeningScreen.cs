@@ -965,6 +965,10 @@ namespace ValoCase.UI.Screens
             int oldChildCount = containerTf != null ? containerTf.childCount : 0;
             Debug.Log("[CASE_RARITY_TABLE] rows before=" + oldChildCount);
 
+            // Height tracks the rarity count so added rarities never overflow the panel.
+            int rarityRowCount = k_RarityOrder.Length;
+            float tableHeight = 30f + rarityRowCount * 46f + 28f + 8f * rarityRowCount;
+
             if (containerTf == null)
             {
                 var cGo = new GameObject(containerName, typeof(RectTransform), typeof(Image));
@@ -975,8 +979,7 @@ namespace ValoCase.UI.Screens
                 cRt.anchorMax        = new Vector2(0.94f, 1f);
                 cRt.pivot            = new Vector2(0.5f, 1f);
                 cRt.anchoredPosition = new Vector2(0f, -648f);
-                // title 30 + 5 rows×46 + padding(14+14) + spacing(8×5) = 328
-                cRt.sizeDelta        = new Vector2(0f, 328f);
+                cRt.sizeDelta        = new Vector2(0f, tableHeight);
                 var bg = cGo.GetComponent<Image>();
                 bg.sprite        = RoundedSprite();
                 bg.type          = Image.Type.Sliced;
@@ -1003,6 +1006,9 @@ namespace ValoCase.UI.Screens
                     if (ch != null) Destroy(ch.gameObject);
                 }
             }
+
+            ((RectTransform)containerTf).sizeDelta =
+                new Vector2(((RectTransform)containerTf).sizeDelta.x, tableHeight);
 
             // ── Title ─────────────────────────────────────────────────────────
             MakeRateTableRow(containerTf, "Title", "KASA ORANLARI", "",
@@ -1273,7 +1279,7 @@ namespace ValoCase.UI.Screens
         {
             if (table?.RarityWeights == null || table.RarityWeights.Count == 0) return "—";
 
-            var order = new[] { SkinRarity.Select, SkinRarity.Deluxe, SkinRarity.Premium, SkinRarity.Exclusive, SkinRarity.Ultra };
+            var order = new[] { SkinRarity.Select, SkinRarity.Deluxe, SkinRarity.Premium, SkinRarity.Exclusive, SkinRarity.Ultra, SkinRarity.Melee };
             var parts = new System.Text.StringBuilder();
             bool first = true;
             foreach (var rarity in order)
@@ -1287,6 +1293,7 @@ namespace ValoCase.UI.Screens
                          : rarity == SkinRarity.Premium   ? "Premium"
                          : rarity == SkinRarity.Exclusive ? "Exclusive"
                          : rarity == SkinRarity.Ultra     ? "Ultra"
+                         : rarity == SkinRarity.Melee     ? "Melee"
                          : rarity.ToString();
                 parts.Append(name).Append(" %").Append(entry.weightPercent.ToString("F0"));
             }
@@ -2508,8 +2515,8 @@ namespace ValoCase.UI.Screens
         static readonly Color NeonCyan  = new Color(0.196f, 0.804f, 0.969f, 1f); // #32CDF7
 
         // Rarity display data for the rate table (Select → Ultra)
-        static readonly SkinRarity[] k_RarityOrder  = { SkinRarity.Select, SkinRarity.Deluxe, SkinRarity.Premium, SkinRarity.Exclusive, SkinRarity.Ultra };
-        static readonly string[]     k_RarityNames  = { "SELECT", "DELUXE", "PREMIUM", "EXCLUSIVE", "ULTRA" };
+        static readonly SkinRarity[] k_RarityOrder  = { SkinRarity.Select, SkinRarity.Deluxe, SkinRarity.Premium, SkinRarity.Exclusive, SkinRarity.Ultra, SkinRarity.Melee };
+        static readonly string[]     k_RarityNames  = { "SELECT", "DELUXE", "PREMIUM", "EXCLUSIVE", "ULTRA", "MELEE" };
         static readonly Color[]      k_RarityColors =
         {
             new Color(0.56f, 0.63f, 0.78f, 1f), // Select   — blue-gray
@@ -2517,6 +2524,7 @@ namespace ValoCase.UI.Screens
             new Color(0.65f, 0.13f, 0.98f, 1f), // Premium  — purple
             new Color(0.86f, 0.16f, 0.26f, 1f), // Exclusive— red
             new Color(1.00f, 0.63f, 0.00f, 1f), // Ultra    — gold
+            new Color(1.00f, 0.82f, 0.29f, 1f), // Melee    — bright gold
         };
 
         void ApplyDarkBackground()

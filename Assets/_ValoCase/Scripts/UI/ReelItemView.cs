@@ -35,9 +35,10 @@ namespace ValoCase.UI
 
             if (icon != null)
             {
-                icon.sprite         = skin.Icon;
+                var sprite          = ResolveRollSprite(skin);
+                icon.sprite         = sprite;
                 icon.color          = Color.white;
-                icon.enabled        = skin.Icon != null;
+                icon.enabled        = sprite != null;
                 icon.preserveAspect = true;
                 icon.material       = null;
                 icon.raycastTarget  = false;
@@ -45,6 +46,25 @@ namespace ValoCase.UI
             }
 
             if (skinLabel != null) skinLabel.text = skin.SkinName;
+        }
+
+        // Roll-only presentation override: Melee rewards spin behind a generic golden
+        // mystery icon; the real skin is revealed in the result popup and inventory.
+        static Sprite _meleeMysteryIcon;
+        static bool   _meleeMysteryResolved;
+
+        static Sprite ResolveRollSprite(SkinDefinitionSO skin)
+        {
+            if (string.Equals(skin.WeaponName, "Melee", System.StringComparison.OrdinalIgnoreCase))
+            {
+                if (!_meleeMysteryResolved)
+                {
+                    _meleeMysteryResolved = true;
+                    _meleeMysteryIcon = Resources.Load<Sprite>(ProjectPaths.MeleeMysteryIconPath);
+                }
+                if (_meleeMysteryIcon != null) return _meleeMysteryIcon;
+            }
+            return skin.Icon;
         }
 
         // Same neutral dark slot for every card during the spin — rarity is only

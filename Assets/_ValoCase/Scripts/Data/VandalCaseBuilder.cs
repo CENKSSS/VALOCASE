@@ -419,6 +419,7 @@ namespace ValoCase.Data
                 (SkinRarity.Premium,   W(SkinRarity.Premium)),
                 (SkinRarity.Exclusive, W(SkinRarity.Exclusive)),
                 (SkinRarity.Ultra,     W(SkinRarity.Ultra)),
+                (SkinRarity.Melee,     W(SkinRarity.Melee)),
             };
         }
 

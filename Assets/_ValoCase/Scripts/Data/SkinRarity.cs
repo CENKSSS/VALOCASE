@@ -6,6 +6,7 @@ namespace ValoCase.Data
         Deluxe = 1,
         Premium = 2,
         Exclusive = 3,
-        Ultra = 4
+        Ultra = 4,
+        Melee = 5
     }
 }

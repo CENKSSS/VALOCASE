@@ -573,13 +573,13 @@ namespace ValoCase.Core
             if (!HasGuestToken) { onFailed?.Invoke("AUTH_PENDING"); return; }
             if (RewardedAds == null || !RewardedAds.IsReady) { onFailed?.Invoke("Reklam şu anda hazır değil."); return; }
 
-            RewardedAds.Show(AdRewardTypes.EarnVp2x, (result, _) =>
+            RewardedAds.Show(AdRewardTypes.EarnVp2x, (result, token) =>
             {
                 switch (result)
                 {
                     case RewardedAdResult.Completed:
                         StartCoroutine(ClaimAdRoutine(
-                            new AdRewardClaimRequest { rewardType = AdRewardTypes.EarnVp2x, earnSessionId = earnSessionId },
+                            new AdRewardClaimRequest { rewardType = AdRewardTypes.EarnVp2x, adToken = token, earnSessionId = earnSessionId },
                             onClaimed, onFailed));
                         break;
                     case RewardedAdResult.Cancelled: onCancelled?.Invoke(); break;
@@ -645,12 +645,12 @@ namespace ValoCase.Core
             if (!HasGuestToken) { onFailed?.Invoke("AUTH_PENDING"); return; }
             if (RewardedAds == null || !RewardedAds.IsReady) { onFailed?.Invoke("Reklam şu anda hazır değil."); return; }
 
-            RewardedAds.Show(AdRewardTypes.UpgradePlus5, (result, _) =>
+            RewardedAds.Show(AdRewardTypes.UpgradePlus5, (result, token) =>
             {
                 switch (result)
                 {
                     case RewardedAdResult.Completed:
-                        StartCoroutine(UpgradeClaimRoutine(inputs, targets, onClaimed, onFailed));
+                        StartCoroutine(UpgradeClaimRoutine(inputs, targets, token, onClaimed, onFailed));
                         break;
                     case RewardedAdResult.Cancelled: onCancelled?.Invoke(); break;
                     default: onFailed?.Invoke("Reklam gösterilemedi. Lütfen tekrar dene."); break;
@@ -667,12 +667,12 @@ namespace ValoCase.Core
 
             if (!HasGuestToken) { onFailed?.Invoke("AUTH_PENDING"); return; }
 
-            RewardedAds.Show(AdRewardTypes.UpgradePlus5, (result, _) =>
+            RewardedAds.Show(AdRewardTypes.UpgradePlus5, (result, token) =>
             {
                 switch (result)
                 {
                     case RewardedAdResult.Completed:
-                        StartCoroutine(UpgradeClaimRoutine(context, onClaimed, onFailed));
+                        StartCoroutine(UpgradeClaimRoutine(context, token, onClaimed, onFailed));
                         break;
                     case RewardedAdResult.Cancelled: onCancelled?.Invoke(); break;
                     default: onFailed?.Invoke("Reklam gÃ¶sterilemedi. LÃ¼tfen tekrar dene."); break;
@@ -681,7 +681,7 @@ namespace ValoCase.Core
         }
 
         IEnumerator UpgradeClaimRoutine(List<SkinDefinitionSO> inputs, IReadOnlyList<SkinDefinitionSO> targets,
-            Action<AdRewardClaimResponse> onDone, Action<string> onFailed)
+            string adToken, Action<AdRewardClaimResponse> onDone, Action<string> onFailed)
         {
             List<string> itemIds = null; string resolveError = null;
             yield return ResolveUpgradeItemIdsWithRefresh(new List<SkinDefinitionSO>(inputs),
@@ -696,6 +696,7 @@ namespace ValoCase.Core
             var request = new AdRewardClaimRequest
             {
                 rewardType    = AdRewardTypes.UpgradePlus5,
+                adToken       = adToken,
                 inputItemIds  = itemIds.ToArray(),
                 targetSkinIds = targetSkinIds,
                 targetSkinId  = targetSkinIds.Length > 0 ? targetSkinIds[0] : null
@@ -704,11 +705,12 @@ namespace ValoCase.Core
         }
 
         IEnumerator UpgradeClaimRoutine(UpgradeRewardContext context,
-            Action<AdRewardClaimResponse> onDone, Action<string> onFailed)
+            string adToken, Action<AdRewardClaimResponse> onDone, Action<string> onFailed)
         {
             var request = new AdRewardClaimRequest
             {
                 rewardType    = AdRewardTypes.UpgradePlus5,
+                adToken       = adToken,
                 inputItemIds  = context.InputItemIds,
                 targetSkinIds = context.TargetSkinIds,
                 targetSkinId  = context.TargetSkinId
@@ -741,6 +743,12 @@ namespace ValoCase.Core
         IEnumerator ClaimAdRoutine(AdRewardClaimRequest request,
             Action<AdRewardClaimResponse> onDone, Action<string> onFailed)
         {
+            if (request == null || string.IsNullOrEmpty(request.adToken))
+            {
+                onFailed?.Invoke("Reklam doğrulanamadı. Lütfen tekrar dene.");
+                yield break;
+            }
+
             AdRewardClaimResponse res = null;
             BackendError error = null;
 #if UNITY_EDITOR || DEVELOPMENT_BUILD

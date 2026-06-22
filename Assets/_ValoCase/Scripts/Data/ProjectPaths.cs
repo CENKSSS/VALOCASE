@@ -63,5 +63,9 @@ namespace ValoCase.Data
         /// <summary>Art/Backgorunds/background02 — background inside every case
         /// card on the Cases screen.</summary>
         public const string CaseCardBackgroundPath = BackgroundsRoot + "/background02";
+
+        /// <summary>Art/UI/MeleeMysteryIcon — generic golden icon shown for Melee
+        /// rewards during the case-opening roll only (reveal shows the real skin).</summary>
+        public const string MeleeMysteryIconPath = ArayuzRoot + "/MeleeIcon/MeleeMysteryIcon";
     }
 }

@@ -94,7 +94,7 @@ namespace ValoCase.UI.Screens
         long   _inflightDurationMs;
         string _inflightSessionId;
         int[]  _inflightOffsetsMs;
-        int    _inflightEstimateVp;
+        float  _inflightEstimateVp;
         int    _inflightRetries;
 
         // Animation timers (Update-driven, no coroutines)
@@ -309,6 +309,7 @@ namespace ValoCase.UI.Screens
             float prevMult = _multiplier;
 
             float rewardVp = BaseReward * _multiplier;
+            if (_adActive) rewardVp *= 2f;
             bool crit = Random.value < CritChance;
             if (crit) rewardVp *= 2f;
 
@@ -346,7 +347,7 @@ namespace ValoCase.UI.Screens
             _punchT   = 0f;
             _glowKick = crit ? 0.45f : 0.30f;
 
-            SpawnFloat($"+{rewardVp:0.##} VP", crit ? CritGold : TextMain, crit ? 1.25f : 1f);
+            SpawnFloat($"+{FormatVpEstimate(rewardVp)} VP", crit ? CritGold : TextMain, crit ? 1.25f : 1f);
             if (crit) SpawnFloat("CRITICAL!", CritGold, 1.45f);
             SpawnParticles(crit ? CritGold : Accent);
 
@@ -419,7 +420,7 @@ namespace ValoCase.UI.Screens
                 _inflightTaps       = _pendingTaps;
                 _inflightDurationMs = dur;
                 _inflightOffsetsMs  = _pendingOffsetsMs.ToArray();
-                _inflightEstimateVp = Mathf.RoundToInt(_pendingEstimateVp);
+                _inflightEstimateVp = _pendingEstimateVp;
                 _inflightSessionId  = _sessionId;
                 _inflightRetries    = 0;
                 _pendingTaps        = 0;
@@ -440,7 +441,7 @@ namespace ValoCase.UI.Screens
                     _claimInFlight = false;
                     _hasInflight   = false;
                     _inflightSessionId  = null;
-                    _inflightEstimateVp = 0;
+                    _inflightEstimateVp = 0f;
                     int granted = res != null ? res.vpGranted : 0;
                     if (granted > 0) StartFly(granted);
                     RefreshPendingLabel();
@@ -456,7 +457,7 @@ namespace ValoCase.UI.Screens
                     {
                         _hasInflight        = false;
                         _inflightSessionId  = null;
-                        _inflightEstimateVp = 0;
+                        _inflightEstimateVp = 0f;
                     }
                     else
                     {
@@ -508,11 +509,13 @@ namespace ValoCase.UI.Screens
         {
             if (_balanceLabel == null || !IsBackendEarnVp()) return;
             if (_walletCaption != null) _walletCaption.text = "SESSION VP";
-            int shown = Mathf.RoundToInt(_pendingEstimateVp) + (_hasInflight ? _inflightEstimateVp : 0);
-            _balanceLabel.text = shown > 0
-                ? $"+{shown} <color=#FF4655>VP</color>"
+            float shown = _pendingEstimateVp + (_hasInflight ? _inflightEstimateVp : 0f);
+            _balanceLabel.text = shown > 0f
+                ? $"+{FormatVpEstimate(shown)} <color=#FF4655>VP</color>"
                 : $"0 <color=#FF4655>VP</color>";
         }
+
+        static string FormatVpEstimate(float vp) => vp.ToString("0.###");
 
         void StartFly(int amount)
         {

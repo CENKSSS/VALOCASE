@@ -17,7 +17,7 @@ namespace ValoCase.EditorTools
         const string BackendDir = @"C:\Users\cenk_\Desktop\valocase-backend";
         const string BackendScript = "tools/catalog/generate_catalog_migration.py";
 
-        static readonly string[] RarityOrder = { "Select", "Deluxe", "Premium", "Exclusive", "Ultra" };
+        static readonly string[] RarityOrder = { "Select", "Deluxe", "Premium", "Exclusive", "Ultra", "Melee" };
 
         enum Sev { Error, Warning, Info }
 

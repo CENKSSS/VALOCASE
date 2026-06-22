@@ -145,12 +145,7 @@ namespace ValoCase.UI
             if (_xpFill != null)     _xpFill.anchorMax = new Vector2(PlayerProgression.Fill01, 1f);
         }
 
-        static string FormatVp(int amount)
-        {
-            if (amount >= 1_000_000) return (amount / 1_000_000f).ToString("0.##") + "M VP";
-            if (amount >= 1_000)     return (amount / 1_000f).ToString("0.##") + "K VP";
-            return amount + " VP";
-        }
+        static string FormatVp(int amount) => $"{amount:N0} VP";
 
         /// <summary>Fixed bar height — shared content root insets by this. Single source of truth.</summary>
         public const float Height = 112f;
