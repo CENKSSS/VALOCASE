@@ -97,6 +97,7 @@ namespace ValoCase.UI
             Debug.Log("[DEBUG][POPUP] Show triggered — skin=" + (skin != null ? skin.SkinName : "NULL"));
 
             _onConfirm = onConfirm;
+            EnsureOutsideClose();
             ApplyRarityTheme(skin);
             PopulateContent(skin);
 
@@ -114,6 +115,7 @@ namespace ValoCase.UI
         public void Hide()
         {
             if (_animCo != null) { StopCoroutine(_animCo); _animCo = null; }
+            SetCG(0f, false);
             gameObject.SetActive(false);
         }
 
@@ -293,6 +295,30 @@ namespace ValoCase.UI
         // PRIVATE HELPERS
         // ─────────────────────────────────────────────────────────────────────
 
+        bool _outsideCloseWired;
+        void EnsureOutsideClose()
+        {
+            if (_outsideCloseWired) return;
+            _outsideCloseWired = true;
+
+            if (card != null)
+            {
+                var cardImg = card.GetComponent<Image>();
+                if (cardImg != null) cardImg.raycastTarget = true;
+                // Absorbs taps inside the panel so they don't bubble to the overlay close.
+                if (card.GetComponent<Button>() == null)
+                    card.gameObject.AddComponent<Button>().transition = Selectable.Transition.None;
+            }
+            if (overlay != null)
+            {
+                var btn = overlay.GetComponent<Button>();
+                if (btn == null) btn = overlay.gameObject.AddComponent<Button>();
+                btn.transition = Selectable.Transition.None;
+                btn.onClick.RemoveListener(OnConfirmClicked);
+                btn.onClick.AddListener(OnConfirmClicked);
+            }
+        }
+
         void OnConfirmClicked()
         {
             Debug.Log("[DEBUG][POPUP] Confirm clicked");
@@ -337,6 +363,16 @@ namespace ValoCase.UI
             if (rarityLabel   != null) rarityLabel.gameObject.SetActive(false);
             if (rarityBadgeBg != null) rarityBadgeBg.gameObject.SetActive(false);
             if (categoryLabel != null) categoryLabel.gameObject.SetActive(false);
+
+            if (skinIconImage != null) SetAnchoredY(skinIconImage.rectTransform, 90f);
+            if (skinNameLabel != null) SetAnchoredY(skinNameLabel.rectTransform, -66f);
+            if (vpLabel       != null) SetAnchoredY(vpLabel.rectTransform, -124f);
+        }
+
+        static void SetAnchoredY(RectTransform rt, float y)
+        {
+            var p = rt.anchoredPosition;
+            rt.anchoredPosition = new Vector2(p.x, y);
         }
 
         // Mobile: simple, quick fade + subtle scale (0.94 → 1.00). No overshoot.

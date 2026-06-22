@@ -69,6 +69,8 @@ namespace ValoCase.Core
             {
                 if (injected.Add(ts)) ts.Inject(missions);
             }
+
+            foreach (var ts in injected) ts.PrimeMissionNotification();
         }
 
         // ─────────────────────────────────────────────────────────────────────

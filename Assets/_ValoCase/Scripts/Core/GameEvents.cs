@@ -14,6 +14,9 @@ namespace ValoCase.Core
         public static event Action OnDailyRewardClaimed;
         public static event Action OnShopRotated;
         public static event Action<string> OnToastRequested;
+        public static event Action<bool> OnMissionNotificationChanged;
+
+        public static bool MissionNotificationActive { get; private set; }
 
         public static void RaiseVpChanged(int previous, int current) => OnVpChanged?.Invoke(previous, current);
         public static void RaiseSkinObtained(SkinDefinitionSO skin) => OnSkinObtained?.Invoke(skin);
@@ -24,6 +27,12 @@ namespace ValoCase.Core
         public static void RaiseDailyRewardClaimed() => OnDailyRewardClaimed?.Invoke();
         public static void RaiseShopRotated() => OnShopRotated?.Invoke();
         public static void RaiseToast(string message) => OnToastRequested?.Invoke(message);
+
+        public static void RaiseMissionNotification(bool active)
+        {
+            MissionNotificationActive = active;
+            OnMissionNotificationChanged?.Invoke(active);
+        }
 
         public static void ClearAll()
         {
@@ -36,6 +45,8 @@ namespace ValoCase.Core
             OnDailyRewardClaimed = null;
             OnShopRotated = null;
             OnToastRequested = null;
+            OnMissionNotificationChanged = null;
+            MissionNotificationActive = false;
         }
     }
 }

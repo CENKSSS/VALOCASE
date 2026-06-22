@@ -35,6 +35,7 @@ namespace ValoCase.UI.Screens
         TextMeshProUGUI _comingSoonTitle;
         MissionSystem   _missionSystem;
         MissionsScreen  _missionsPanel;
+        GameObject      _missionsDot;
 
         const int DailyRewardVp = 2000;
 
@@ -135,7 +136,13 @@ namespace ValoCase.UI.Screens
             // Make sure overlays are hidden when re-entering
             if (_comingSoonPanel != null) _comingSoonPanel.SetActive(false);
             _missionsPanel?.Hide();
+            _missionsPanel?.RefreshNotificationState();
             RefreshDaily();
+        }
+
+        void OnDestroy()
+        {
+            GameEvents.OnMissionNotificationChanged -= SetMissionNotification;
         }
 
         void Update()
@@ -219,7 +226,7 @@ namespace ValoCase.UI.Screens
                 ShowComingSoon("CARK");
             });
 
-            BuildRow(content.transform, "GOREVLER", AccentMsn, () =>
+            var missionsRow = BuildRow(content.transform, "GOREVLER", AccentMsn, () =>
             {
                 // Build the panel on demand (no longer depends on prior injection), then
                 // open it. In backend mode we never fall back to Coming Soon for Görevler.
@@ -236,6 +243,11 @@ namespace ValoCase.UI.Screens
                     ShowComingSoon("GOREVLER");
             });
 
+            _missionsDot = BuildNotificationDot(missionsRow.transform);
+
+            GameEvents.OnMissionNotificationChanged += SetMissionNotification;
+            SetMissionNotification(GameEvents.MissionNotificationActive);
+
             // Coming Soon overlay (hidden until needed)
             BuildComingSoonPanel(rt);
 
@@ -243,8 +255,59 @@ namespace ValoCase.UI.Screens
             EnsureMissionsPanel();
         }
 
+        static Sprite s_circleSprite;
+        static Sprite CircleSprite()
+        {
+            if (s_circleSprite != null) return s_circleSprite;
+            const int sz = 64;
+            var tex = new Texture2D(sz, sz, TextureFormat.RGBA32, false) { filterMode = FilterMode.Bilinear };
+            float ctr = sz * 0.5f, rad = ctr - 1f;
+            var px = new Color32[sz * sz];
+            for (int y = 0; y < sz; y++)
+            for (int x = 0; x < sz; x++)
+            {
+                float dx = x - ctr, dy = y - ctr;
+                byte a = (byte)(Mathf.Clamp01(rad - Mathf.Sqrt(dx * dx + dy * dy) + 1f) * 255f);
+                px[y * sz + x] = new Color32(255, 255, 255, a);
+            }
+            tex.SetPixels32(px);
+            tex.Apply();
+            s_circleSprite = Sprite.Create(tex, new Rect(0, 0, sz, sz), new Vector2(0.5f, 0.5f));
+            return s_circleSprite;
+        }
+
+        GameObject BuildNotificationDot(Transform parent)
+        {
+            var go = NewGo("NotifBadge", parent, typeof(Image));
+            var rt = (RectTransform)go.transform;
+            rt.anchorMin = new Vector2(0f, 0.5f);
+            rt.anchorMax = new Vector2(0f, 0.5f);
+            rt.pivot     = new Vector2(0f, 0.5f);
+            float x = 28f;
+            var lbl = parent.Find("Lbl")?.GetComponent<TextMeshProUGUI>();
+            if (lbl != null) x = 20f + lbl.GetPreferredValues(lbl.text).x + 10f;
+            rt.anchoredPosition = new Vector2(x, 0f);
+            rt.sizeDelta        = new Vector2(14f, 14f);
+            var img = go.GetComponent<Image>();
+            img.sprite        = CircleSprite();
+            img.color         = ActiveRed;
+            img.raycastTarget = false;
+            go.SetActive(false);
+            return go;
+        }
+
+        void SetMissionNotification(bool active)
+        {
+            if (_missionsDot != null) _missionsDot.SetActive(active);
+        }
+
+        public void PrimeMissionNotification()
+        {
+            if (EnsureMissionsPanel()) _missionsPanel.RefreshNotificationState();
+        }
+
         // ── Tappable row card ──────────────────────────────────────────────────
-        void BuildRow(Transform parent, string label, Color accent, System.Action onClick)
+        GameObject BuildRow(Transform parent, string label, Color accent, System.Action onClick)
         {
             var rowGo = NewGo("Row_" + label, parent,
                 typeof(Image), typeof(Button), typeof(Outline), typeof(LayoutElement),
@@ -302,6 +365,8 @@ namespace ValoCase.UI.Screens
                 _ => img.color = new Color(accent.r * 0.18f, accent.g * 0.18f, accent.b * 0.18f, 1f));
             AddPE(et, EventTriggerType.PointerExit,
                 _ => img.color = CardBg);
+
+            return rowGo;
         }
 
         // ── Full-screen Coming Soon overlay ───────────────────────────────────

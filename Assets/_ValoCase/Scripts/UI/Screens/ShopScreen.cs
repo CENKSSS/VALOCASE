@@ -31,6 +31,7 @@ namespace ValoCase.UI.Screens
         bool _builtOnce;
         bool _gridSized;          // true once the grid has real cell sizes applied
         bool _dealsSectionHidden;
+        bool _catalogFetchStarted;
 
         RectTransform _viewportRt;
         RectTransform _contentRt;
@@ -41,6 +42,7 @@ namespace ValoCase.UI.Screens
 
         // ── Palette ───────────────────────────────────────────────────────────
         static readonly Color GreenBadge = new Color(0.09f,  0.55f,  0.26f,  1f);
+        static readonly Color CannotAffordBadge = new Color(0.40f, 0.13f, 0.16f, 1f);
         static readonly Color TextBright = new Color(0.925f, 0.910f, 0.882f, 1f);
 
         // ── Grid constants (compact, multi-column boxed cards) ─────────────────
@@ -73,13 +75,18 @@ namespace ValoCase.UI.Screens
         {
             Refresh();
             GameEvents.OnShopRotated    += Refresh;
-            PlayerProgression.OnChanged += Refresh;   // re-evaluate lock overlays on level change
+            GameEvents.OnCaseOpened     += OnCaseOpened;
+            GameEvents.OnVpChanged      += OnVpChanged;
+            PlayerProgression.OnChanged += OnProgressionChanged;
         }
 
         protected override void OnHidden()
         {
             GameEvents.OnShopRotated    -= Refresh;
-            PlayerProgression.OnChanged -= Refresh;
+            GameEvents.OnCaseOpened     -= OnCaseOpened;
+            GameEvents.OnVpChanged      -= OnVpChanged;
+            PlayerProgression.OnChanged -= OnProgressionChanged;
+            _catalogFetchStarted = false;
         }
 
         // ── Core refresh ──────────────────────────────────────────────────────
@@ -94,6 +101,8 @@ namespace ValoCase.UI.Screens
                 return;
             }
             ctx.Shop.EnsureRotation();
+
+            RefreshCaseCatalogIfNeeded();
 
             int caseCount = (ctx.Content?.Cases?.Count(c => c != null)) ?? 0;
             if (caseCount == 0)
@@ -119,6 +128,36 @@ namespace ValoCase.UI.Screens
             // the grid is already sized, so re-evaluate locks live here.
             if (_gridSized)
                 RefreshLockStates();
+        }
+
+        void RefreshCaseCatalogIfNeeded(bool force = false)
+        {
+            var ctx = GameContext.Instance;
+            if (ctx == null || !ctx.BackendEnabled) return;
+            if (!force && _catalogFetchStarted) return;
+
+            _catalogFetchStarted = true;
+            ctx.RefreshCaseCatalogBackend(
+                onDone: () => { if (this != null && _gridSized) RefreshLockStates(); },
+                onFailed: _ => { if (this != null) _catalogFetchStarted = false; });
+        }
+
+        void OnCaseOpened(CaseDefinitionSO _, SkinDefinitionSO __)
+        {
+            _catalogFetchStarted = false;
+            RefreshCaseCatalogIfNeeded(true);
+            if (_gridSized) RefreshLockStates();
+        }
+
+        void OnVpChanged(int _, int __)
+        {
+            if (_gridSized) RefreshLockStates();
+        }
+
+        void OnProgressionChanged()
+        {
+            _catalogFetchStarted = false;
+            Refresh();
         }
 
         void ShowPlaceholder(string message)
@@ -530,10 +569,11 @@ namespace ValoCase.UI.Screens
                 btn.onClick.AddListener(() =>
                 {
                     Log("[SHOP_CARD] clicked case=" + caseName + " id=" + caseId);
-                    if (!PlayerProgression.IsCaseUnlocked(caseId, caseDef.UnlockType, caseDef.UnlockRequirement))
+                    var (locked, req, reason) = ResolveLock(caseDef);
+                    if (locked)
                     {
-                        int req = PlayerProgression.RequiredLevelForCase(caseId, caseDef.UnlockType, caseDef.UnlockRequirement);
-                        GameEvents.RaiseToast(req > 0 ? $"Seviye {req}'te açılır" : "Kilitli");
+                        GameEvents.RaiseToast(reason == "CASE_INACTIVE" ? "Şu anda kullanılamıyor"
+                            : req > 0 ? $"Seviye {req}'te açılır" : "Kilitli");
                         return;
                     }
                     CaseOpeningScreen.PendingCaseId = caseId;
@@ -625,7 +665,7 @@ namespace ValoCase.UI.Screens
                     var lblGo = Child(g.transform, "PriceLabel"); // separate child for text ← FIX
                     StretchFill(lblGo.GetComponent<RectTransform>());
                     var tmp = lblGo.AddComponent<TextMeshProUGUI>();
-                    tmp.text               = caseDef.VpPrice.ToString("N0") + " VP";
+                    tmp.text               = ResolvePrice(caseDef).ToString("N0") + " VP";
                     tmp.enableAutoSizing   = true;   // fits the price bar at any card size
                     tmp.fontSizeMin        = 9f;
                     tmp.fontSizeMax        = 15f;
@@ -650,6 +690,56 @@ namespace ValoCase.UI.Screens
             }
         }
 
+        static (bool locked, int required, string reason) ResolveLock(CaseDefinitionSO caseDef)
+        {
+            var local = ResolveLocalLock(caseDef);
+            var s = GameContext.Instance?.GetCaseSummary(caseDef.CaseId);
+            if (s == null) return local;
+
+            int required = s.requiredLevel > 0 ? s.requiredLevel : local.required;
+            int current  = s.currentLevel > 0 ? s.currentLevel : PlayerProgression.Level;
+            string reason = s.lockedReason;
+
+            if (s.canOpen) return (false, required, null);
+            if (IsUnavailableReason(reason)) return (true, required, reason);
+            if (required > 0 && current > 0 && current < required) return (true, required, reason);
+            if (IsLockReason(reason)) return (true, required, reason);
+            return local;
+        }
+
+        static (bool locked, int required, string reason) ResolveLocalLock(CaseDefinitionSO caseDef)
+        {
+            return (!PlayerProgression.IsCaseUnlocked(caseDef.CaseId, caseDef.UnlockType, caseDef.UnlockRequirement),
+                    PlayerProgression.RequiredLevelForCase(caseDef.CaseId, caseDef.UnlockType, caseDef.UnlockRequirement),
+                    null);
+        }
+
+        static bool IsUnavailableReason(string reason)
+            => string.Equals(reason, "CASE_INACTIVE", StringComparison.OrdinalIgnoreCase);
+
+        static bool IsLockReason(string reason)
+        {
+            if (string.IsNullOrEmpty(reason)) return false;
+            if (IsUnavailableReason(reason)) return true;
+
+            var upper = reason.ToUpperInvariant();
+            if (upper.Contains("AFFORD") || upper.Contains("FUNDS") || upper.Contains("BALANCE") || upper.Contains("VP"))
+                return false;
+
+            return upper.Contains("LEVEL") || upper.Contains("LOCK") || upper.Contains("INACTIVE") || upper.Contains("UNAVAILABLE");
+        }
+
+        static int ResolvePrice(CaseDefinitionSO caseDef)
+        {
+            var s = GameContext.Instance?.GetCaseSummary(caseDef.CaseId);
+            return s != null && s.priceVp > 0 ? s.priceVp : caseDef.VpPrice;
+        }
+
+        static string LockBoxText(int requiredLevel, string reason)
+            => IsUnavailableReason(reason) ? "UNAVAILABLE"
+             : requiredLevel > 0 ? $"LEVEL {requiredLevel}"
+             : "LOCKED";
+
         // Re-evaluates every visible card's lock state against the current player level.
         // Locked → ensure the crossed-chain/padlock overlay exists and is shown.
         // Unlocked → hide the overlay so the card looks and behaves like a normal card
@@ -662,20 +752,23 @@ namespace ValoCase.UI.Screens
             {
                 if (card == null || caseDef == null) continue;
                 var  caseId   = caseDef.CaseId;
-                bool locked   = !PlayerProgression.IsCaseUnlocked(caseId, caseDef.UnlockType, caseDef.UnlockRequirement);
-                int  required = PlayerProgression.RequiredLevelForCase(caseId, caseDef.UnlockType, caseDef.UnlockRequirement);
+                var (locked, required, reason) = ResolveLock(caseDef);
                 var  overlay  = card.transform.Find("LockOverlay");
+
+                RefreshCardEconomy(card, caseDef);
 
                 if (locked)
                 {
                     if (overlay == null)
                     {
-                        BuildLockOverlay(card.transform, required);
+                        BuildLockOverlay(card.transform, required, reason);
                         Log($"[SHOP_LOCK] overlay created case={caseId} required={required} current={current} screen=ShopScreen");
                     }
-                    else if (!overlay.gameObject.activeSelf)
+                    else
                     {
                         overlay.gameObject.SetActive(true);
+                        var lvlLbl = overlay.Find("LockLevelBox/LockLevelLabel")?.GetComponent<TextMeshProUGUI>();
+                        if (lvlLbl != null) lvlLbl.text = LockBoxText(required, reason);
                     }
                 }
                 else if (overlay != null && overlay.gameObject.activeSelf)
@@ -686,13 +779,33 @@ namespace ValoCase.UI.Screens
             }
         }
 
+        static void RefreshCardEconomy(GameObject card, CaseDefinitionSO caseDef)
+        {
+            var priceBadge = card.transform.Find("PriceBadge");
+            if (priceBadge == null) return;
+
+            int price = ResolvePrice(caseDef);
+            var priceLbl = priceBadge.Find("PriceLabel")?.GetComponent<TextMeshProUGUI>();
+            if (priceLbl != null) priceLbl.text = price.ToString("N0") + " VP";
+
+            var badgeImg = priceBadge.GetComponent<Image>();
+            if (badgeImg != null)
+                badgeImg.color = IsAffordable(price) ? GreenBadge : CannotAffordBadge;
+        }
+
+        static bool IsAffordable(int price)
+        {
+            var vp = GameContext.Instance?.Vp;
+            return vp == null || vp.Balance >= price;
+        }
+
         // Locked-card overlay: card stays visible but darkened, with two steel chains
         // crossed diagonally into an X, a golden padlock in the centre, and a small dark
         // rounded "LEVEL N" box directly above it. Reuses CaseListItemView's procedural
         // chain-link and padlock sprites so both code paths share one visual. The overlay
         // raycastTarget stays false so the card Button beneath still receives the tap and
         // shows the unlock toast. Does not alter card size, layout, sorting, or price.
-        static void BuildLockOverlay(Transform card, int requiredLevel)
+        static void BuildLockOverlay(Transform card, int requiredLevel, string reason = null)
         {
             var cardRt = card.GetComponent<RectTransform>();
             float w = cardRt != null && cardRt.rect.width  > 1f ? cardRt.rect.width  : TargetCellW;
@@ -742,7 +855,7 @@ namespace ValoCase.UI.Screens
             lblRt.anchorMin = Vector2.zero; lblRt.anchorMax = Vector2.one;
             lblRt.offsetMin = new Vector2(4f, 0f); lblRt.offsetMax = new Vector2(-4f, 0f);
             var tmp = lbl.AddComponent<TextMeshProUGUI>();
-            tmp.text               = requiredLevel > 0 ? $"LEVEL {requiredLevel}" : "LOCKED";
+            tmp.text               = LockBoxText(requiredLevel, reason);
             tmp.fontStyle          = FontStyles.Bold;
             tmp.enableAutoSizing   = true;
             tmp.fontSizeMin        = 9f;

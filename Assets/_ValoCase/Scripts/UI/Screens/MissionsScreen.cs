@@ -100,6 +100,7 @@ namespace ValoCase.UI.Screens
         public void Show()
         {
             gameObject.SetActive(true);
+            transform.SetAsLastSibling();
 
             // Backend mode: open INSTANTLY and stay fully backend-authoritative. Build
             // the screen frame immediately, then show the grid sized to backend data
@@ -612,6 +613,50 @@ namespace ValoCase.UI.Screens
             if (!_built || _cards == null) return;
             for (int i = 0; i < _cards.Length; i++)
                 RefreshCard(i);
+            BroadcastNotification();
+        }
+
+        // Evaluates claimable state and updates the nav/Tools notification indicator
+        // without building or showing the full screen. Safe to call before Show().
+        public void RefreshNotificationState()
+        {
+            var ctx = GameContext.Instance;
+            if (ctx != null && ctx.BackendEnabled)
+            {
+                _backend = true;
+                ctx.RefreshMissionsBackend(
+                    missions =>
+                    {
+                        if (this == null) return;
+                        if (missions != null) _backendMissions = missions;
+                        BroadcastNotification();
+                    },
+                    _ => { });
+                return;
+            }
+            BroadcastNotification();
+        }
+
+        void BroadcastNotification() => GameEvents.RaiseMissionNotification(AnyClaimable());
+
+        bool AnyClaimable()
+        {
+            if (_backend)
+            {
+                if (_backendMissions == null) return false;
+                foreach (var m in _backendMissions)
+                    if (m != null && m.status != "CLAIMED" && m.progress >= Mathf.Max(1, m.targetCount))
+                        return true;
+                return false;
+            }
+            if (_system == null) return false;
+            for (int i = 0; i < MissionSystem.MissionCount; i++)
+            {
+                var e = _system.GetEntry(i);
+                var d = _system.GetDef(i);
+                if (!e.claimed && e.currentAmount >= d.TargetAmount) return true;
+            }
+            return false;
         }
 
         void RefreshCard(int i)

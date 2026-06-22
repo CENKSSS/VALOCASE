@@ -1,6 +1,7 @@
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
+using ValoCase.Core;
 
 namespace ValoCase.UI
 {
@@ -51,6 +52,7 @@ namespace ValoCase.UI
         }
 
         TabUI[]    _tabUIs;
+        GameObject _toolsNotifDot;
         ScreenType _active = (ScreenType)(-1);   // nothing selected initially
 
         // ── Lifecycle ─────────────────────────────────────────────────────────
@@ -86,12 +88,20 @@ namespace ValoCase.UI
             // Sync to whatever the navigator already navigated to in its Awake
             _active = navigator.CurrentScreen;
             navigator.OnNavigated += HandleNavigated;
+            GameEvents.OnMissionNotificationChanged += SetToolsNotification;
+            SetToolsNotification(GameEvents.MissionNotificationActive);
             Repaint();
+        }
+
+        void SetToolsNotification(bool active)
+        {
+            if (_toolsNotifDot != null) _toolsNotifDot.SetActive(active);
         }
 
         void OnDestroy()
         {
             if (navigator != null) navigator.OnNavigated -= HandleNavigated;
+            GameEvents.OnMissionNotificationChanged -= SetToolsNotification;
         }
 
         void HandleNavigated(ScreenType t)
@@ -158,6 +168,28 @@ namespace ValoCase.UI
             _tabUIs = new TabUI[Tabs.Length];
             for (int i = 0; i < Tabs.Length; i++)
                 _tabUIs[i] = BuildTab(row, i);
+
+            AddDividers(panel, Tabs.Length);
+        }
+
+        static void AddDividers(RectTransform panel, int count)
+        {
+            var col = new Color(1f, 1f, 1f, 0.07f);
+            for (int i = 1; i < count; i++)
+            {
+                float frac = (float)i / count;
+                var d = new GameObject("Divider", typeof(RectTransform), typeof(Image));
+                d.transform.SetParent(panel, false);
+                var rt = (RectTransform)d.transform;
+                rt.anchorMin        = new Vector2(frac, 0.5f);
+                rt.anchorMax        = new Vector2(frac, 0.5f);
+                rt.pivot            = new Vector2(0.5f, 0.5f);
+                rt.anchoredPosition = Vector2.zero;
+                rt.sizeDelta        = new Vector2(1.2f, 88f);
+                var img = d.GetComponent<Image>();
+                img.color         = col;
+                img.raycastTarget = false;
+            }
         }
 
         // Small L-shaped corner marks for tactical feel
@@ -276,7 +308,49 @@ namespace ValoCase.UI
             dotOl.effectDistance = new Vector2(5f, -5f);
             ui.Dot = dotGo;
 
+            if (Tabs[idx].Icon == TabIcon.Tools)
+                _toolsNotifDot = BuildNotifDot(tabRt);
+
             return ui;
+        }
+
+        static readonly Color BadgeRed = new Color(1f, 0.231f, 0.353f, 1f);
+
+        static Sprite s_badgeCircle;
+        static Sprite BadgeCircle()
+        {
+            if (s_badgeCircle == null)
+                s_badgeCircle = Resources.GetBuiltinResource<Sprite>("UI/Skin/Knob.psd");
+            return s_badgeCircle;
+        }
+
+        static GameObject BuildNotifDot(RectTransform parent)
+        {
+            var go = new GameObject("NotifBadge", typeof(RectTransform), typeof(Image));
+            go.transform.SetParent(parent, false);
+            var rt = (RectTransform)go.transform;
+            rt.anchorMin        = new Vector2(0.5f, 1f);
+            rt.anchorMax        = new Vector2(0.5f, 1f);
+            rt.pivot            = new Vector2(0.5f, 0.5f);
+            rt.anchoredPosition = new Vector2(17f, -20f);
+            rt.sizeDelta        = new Vector2(13f, 13f);
+            var ring = go.GetComponent<Image>();
+            ring.sprite        = BadgeCircle();
+            ring.color         = NavBg;
+            ring.raycastTarget = false;
+
+            var fillGo = new GameObject("Fill", typeof(RectTransform), typeof(Image));
+            fillGo.transform.SetParent(go.transform, false);
+            var fRt = (RectTransform)fillGo.transform;
+            fRt.anchorMin = Vector2.zero; fRt.anchorMax = Vector2.one;
+            fRt.offsetMin = new Vector2(2f, 2f); fRt.offsetMax = new Vector2(-2f, -2f);
+            var fill = fillGo.GetComponent<Image>();
+            fill.sprite        = BadgeCircle();
+            fill.color         = BadgeRed;
+            fill.raycastTarget = false;
+
+            go.SetActive(false);
+            return go;
         }
 
         // ── Icon drawing (purely procedural, no assets needed) ────────────────

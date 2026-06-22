@@ -6,6 +6,7 @@ using ValoCase.Data;
 using ValoCase.Profile;
 using ValoCase.Save;
 using ValoCase.Services;
+using ValoCase.Services.Ads;
 using ValoCase.Services.Backend;
 
 namespace ValoCase.Core
@@ -36,6 +37,9 @@ namespace ValoCase.Core
 
         // Backend (Spring Boot). Exposed so flows can reuse the client.
         public BackendApiClient Backend { get; private set; }
+
+        // Rewarded-ad provider (mock for now; real SDK adapter swaps in here later).
+        public IRewardedAdService RewardedAds { get; private set; }
 
         // SECURITY: local-authoritative economy is allowed ONLY in the editor or an
         // explicit offline-demo build, and only when the asset opts out of backend.
@@ -71,6 +75,8 @@ namespace ValoCase.Core
         // sync; empty in local mode. Never persisted. Used by future itemId-based
         // systems (Upgrade, Trade, Market, gifting, item history).
         public BackendInventoryCache BackendInventory { get; } = new BackendInventoryCache();
+
+        readonly Dictionary<string, CaseSummaryResponse> _caseSummaries = new();
 
         void Awake()
         {
@@ -128,6 +134,8 @@ namespace ValoCase.Core
 
             // Boot profile system — loads FaceCards + restores PlayerPrefs once
             ProfileManager.EnsureInitialized();
+
+            RewardedAds = MockRewardedAdService.Create(transform);
 
 #if (DEVELOPMENT_BUILD && !UNITY_EDITOR)
             if (gameConfig != null && !gameConfig.UseBackend)
@@ -251,6 +259,22 @@ namespace ValoCase.Core
         {
             if (!BackendReady) return;
             StartCoroutine(ResyncWalletAndInventory());
+        }
+
+        public void RefreshInventoryBackend(Action onDone = null, Action<string> onFailed = null)
+        {
+            if (!BackendReady) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
+            StartCoroutine(RefreshInventoryBackendRoutine(onDone, onFailed));
+        }
+
+        IEnumerator RefreshInventoryBackendRoutine(Action onDone, Action<string> onFailed)
+        {
+            bool ok = false;
+            string error = null;
+            yield return SyncInventoryFromBackend((success, message) => { ok = success; error = message; });
+
+            if (ok) onDone?.Invoke();
+            else onFailed?.Invoke(string.IsNullOrEmpty(error) ? "Bağlantı hatası" : error);
         }
 
         IEnumerator ResyncWalletAndInventory()
@@ -469,6 +493,26 @@ namespace ValoCase.Core
 
         // ── Backend Earn VP session (server-authoritative; server calculates VP) ──
 
+        public void StartEarnVpSessionBackend(Action<EarnVpStartResponse> onDone, Action<string> onFailed)
+        {
+            if (!BackendReady) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
+            StartCoroutine(StartEarnVpRoutine(onDone, onFailed));
+        }
+
+        IEnumerator StartEarnVpRoutine(Action<EarnVpStartResponse> onDone, Action<string> onFailed)
+        {
+            EarnVpStartResponse res = null;
+            BackendError error = null;
+            yield return Backend.StartEarnVpSession(r => res = r, e => error = e);
+
+            if (error != null || res == null || string.IsNullOrEmpty(res.sessionId))
+            {
+                onFailed?.Invoke(BackendErrorMapper.Map(error));
+                yield break;
+            }
+            onDone?.Invoke(res);
+        }
+
         public void ClaimEarnVpSession(int tapCount, long sessionDurationMs, string clientSessionId,
             int[] tapOffsetsMs, Action<EarnVpClaimResponse> onDone, Action<string> onFailed)
         {
@@ -506,6 +550,234 @@ namespace ValoCase.Core
             onDone?.Invoke(res);
         }
 
+        // ── Rewarded ads (server-authoritative; claim only ARMS the reward) ──────
+        // Plays a rewarded ad, then claims (arms) the reward from the backend ONLY when
+        // the ad completed. Cancelled/failed ads never reach the claim endpoint. Claim does
+        // not grant VP: EARN_VP_2X is applied by the normal earn-vp claim, UPGRADE_PLUS_5 by
+        // upgrade preview/execute. No wallet is mutated here.
+
+        // EARN_VP_2X — status / arm / clear (context is the current earn session, if any).
+
+        public void RefreshEarnVpAdStatus(string earnSessionId,
+            Action<AdRewardStatusResponse> onDone, Action<string> onFailed)
+        {
+            if (!BackendReady) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
+            if (!HasGuestToken) { onFailed?.Invoke("AUTH_PENDING"); return; }
+            StartCoroutine(AdStatusRoutine(null, null, earnSessionId, onDone, onFailed));
+        }
+
+        public void WatchEarnVp2xAd(string earnSessionId, Action<AdRewardClaimResponse> onClaimed,
+            Action<string> onFailed, Action onCancelled = null)
+        {
+            if (!BackendReady) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
+            if (!HasGuestToken) { onFailed?.Invoke("AUTH_PENDING"); return; }
+            if (RewardedAds == null || !RewardedAds.IsReady) { onFailed?.Invoke("Reklam şu anda hazır değil."); return; }
+
+            RewardedAds.Show(AdRewardTypes.EarnVp2x, (result, _) =>
+            {
+                switch (result)
+                {
+                    case RewardedAdResult.Completed:
+                        StartCoroutine(ClaimAdRoutine(
+                            new AdRewardClaimRequest { rewardType = AdRewardTypes.EarnVp2x, earnSessionId = earnSessionId },
+                            onClaimed, onFailed));
+                        break;
+                    case RewardedAdResult.Cancelled: onCancelled?.Invoke(); break;
+                    default: onFailed?.Invoke("Reklam gösterilemedi. Lütfen tekrar dene."); break;
+                }
+            });
+        }
+
+        public void ClearEarnVp2xBackend(string earnSessionId)
+        {
+            if (!BackendReady) return;
+            if (!HasGuestToken) return;
+            StartCoroutine(ClearEarnVp2xRoutine(earnSessionId));
+        }
+
+        IEnumerator ClearEarnVp2xRoutine(string earnSessionId)
+        {
+            yield return Backend.ClearEarnVp2x(earnSessionId,
+                _ => { },
+                err => Debug.LogWarning("[Backend] Earn VP 2x clear failed — " + (err?.ToString() ?? "null")));
+        }
+
+        // UPGRADE_PLUS_5 — status / arm. Both carry the current selection context: real
+        // backend itemIds (resolved non-mutatingly) plus the target skinIds.
+
+        public void RefreshUpgradeAdStatus(List<SkinDefinitionSO> inputs, IReadOnlyList<SkinDefinitionSO> targets,
+            Action<AdRewardStatusResponse> onDone, Action<string> onFailed)
+        {
+            if (!BackendReady) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
+            if (!HasGuestToken) { onFailed?.Invoke("AUTH_PENDING"); return; }
+            ResolveUpgradeRewardContext(inputs, targets,
+                context => RefreshUpgradeAdStatus(context, onDone, onFailed),
+                onFailed);
+        }
+
+        IEnumerator UpgradeAdStatusRoutine(List<SkinDefinitionSO> inputs, IReadOnlyList<SkinDefinitionSO> targets,
+            Action<AdRewardStatusResponse> onDone, Action<string> onFailed)
+        {
+            List<string> itemIds = null; string resolveError = null;
+            yield return ResolveUpgradeItemIdsWithRefresh(new List<SkinDefinitionSO>(inputs),
+                (ids, err) => { itemIds = ids; resolveError = err; });
+            if (itemIds == null || itemIds.Count == 0)
+            {
+                onFailed?.Invoke(string.IsNullOrEmpty(resolveError) ? "Geçersiz seçim." : resolveError);
+                yield break;
+            }
+            yield return AdStatusRoutine(itemIds.ToArray(), ToSkinIds(targets), null, onDone, onFailed);
+        }
+
+        public void RefreshUpgradeAdStatus(UpgradeRewardContext context,
+            Action<AdRewardStatusResponse> onDone, Action<string> onFailed)
+        {
+            if (!BackendReady) { onFailed?.Invoke("Sunucu kullanÄ±lamÄ±yor."); return; }
+            if (context == null || !context.IsValid) { onFailed?.Invoke("GeÃ§ersiz seÃ§im."); return; }
+            if (!HasGuestToken) { onFailed?.Invoke("AUTH_PENDING"); return; }
+            StartCoroutine(AdStatusRoutine(context.InputItemIds, context.TargetSkinIds, null, onDone, onFailed));
+        }
+
+        public void WatchUpgradePlus5Ad(List<SkinDefinitionSO> inputs, IReadOnlyList<SkinDefinitionSO> targets,
+            Action<AdRewardClaimResponse> onClaimed, Action<string> onFailed, Action onCancelled = null)
+        {
+            if (!BackendReady) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
+            if (!HasGuestToken) { onFailed?.Invoke("AUTH_PENDING"); return; }
+            if (RewardedAds == null || !RewardedAds.IsReady) { onFailed?.Invoke("Reklam şu anda hazır değil."); return; }
+
+            RewardedAds.Show(AdRewardTypes.UpgradePlus5, (result, _) =>
+            {
+                switch (result)
+                {
+                    case RewardedAdResult.Completed:
+                        StartCoroutine(UpgradeClaimRoutine(inputs, targets, onClaimed, onFailed));
+                        break;
+                    case RewardedAdResult.Cancelled: onCancelled?.Invoke(); break;
+                    default: onFailed?.Invoke("Reklam gösterilemedi. Lütfen tekrar dene."); break;
+                }
+            });
+        }
+
+        public void WatchUpgradePlus5Ad(UpgradeRewardContext context,
+            Action<AdRewardClaimResponse> onClaimed, Action<string> onFailed, Action onCancelled = null)
+        {
+            if (!BackendReady) { onFailed?.Invoke("Sunucu kullanÄ±lamÄ±yor."); return; }
+            if (RewardedAds == null || !RewardedAds.IsReady) { onFailed?.Invoke("Reklam ÅŸu anda hazÄ±r deÄŸil."); return; }
+            if (context == null || !context.IsValid) { onFailed?.Invoke("GeÃ§ersiz seÃ§im."); return; }
+
+            if (!HasGuestToken) { onFailed?.Invoke("AUTH_PENDING"); return; }
+
+            RewardedAds.Show(AdRewardTypes.UpgradePlus5, (result, _) =>
+            {
+                switch (result)
+                {
+                    case RewardedAdResult.Completed:
+                        StartCoroutine(UpgradeClaimRoutine(context, onClaimed, onFailed));
+                        break;
+                    case RewardedAdResult.Cancelled: onCancelled?.Invoke(); break;
+                    default: onFailed?.Invoke("Reklam gÃ¶sterilemedi. LÃ¼tfen tekrar dene."); break;
+                }
+            });
+        }
+
+        IEnumerator UpgradeClaimRoutine(List<SkinDefinitionSO> inputs, IReadOnlyList<SkinDefinitionSO> targets,
+            Action<AdRewardClaimResponse> onDone, Action<string> onFailed)
+        {
+            List<string> itemIds = null; string resolveError = null;
+            yield return ResolveUpgradeItemIdsWithRefresh(new List<SkinDefinitionSO>(inputs),
+                (ids, err) => { itemIds = ids; resolveError = err; });
+            if (itemIds == null || itemIds.Count == 0)
+            {
+                onFailed?.Invoke(string.IsNullOrEmpty(resolveError) ? "Geçersiz seçim." : resolveError);
+                yield break;
+            }
+
+            var targetSkinIds = ToSkinIds(targets);
+            var request = new AdRewardClaimRequest
+            {
+                rewardType    = AdRewardTypes.UpgradePlus5,
+                inputItemIds  = itemIds.ToArray(),
+                targetSkinIds = targetSkinIds,
+                targetSkinId  = targetSkinIds.Length > 0 ? targetSkinIds[0] : null
+            };
+            yield return ClaimAdRoutine(request, onDone, onFailed);
+        }
+
+        IEnumerator UpgradeClaimRoutine(UpgradeRewardContext context,
+            Action<AdRewardClaimResponse> onDone, Action<string> onFailed)
+        {
+            var request = new AdRewardClaimRequest
+            {
+                rewardType    = AdRewardTypes.UpgradePlus5,
+                inputItemIds  = context.InputItemIds,
+                targetSkinIds = context.TargetSkinIds,
+                targetSkinId  = context.TargetSkinId
+            };
+            yield return ClaimAdRoutine(request, onDone, onFailed);
+        }
+
+        // Shared status + claim drivers.
+
+        IEnumerator AdStatusRoutine(string[] inputItemIds, string[] targetSkinIds, string earnSessionId,
+            Action<AdRewardStatusResponse> onDone, Action<string> onFailed)
+        {
+            AdRewardStatusResponse res = null;
+            BackendError error = null;
+            yield return Backend.GetAdRewardStatus(inputItemIds, targetSkinIds, earnSessionId,
+                r => res = r, e => error = e);
+
+            if (error != null || res == null)
+            {
+                Debug.LogWarning("[AdsStatus] failed — " + (error?.ToString() ?? "null response"));
+                onFailed?.Invoke(BackendErrorMapper.Map(error));
+                yield break;
+            }
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            Debug.Log("[AdsStatus] placements=" + DescribeAdPlacements(res));
+#endif
+            onDone?.Invoke(res);
+        }
+
+        IEnumerator ClaimAdRoutine(AdRewardClaimRequest request,
+            Action<AdRewardClaimResponse> onDone, Action<string> onFailed)
+        {
+            AdRewardClaimResponse res = null;
+            BackendError error = null;
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            Debug.Log($"[AdsClaim] type={request.rewardType} authPresent={HasGuestToken} earnSessionIdPresent={!string.IsNullOrEmpty(request.earnSessionId)} inputItemIds={(request.inputItemIds != null ? request.inputItemIds.Length : 0)} targetSkinIds={(request.targetSkinIds != null ? request.targetSkinIds.Length : 0)}");
+#endif
+            yield return Backend.ClaimAdReward(request, r => res = r, e => error = e);
+
+            if (error != null || res == null)
+            {
+                Debug.LogWarning("[Backend] Ad reward claim failed — " + (error?.ToString() ?? "null response"));
+                onFailed?.Invoke(BackendErrorMapper.Map(error));
+                yield break;
+            }
+
+            Debug.Log($"[Backend] Ad reward armed — type={request.rewardType} earnVp2xActive={res.earnVp2xActive} " +
+                      $"upgradePlus5Active={res.upgradePlus5Active} alreadyUsed={res.upgradePlus5AlreadyUsedForCurrentContext}");
+            onDone?.Invoke(res);
+        }
+
+        static string DescribeAdPlacements(AdRewardStatusResponse res)
+        {
+            if (res?.placements == null || res.placements.Length == 0) return "<none>";
+            var names = new List<string>(res.placements.Length);
+            foreach (var p in res.placements)
+                names.Add(p != null && !string.IsNullOrEmpty(p.rewardType) ? p.rewardType : "<null>");
+            return string.Join(",", names);
+        }
+
+        static string[] ToSkinIds(IReadOnlyList<SkinDefinitionSO> skins)
+        {
+            if (skins == null) return Array.Empty<string>();
+            var list = new List<string>();
+            foreach (var s in skins)
+                if (s != null && !string.IsNullOrEmpty(s.SkinId)) list.Add(s.SkinId);
+            return list.ToArray();
+        }
+
         // ── Backend missions (server-authoritative) ─────────────────────────────
 
         public void RefreshMissionsBackend(Action<MissionResponse[]> onDone, Action<string> onFailed)
@@ -527,6 +799,80 @@ namespace ValoCase.Core
                 yield break;
             }
             onDone?.Invoke(res.missions ?? Array.Empty<MissionResponse>());
+        }
+
+        // ── Backend case catalog (server-authoritative economy values, read-only) ──
+
+        public CaseSummaryResponse GetCaseSummary(string caseId)
+            => !string.IsNullOrEmpty(caseId) && _caseSummaries.TryGetValue(caseId, out var s) ? s : null;
+
+        public void RefreshCaseCatalogBackend(Action onDone = null, Action<string> onFailed = null)
+        {
+            if (!BackendReady) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
+            StartCoroutine(RefreshCaseCatalogRoutine(onDone, onFailed));
+        }
+
+        IEnumerator RefreshCaseCatalogRoutine(Action onDone, Action<string> onFailed)
+        {
+            CaseSummaryListResponse res = null;
+            BackendError error = null;
+            yield return Backend.GetCases(r => res = r, e => error = e);
+
+            if (error != null || res == null)
+            {
+                onFailed?.Invoke(BackendErrorMapper.Map(error));
+                yield break;
+            }
+
+            _caseSummaries.Clear();
+            if (res.cases != null)
+                foreach (var c in res.cases)
+                    if (c != null && !string.IsNullOrEmpty(c.caseId)) _caseSummaries[c.caseId] = c;
+            onDone?.Invoke();
+        }
+
+        public void FetchCaseDetailBackend(string caseId, Action<CaseDetailResponse> onDone, Action<string> onFailed)
+        {
+            if (!BackendReady) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
+            if (string.IsNullOrEmpty(caseId)) { onFailed?.Invoke("Geçersiz kasa."); return; }
+            StartCoroutine(FetchCaseDetailRoutine(caseId, onDone, onFailed));
+        }
+
+        IEnumerator FetchCaseDetailRoutine(string caseId, Action<CaseDetailResponse> onDone, Action<string> onFailed)
+        {
+            CaseDetailResponse res = null;
+            BackendError error = null;
+            yield return Backend.GetCaseDetail(caseId, r => res = r, e => error = e);
+
+            if (error != null || res == null)
+            {
+                onFailed?.Invoke(BackendErrorMapper.Map(error));
+                yield break;
+            }
+            onDone?.Invoke(res);
+        }
+
+        // ── Backend leaderboards (server-authoritative, read-only) ──────────────
+
+        public void RefreshLeaderboardBackend(string type, Action<LeaderboardResponse> onDone, Action<string> onFailed)
+        {
+            if (!BackendReady) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
+            StartCoroutine(RefreshLeaderboardRoutine(type, onDone, onFailed));
+        }
+
+        IEnumerator RefreshLeaderboardRoutine(string type, Action<LeaderboardResponse> onDone, Action<string> onFailed)
+        {
+            LeaderboardResponse res = null;
+            BackendError error = null;
+            yield return Backend.GetLeaderboard(type, r => res = r, e => error = e);
+
+            if (error != null || res == null)
+            {
+                Debug.LogWarning("[Backend] Leaderboard fetch failed — " + (error?.ToString() ?? "null response"));
+                onFailed?.Invoke(BackendErrorMapper.Map(error));
+                yield break;
+            }
+            onDone?.Invoke(res);
         }
 
         public void ClaimMissionBackend(string missionId, Action<MissionClaimResponse> onDone, Action<string> onFailed)
@@ -581,11 +927,12 @@ namespace ValoCase.Core
                 yield break;
             }
 
-            // Map the selected input skins to owned backend instance itemIds.
-            if (!TryResolveUpgradeItemIds(inputs, out var itemIds, out var resolveError))
+            List<string> itemIds = null;
+            string resolveError = null;
+            yield return ResolveUpgradeItemIdsWithRefresh(inputs, (ids, err) => { itemIds = ids; resolveError = err; });
+            if (itemIds == null || itemIds.Count == 0)
             {
                 Debug.LogWarning("[Backend] Upgrade itemId resolution failed — " + resolveError);
-                RequestBackendResync();   // local cache may be stale vs the server
                 result.Error = resolveError;
                 onResult?.Invoke(result);
                 yield break;
@@ -637,6 +984,163 @@ namespace ValoCase.Core
             onResult?.Invoke(result);
         }
 
+        public IEnumerator UpgradeBackendRoutine(UpgradeRewardContext context, Action<UpgradeBackendResult> onResult)
+        {
+            var result = new UpgradeBackendResult { Target = context != null ? context.Target : null };
+
+            if (!BackendReady)
+            {
+                result.Error = "Sunucu kullanÄ±lamÄ±yor.";
+                onResult?.Invoke(result);
+                yield break;
+            }
+            if (context == null || !context.IsValid)
+            {
+                result.Error = "GeÃ§ersiz seÃ§im.";
+                onResult?.Invoke(result);
+                yield break;
+            }
+
+            UpgradeResponse response = null;
+            BackendError error = null;
+            yield return Backend.Upgrade(context.InputItemIds, context.TargetSkinId, context.TargetSkinIds,
+                r => response = r,
+                e => error = e);
+
+            if (error != null || response == null)
+            {
+                Debug.LogWarning("[Backend] Upgrade failed â€” " + (error?.ToString() ?? "null response"));
+                if (error == null || error.HttpStatus == 0) RequestBackendResync();
+                result.Error = BackendErrorMapper.Map(error);
+                onResult?.Invoke(result);
+                yield break;
+            }
+
+            var resolvedTarget = !string.IsNullOrEmpty(response.targetSkinId) && Content != null
+                ? Content.GetSkin(response.targetSkinId)
+                : null;
+            if (resolvedTarget != null) result.Target = resolvedTarget;
+
+            if (result.Target == null)
+            {
+                Debug.LogError("[Backend] Upgrade target not resolvable locally: " + response.targetSkinId);
+                RequestBackendResync();
+                result.Error = "SonuÃ§ eÅŸitleniyor...";
+                onResult?.Invoke(result);
+                yield break;
+            }
+
+            result.Ok = true;
+            result.Success = response.success;
+            result.Chance = response.chance;
+            Debug.Log($"[Backend] Upgrade OK â€” success={response.success} chance={response.chance} " +
+                      $"consumed={(response.consumedItemIds != null ? response.consumedItemIds.Length : 0)} " +
+                      $"target={response.targetSkinId} granted={response.grantedInventoryItemId ?? "<none>"}");
+            onResult?.Invoke(result);
+        }
+
+        // Server-authoritative upgrade chance preview (read-only). Resolves the same
+        // itemIds the real upgrade would send (non-mutating) and returns the backend's
+        // canUpgrade/chance/value decision. Never consumes inventory or grants anything.
+        public void UpgradePreviewBackend(List<SkinDefinitionSO> inputs, IReadOnlyList<SkinDefinitionSO> targets,
+            Action<UpgradePreviewResponse> onDone, Action<BackendError, string> onFailed)
+        {
+            if (!BackendReady) { onFailed?.Invoke(null, "Sunucu kullanılamıyor."); return; }
+            StartCoroutine(UpgradePreviewRoutine(inputs, targets, onDone, onFailed));
+        }
+
+        public void UpgradePreviewBackend(UpgradeRewardContext context,
+            Action<UpgradePreviewResponse> onDone, Action<BackendError, string> onFailed)
+        {
+            if (!BackendReady) { onFailed?.Invoke(null, "Sunucu kullanÄ±lamÄ±yor."); return; }
+            if (context == null || !context.IsValid) { onFailed?.Invoke(null, "GeÃ§ersiz seÃ§im."); return; }
+            StartCoroutine(UpgradePreviewRoutine(context, onDone, onFailed));
+        }
+
+        IEnumerator UpgradePreviewRoutine(List<SkinDefinitionSO> inputs, IReadOnlyList<SkinDefinitionSO> targets,
+            Action<UpgradePreviewResponse> onDone, Action<BackendError, string> onFailed)
+        {
+            var target = targets != null && targets.Count > 0 ? targets[0] : null;
+            if (inputs == null || inputs.Count == 0 || target == null)
+            {
+                onFailed?.Invoke(null, "Geçersiz seçim.");
+                yield break;
+            }
+
+            List<string> itemIds = null;
+            string resolveError = null;
+            yield return ResolveUpgradeItemIdsWithRefresh(new List<SkinDefinitionSO>(inputs),
+                (ids, err) => { itemIds = ids; resolveError = err; });
+            if (itemIds == null || itemIds.Count == 0)
+            {
+                onFailed?.Invoke(null, resolveError);
+                yield break;
+            }
+
+            UpgradePreviewResponse res = null;
+            BackendError error = null;
+            yield return Backend.UpgradePreview(itemIds.ToArray(), target.SkinId,
+                r => res = r, e => error = e);
+
+            if (error != null || res == null)
+            {
+                onFailed?.Invoke(error, BackendErrorMapper.Map(error));
+                yield break;
+            }
+            onDone?.Invoke(res);
+        }
+
+        IEnumerator UpgradePreviewRoutine(UpgradeRewardContext context,
+            Action<UpgradePreviewResponse> onDone, Action<BackendError, string> onFailed)
+        {
+            UpgradePreviewResponse res = null;
+            BackendError error = null;
+            yield return Backend.UpgradePreview(context.InputItemIds, context.TargetSkinId,
+                r => res = r, e => error = e);
+
+            if (error != null || res == null)
+            {
+                onFailed?.Invoke(error, BackendErrorMapper.Map(error));
+                yield break;
+            }
+            onDone?.Invoke(res);
+        }
+
+        public void ResolveUpgradeRewardContext(List<SkinDefinitionSO> inputs,
+            IReadOnlyList<SkinDefinitionSO> targets, Action<UpgradeRewardContext> onDone, Action<string> onFailed)
+        {
+            if (!BackendReady) { onFailed?.Invoke("Sunucu kullanÄ±lamÄ±yor."); return; }
+            StartCoroutine(ResolveUpgradeRewardContextRoutine(inputs, targets, onDone, onFailed));
+        }
+
+        IEnumerator ResolveUpgradeRewardContextRoutine(List<SkinDefinitionSO> inputs,
+            IReadOnlyList<SkinDefinitionSO> targets, Action<UpgradeRewardContext> onDone, Action<string> onFailed)
+        {
+            var target = targets != null && targets.Count > 0 ? targets[0] : null;
+            if (inputs == null || inputs.Count == 0 || target == null)
+            {
+                onFailed?.Invoke("GeÃ§ersiz seÃ§im.");
+                yield break;
+            }
+
+            List<string> itemIds = null;
+            string resolveError = null;
+            yield return ResolveUpgradeItemIdsWithRefresh(new List<SkinDefinitionSO>(inputs),
+                (ids, err) => { itemIds = ids; resolveError = err; });
+            if (itemIds == null || itemIds.Count == 0)
+            {
+                onFailed?.Invoke(string.IsNullOrEmpty(resolveError) ? "GeÃ§ersiz seÃ§im." : resolveError);
+                yield break;
+            }
+
+            onDone?.Invoke(new UpgradeRewardContext(
+                new List<SkinDefinitionSO>(inputs),
+                new List<SkinDefinitionSO>(targets),
+                itemIds.ToArray(),
+                target.SkinId,
+                ToSkinIds(targets)));
+        }
+
         // Translate the selected input skins into real backend instance itemIds. Inputs
         // are grouped by skinId and that many candidate instances are pulled from the
         // runtime BackendInventoryCache. Returns false (with a user-facing message) if
@@ -647,7 +1151,7 @@ namespace ValoCase.Core
             itemIds = new List<string>();
             error = null;
 
-            var need = new Dictionary<string, int>();
+            var used = new Dictionary<string, int>();
             foreach (var skin in inputs)
             {
                 if (skin == null || string.IsNullOrEmpty(skin.SkinId))
@@ -655,28 +1159,64 @@ namespace ValoCase.Core
                     error = "Geçersiz skin seçimi.";
                     return false;
                 }
-                need[skin.SkinId] = need.TryGetValue(skin.SkinId, out var c) ? c + 1 : 1;
-            }
-
-            foreach (var kv in need)
-            {
-                if (!BackendInventory.TryConsumeCandidatesForSkin(kv.Key, kv.Value, out var ids))
+                used.TryGetValue(skin.SkinId, out var index);
+                var owned = BackendInventory.GetBackendItemsForSkin(skin.SkinId);
+                if (owned == null || owned.Count <= index || string.IsNullOrEmpty(owned[index].ItemId))
                 {
-                    error = "Bu skin için yeterli envanter bulunamadı.";
+                    error = "Bu skin iÃ§in yeterli envanter bulunamadÄ±.";
                     return false;
                 }
-                itemIds.AddRange(ids);
+                itemIds.Add(owned[index].ItemId);
+                used[skin.SkinId] = index + 1;
             }
             return true;
         }
 
+        IEnumerator ResolveUpgradeItemIdsWithRefresh(List<SkinDefinitionSO> inputs, Action<List<string>, string> onDone)
+        {
+            if (TryResolveUpgradeItemIds(inputs, out var itemIds, out var error))
+            {
+                onDone?.Invoke(itemIds, null);
+                yield break;
+            }
+
+            bool refreshed = false;
+            string refreshError = null;
+            yield return SyncInventoryFromBackend((ok, message) => { refreshed = ok; refreshError = message; });
+
+            if (!refreshed)
+            {
+                onDone?.Invoke(null, string.IsNullOrEmpty(refreshError) ? "Bağlantı hatası" : refreshError);
+                yield break;
+            }
+
+            if (TryResolveUpgradeItemIds(inputs, out itemIds, out error))
+            {
+                onDone?.Invoke(itemIds, null);
+                yield break;
+            }
+
+            onDone?.Invoke(null, error);
+        }
+
         // Inventory-only pull used after a successful sale. Sequenced (yielded) so the
         // caller's onSold fires only after the local cache mirrors the server.
-        IEnumerator SyncInventoryFromBackend()
+        IEnumerator SyncInventoryFromBackend(Action<bool, string> onDone = null)
         {
+            bool ok = false;
+            string message = null;
             yield return Backend.GetInventory(
-                ApplyInventoryFromBackend,
-                err => Debug.LogWarning("[Backend] Inventory sync after sale failed — keeping cached inventory. " + err));
+                res =>
+                {
+                    ApplyInventoryFromBackend(res);
+                    ok = true;
+                },
+                err =>
+                {
+                    message = BackendErrorMapper.Map(err);
+                    Debug.LogWarning("[Backend] Inventory sync failed — keeping cached inventory. " + err);
+                });
+            onDone?.Invoke(ok, message);
         }
 
         // Server-authoritative inventory replace. The backend is the source of truth,
@@ -770,5 +1310,33 @@ namespace ValoCase.Core
         public float Chance;             // backend-reported chance (for log/display)
         public SkinDefinitionSO Target;  // resolved target skin
         public string Error;             // user-facing message when Ok == false
+    }
+
+    public sealed class UpgradeRewardContext
+    {
+        public readonly List<SkinDefinitionSO> Inputs;
+        public readonly List<SkinDefinitionSO> Targets;
+        public readonly string[] InputItemIds;
+        public readonly string TargetSkinId;
+        public readonly string[] TargetSkinIds;
+        public readonly SkinDefinitionSO Target;
+        public readonly string Signature;
+
+        public bool IsValid =>
+            InputItemIds != null && InputItemIds.Length > 0 &&
+            !string.IsNullOrEmpty(TargetSkinId) &&
+            TargetSkinIds != null && TargetSkinIds.Length > 0;
+
+        public UpgradeRewardContext(List<SkinDefinitionSO> inputs, List<SkinDefinitionSO> targets,
+            string[] inputItemIds, string targetSkinId, string[] targetSkinIds)
+        {
+            Inputs = inputs ?? new List<SkinDefinitionSO>();
+            Targets = targets ?? new List<SkinDefinitionSO>();
+            InputItemIds = inputItemIds ?? Array.Empty<string>();
+            TargetSkinId = targetSkinId;
+            TargetSkinIds = targetSkinIds ?? Array.Empty<string>();
+            Target = Targets.Count > 0 ? Targets[0] : null;
+            Signature = string.Join(",", InputItemIds) + "|" + string.Join(",", TargetSkinIds);
+        }
     }
 }

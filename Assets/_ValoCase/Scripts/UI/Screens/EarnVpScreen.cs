@@ -1,9 +1,12 @@
+using System.Collections;
 using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
 using ValoCase.Core;
+using ValoCase.Services.Ads;
+using ValoCase.Services.Backend;
 
 namespace ValoCase.UI.Screens
 {
@@ -76,10 +79,13 @@ namespace ValoCase.UI.Screens
         const float ClaimIdleSeconds     = 1f;
         const float ClaimSafetySeconds   = 20f;
         const float RetryCooldownSeconds = 3f;
+        const int   MaxClaimRetries      = 3;
         int    _pendingTaps;
         long   _sessionStartMs;
         float  _pendingEstimateVp;
         readonly List<int> _pendingOffsetsMs = new List<int>(64);
+        string _sessionId;          // backend-issued id for the current accumulating batch
+        bool   _sessionStarting;
         float  _claimTimer;
         float  _retryCooldown;
         bool   _claimInFlight;
@@ -89,6 +95,7 @@ namespace ValoCase.UI.Screens
         string _inflightSessionId;
         int[]  _inflightOffsetsMs;
         int    _inflightEstimateVp;
+        int    _inflightRetries;
 
         // Animation timers (Update-driven, no coroutines)
         float _punchT      = 99f;
@@ -120,6 +127,25 @@ namespace ValoCase.UI.Screens
         bool    _flyActive;
         float   _flyT;
         Vector2 _flyStart, _flyTarget;
+
+        // ── Rewarded ad bonus (2x VP) ──────────────────────────────────────────
+        RectTransform   _adBlock;
+        Button          _adButton;
+        Image           _adButtonImg;
+        TextMeshProUGUI _adTitleLabel;
+        TextMeshProUGUI _adSubLabel;
+        bool            _adClaimInFlight;
+        bool            _adAvailable = true;
+        bool            _adActive;
+        string          _adUnavailableReason;
+        float           _adCooldownRemaining;
+        float           _adCountdownTick;
+        float           _adStatusRetryTick;
+        string          _adEarnSessionId;
+        bool            _clearAdOnHidden;
+        bool            _clearAdPending;
+
+        static readonly Color AdGold    = new Color(1.000f, 0.823f, 0.290f, 1f);
 
         static readonly string[] Tips =
         {
@@ -167,6 +193,7 @@ namespace ValoCase.UI.Screens
 
         void OnBackClicked()
         {
+            _clearAdOnHidden = true;
             var target = (_prevScreen != ScreenType.EarnVp &&
                           _prevScreen != ScreenType.Settings)
                 ? _prevScreen
@@ -194,9 +221,27 @@ namespace ValoCase.UI.Screens
 
             _claimTimer    = 0f;
             _retryCooldown = 0f;
+            _pendingTaps   = 0;
+            _pendingOffsetsMs.Clear();
+            _pendingEstimateVp = 0f;
+            _sessionId       = null;
+            _sessionStarting = false;
             _flyActive     = false;
             if (_flyLabel != null) _flyLabel.gameObject.SetActive(false);
             RefreshPendingLabel();
+
+            _adClaimInFlight = false;
+            _adActive = false;
+            _adAvailable = true;
+            _adUnavailableReason = null;
+            _adCooldownRemaining = 0f;
+            _adCountdownTick = 0f;
+            _adStatusRetryTick = 0f;
+            _adEarnSessionId = null;
+            _clearAdOnHidden = false;
+            _clearAdPending = false;
+            RefreshAdBonusBlock();
+            RefreshAdBonusStatus();
 
             GameEvents.OnVpChanged += HandleVpChanged;
         }
@@ -206,6 +251,11 @@ namespace ValoCase.UI.Screens
             GameEvents.OnVpChanged -= HandleVpChanged;
 
             TryFlushClaim();
+            if (_clearAdOnHidden)
+            {
+                _clearAdPending = true;
+                TryClearEarnVp2xAfterClaims();
+            }
 
             // Kill transient visuals so nothing lingers on next show
             for (int i = 0; i < _floats.Length; i++)
@@ -274,7 +324,11 @@ namespace ValoCase.UI.Screens
             else
             {
                 // Backend-required: record tap timing only; the server grants VP on claim.
-                if (_pendingTaps == 0) _sessionStartMs = NowMs();
+                if (_pendingTaps == 0)
+                {
+                    _sessionStartMs = NowMs();
+                    EnsureSessionStarted();
+                }
                 long offset = NowMs() - _sessionStartMs;
                 if (offset < 0) offset = 0;
                 _pendingOffsetsMs.Add((int)offset);
@@ -310,9 +364,44 @@ namespace ValoCase.UI.Screens
 
         static long NowMs() => System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-        // Sends one backend claim at a time. A failed claim keeps the same clientSessionId
-        // and retries on the next tick (server dedup makes it idempotent); a successful
-        // claim discards the session id. New taps accumulate into the next session.
+        // Starts one server-authorized session per accumulating batch. The backend-issued
+        // sessionId becomes the claim's clientSessionId; without it no claim is sent.
+        void EnsureSessionStarted()
+        {
+            if (!string.IsNullOrEmpty(_sessionId) || _sessionStarting) return;
+            var ctx = GameContext.Instance;
+            if (ctx == null || ctx.CanUseLocalEconomy) return;
+
+            _sessionStarting = true;
+            ctx.StartEarnVpSessionBackend(
+                res =>
+                {
+                    if (this == null) return;
+                    _sessionStarting = false;
+                    _sessionId = res != null ? res.sessionId : null;
+                },
+                msg =>
+                {
+                    if (this == null) return;
+                    _sessionStarting = false;
+                    ResetPendingBatch();
+                    if (!string.IsNullOrEmpty(msg)) GameEvents.RaiseToast(msg);
+                });
+        }
+
+        void ResetPendingBatch()
+        {
+            _pendingTaps = 0;
+            _pendingOffsetsMs.Clear();
+            _pendingEstimateVp = 0f;
+            _sessionId  = null;
+            _claimTimer = 0f;
+            RefreshPendingLabel();
+        }
+
+        // Sends one backend claim at a time using the server-issued sessionId. Transient
+        // failures retry a few times; a dead/expired session is dropped rather than retried
+        // forever. A flushed batch frees the id so the next batch starts a fresh session.
         void TryFlushClaim()
         {
             var ctx = GameContext.Instance;
@@ -322,6 +411,8 @@ namespace ValoCase.UI.Screens
             if (!_hasInflight)
             {
                 if (_pendingTaps <= 0) return;
+                if (string.IsNullOrEmpty(_sessionId)) return;
+
                 long dur = NowMs() - _sessionStartMs;
                 if (dur < 0) dur = 0;
                 if (dur > 240000) dur = 240000;
@@ -329,10 +420,12 @@ namespace ValoCase.UI.Screens
                 _inflightDurationMs = dur;
                 _inflightOffsetsMs  = _pendingOffsetsMs.ToArray();
                 _inflightEstimateVp = Mathf.RoundToInt(_pendingEstimateVp);
-                _inflightSessionId  = System.Guid.NewGuid().ToString();
+                _inflightSessionId  = _sessionId;
+                _inflightRetries    = 0;
                 _pendingTaps        = 0;
                 _pendingOffsetsMs.Clear();
                 _pendingEstimateVp  = 0f;
+                _sessionId          = null;
                 _hasInflight        = true;
             }
 
@@ -346,20 +439,52 @@ namespace ValoCase.UI.Screens
                     if (this == null) return;
                     _claimInFlight = false;
                     _hasInflight   = false;
+                    _inflightSessionId  = null;
                     _inflightEstimateVp = 0;
                     int granted = res != null ? res.vpGranted : 0;
                     if (granted > 0) StartFly(granted);
                     RefreshPendingLabel();
                     RefreshBalance();
+                    TryClearEarnVp2xAfterClaims();
                 },
                 msg =>
                 {
                     if (this == null) return;
                     _claimInFlight = false;
-                    _retryCooldown = RetryCooldownSeconds;
+                    _inflightRetries++;
+                    if (_inflightRetries >= MaxClaimRetries)
+                    {
+                        _hasInflight        = false;
+                        _inflightSessionId  = null;
+                        _inflightEstimateVp = 0;
+                    }
+                    else
+                    {
+                        _retryCooldown = RetryCooldownSeconds;
+                    }
                     RefreshPendingLabel();
                     if (!string.IsNullOrEmpty(msg)) GameEvents.RaiseToast(msg);
+                    TryClearEarnVp2xAfterClaims();
                 });
+        }
+
+        string CurrentEarnSessionId()
+        {
+            if (!string.IsNullOrEmpty(_sessionId)) return _sessionId;
+            if (!string.IsNullOrEmpty(_inflightSessionId)) return _inflightSessionId;
+            return _adEarnSessionId;
+        }
+
+        void TryClearEarnVp2xAfterClaims()
+        {
+            if (!_clearAdPending || _claimInFlight || _hasInflight || _pendingTaps > 0) return;
+            var id = CurrentEarnSessionId();
+            if (!string.IsNullOrEmpty(id))
+                GameContext.Instance?.ClearEarnVp2xBackend(id);
+            _clearAdPending = false;
+            _clearAdOnHidden = false;
+            _adActive = false;
+            _adEarnSessionId = null;
         }
 
         void UpdateBackendClaim(float dt)
@@ -485,6 +610,30 @@ namespace ValoCase.UI.Screens
             var ctx = GameContext.Instance;
             if (ctx != null && !ctx.CanUseLocalEconomy)
                 UpdateBackendClaim(dt);
+
+            if (ctx != null && ctx.BackendEnabled && IsAuthPending(_adUnavailableReason))
+            {
+                _adStatusRetryTick += Time.unscaledDeltaTime;
+                if (_adStatusRetryTick >= 1f)
+                {
+                    _adStatusRetryTick = 0f;
+                    if (ctx.HasGuestToken)
+                        RefreshAdBonusStatus();
+                }
+            }
+
+            if (_adCooldownRemaining > 0f && !_adClaimInFlight)
+            {
+                _adCountdownTick += Time.unscaledDeltaTime;
+                if (_adCountdownTick >= 1f)
+                {
+                    var steps = Mathf.FloorToInt(_adCountdownTick);
+                    _adCountdownTick -= steps;
+                    _adCooldownRemaining = Mathf.Max(0f, _adCooldownRemaining - steps);
+                    if (_adCooldownRemaining <= 0f) _adActive = false;
+                    RefreshAdBonusBlock();
+                }
+            }
 
             // ── Multiplier decay — starts immediately, ramps up while idle ────
             if (_multiplier > 1f)
@@ -762,6 +911,9 @@ namespace ValoCase.UI.Screens
             // ── Back button (top-left, below global profile bar) ──────────────
             BuildBackButton(rt);
 
+            // ── Rewarded ad bonus (2x VP) ─────────────────────────────────────
+            BuildAdBonusBlock(rt);
+
             // ── Pools ─────────────────────────────────────────────────────────
             BuildPools(center);
         }
@@ -999,6 +1151,231 @@ namespace ValoCase.UI.Screens
             btn.transition = Selectable.Transition.None;
             btn.onClick.AddListener(OnBackClicked);
             backBtn.transform.SetAsLastSibling();
+        }
+
+        // ── Rewarded ad bonus block (bottom, above the tip) ──────────────────────
+        void BuildAdBonusBlock(RectTransform rt)
+        {
+            _adBlock = NewRect(rt, "AdBonus", new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0.5f, 0f));
+            _adBlock.anchoredPosition = new Vector2(0f, 188f);
+            _adBlock.sizeDelta        = new Vector2(380f, 76f);
+
+            var btnGo = new GameObject("AdButton", typeof(RectTransform), typeof(Image), typeof(Button), typeof(Outline));
+            btnGo.transform.SetParent(_adBlock, false);
+            var btnRt = (RectTransform)btnGo.transform;
+            btnRt.anchorMin = Vector2.zero; btnRt.anchorMax = Vector2.one;
+            btnRt.offsetMin = Vector2.zero; btnRt.offsetMax = Vector2.zero;
+
+            _adButtonImg = btnGo.GetComponent<Image>();
+            _adButtonImg.color = BgCard;
+            var ol = btnGo.GetComponent<Outline>();
+            ol.effectColor    = new Color(AdGold.r, AdGold.g, AdGold.b, 0.8f);
+            ol.effectDistance = new Vector2(1.5f, -1.5f);
+
+            _adButton = btnGo.GetComponent<Button>();
+            _adButton.transition = Selectable.Transition.None;
+            _adButton.onClick.AddListener(OnAdBonusClicked);
+
+            _adTitleLabel = CreateTmp(btnRt, "AdTitle", "REKLAM İZLE → 2X VP",
+                19f, FontStyles.Bold, TextAlignmentOptions.Center, AdGold);
+            _adTitleLabel.characterSpacing = 2f;
+            var tRt = _adTitleLabel.rectTransform;
+            tRt.anchorMin = new Vector2(0f, 0.5f); tRt.anchorMax = new Vector2(1f, 1f);
+            tRt.offsetMin = new Vector2(12f, 0f);  tRt.offsetMax = new Vector2(-12f, -8f);
+
+            _adSubLabel = CreateTmp(btnRt, "AdSub", "",
+                12f, FontStyles.Normal, TextAlignmentOptions.Center, TextSub);
+            var sRt = _adSubLabel.rectTransform;
+            sRt.anchorMin = new Vector2(0f, 0f); sRt.anchorMax = new Vector2(1f, 0.5f);
+            sRt.offsetMin = new Vector2(12f, 8f); sRt.offsetMax = new Vector2(-12f, 0f);
+
+            _adBlock.gameObject.SetActive(IsBackendEarnVp());
+        }
+
+        void RefreshAdBonusBlock()
+        {
+            if (_adBlock == null) return;
+
+            if (!IsBackendEarnVp())
+            {
+                _adBlock.gameObject.SetActive(false);
+                return;
+            }
+            _adBlock.gameObject.SetActive(true);
+
+            if (_adActive)
+            {
+                SetAdButtonState(false, TierGreen, "2X BONUS ACTIVE", FormatCooldown(_adCooldownRemaining));
+                return;
+            }
+
+            if (_adClaimInFlight)
+            {
+                SetAdButtonState(false, AdGold, "REKLAM İZLENİYOR...", "");
+                return;
+            }
+            if (_adCooldownRemaining > 0.5f)
+            {
+                SetAdButtonState(false, TextSub, "REKLAM İZLE → 2X VP", $"Tekrar: {FormatCooldown(_adCooldownRemaining)}");
+                return;
+            }
+            if (IsEarnNoActiveSession(_adUnavailableReason))
+            {
+                SetAdButtonState(true, AdGold, "2X BONUS ICIN REKLAM IZLE", "Tap oturumu reklamla baslar");
+                return;
+            }
+            if (!_adAvailable)
+            {
+                SetAdButtonState(false, TextSub, "REKLAM İZLE → 2X VP", AdRewardMessages.MapUnavailable(_adUnavailableReason));
+                return;
+            }
+
+            SetAdButtonState(true, AdGold, "REKLAM İZLE → 2X VP", "Tap ödülünü 2x yap");
+        }
+
+        void SetAdButtonState(bool interactable, Color titleColor, string title, string sub)
+        {
+            if (_adButton != null) _adButton.interactable = interactable;
+            if (_adButtonImg != null) _adButtonImg.color = _adActive ? new Color(TierGreen.r, TierGreen.g, TierGreen.b, 0.24f) : BgCard;
+            if (_adTitleLabel != null)
+            {
+                _adTitleLabel.text  = title;
+                _adTitleLabel.color = titleColor;
+            }
+            if (_adSubLabel != null) _adSubLabel.text = sub;
+        }
+
+        static string FormatCooldown(float seconds)
+        {
+            int s = Mathf.CeilToInt(seconds);
+            return $"{s / 60:00}:{s % 60:00}";
+        }
+
+        static bool IsEarnNoActiveSession(string reason)
+            => string.Equals(reason, "EARN_VP_NO_ACTIVE_SESSION", System.StringComparison.OrdinalIgnoreCase);
+
+        static bool IsAuthPending(string reason)
+            => string.Equals(reason, "AUTH_PENDING", System.StringComparison.OrdinalIgnoreCase);
+
+        void RefreshAdBonusStatus()
+        {
+            var ctx = GameContext.Instance;
+            if (ctx == null || !ctx.BackendEnabled) return;
+            if (!ctx.HasGuestToken)
+            {
+                _adAvailable = false;
+                _adUnavailableReason = "AUTH_PENDING";
+                _adStatusRetryTick = 0f;
+                RefreshAdBonusBlock();
+                return;
+            }
+
+            ctx.RefreshEarnVpAdStatus(CurrentEarnSessionId(),
+                res =>
+                {
+                    if (this == null) return;
+                    ApplyAdStatus(res != null ? res.Find(AdRewardTypes.EarnVp2x) : null);
+                },
+                reason =>
+                {
+                    if (this == null) return;
+                    _adAvailable = false;
+                    _adUnavailableReason = string.IsNullOrEmpty(reason) ? null : reason;
+                    RefreshAdBonusBlock();
+                });
+        }
+
+        void ApplyAdStatus(AdRewardPlacementStatus status)
+        {
+            if (status != null)
+            {
+                _adAvailable         = status.isAvailable;
+                _adUnavailableReason = status.unavailableReason;
+                _adActive            = status.earnVp2xActive;
+                _adCooldownRemaining = status.earnVp2xRemainingSeconds > 0
+                    ? status.earnVp2xRemainingSeconds
+                    : status.cooldownRemainingSeconds;
+                _adCountdownTick = 0f;
+            }
+            else
+            {
+                _adAvailable = true;
+                _adUnavailableReason = null;
+                _adActive = false;
+                _adCooldownRemaining = 0f;
+            }
+            RefreshAdBonusBlock();
+        }
+
+        void OnAdBonusClicked()
+        {
+            if (_adClaimInFlight || _adActive) return;
+            var ctx = GameContext.Instance;
+            if (ctx == null || !ctx.BackendEnabled) return;
+            if (!ctx.HasGuestToken)
+            {
+                _adUnavailableReason = "AUTH_PENDING";
+                RefreshAdBonusBlock();
+                return;
+            }
+
+            _adClaimInFlight = true;
+            RefreshAdBonusBlock();
+
+            StartCoroutine(WatchEarnVp2xWhenSessionReady(ctx));
+        }
+
+        IEnumerator WatchEarnVp2xWhenSessionReady(GameContext ctx)
+        {
+            if (string.IsNullOrEmpty(_sessionId))
+            {
+                if (_pendingTaps == 0)
+                    _sessionStartMs = NowMs();
+                EnsureSessionStarted();
+                while (_sessionStarting)
+                    yield return null;
+            }
+
+            var earnSessionId = _sessionId;
+            if (string.IsNullOrEmpty(earnSessionId))
+            {
+                _adClaimInFlight = false;
+                RefreshAdBonusBlock();
+                GameEvents.RaiseToast("GeÃ§ersiz oturum.");
+                yield break;
+            }
+
+            _adEarnSessionId = earnSessionId;
+            ctx.WatchEarnVp2xAd(earnSessionId,
+                res =>
+                {
+                    if (this == null) return;
+                    _adClaimInFlight = false;
+                    if (res != null)
+                    {
+                        _adActive            = res.earnVp2xActive;
+                        _adCooldownRemaining = res.earnVp2xRemainingSeconds > 0
+                            ? res.earnVp2xRemainingSeconds
+                            : res.cooldownRemainingSeconds;
+                        _adCountdownTick = 0f;
+                        if (res.earnVp2xActive) GameEvents.RaiseToast("2X VP bonusu aktif");
+                    }
+                    RefreshAdBonusBlock();
+                    RefreshAdBonusStatus();
+                },
+                msg =>
+                {
+                    if (this == null) return;
+                    _adClaimInFlight = false;
+                    RefreshAdBonusBlock();
+                    if (!string.IsNullOrEmpty(msg)) GameEvents.RaiseToast(msg);
+                },
+                onCancelled: () =>
+                {
+                    if (this == null) return;
+                    _adClaimInFlight = false;
+                    RefreshAdBonusBlock();
+                });
         }
 
         // ── Pools ─────────────────────────────────────────────────────────────

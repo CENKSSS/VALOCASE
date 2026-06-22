@@ -64,6 +64,14 @@ namespace ValoCase.Services.Backend
             return Send("POST", path, "{}", auth: true, onSuccess, onError, debugTag: debugTag);
         }
 
+        // ── Case catalog (server-authoritative economy values, read-only) ───────
+        // GET returns a bare array; wrap under "cases" so JsonUtility can map it.
+        public IEnumerator GetCases(Action<CaseSummaryListResponse> onSuccess, Action<BackendError> onError)
+            => Send("GET", ApiPrefix + "/cases", null, auth: true, onSuccess, onError, wrapArrayKey: "cases");
+
+        public IEnumerator GetCaseDetail(string caseId, Action<CaseDetailResponse> onSuccess, Action<BackendError> onError)
+            => Send("GET", ApiPrefix + "/cases/" + UnityWebRequest.EscapeURL(caseId), null, auth: true, onSuccess, onError);
+
         // ── Account display name (server-authoritative profile) ─────────────────
         // Backend trims, validates (required, max 20), persists, and echoes the stored
         // displayName. Unity updates its local cache only after this succeeds.
@@ -105,6 +113,13 @@ namespace ValoCase.Services.Backend
                                    Action<UpgradeResponse> onSuccess, Action<BackendError> onError)
             => Send("POST", ApiPrefix + "/upgrade",
                     JsonUtility.ToJson(new UpgradeRequest { inputItemIds = inputItemIds, targetSkinId = targetSkinId, targetSkinIds = targetSkinIds }),
+                    auth: true, onSuccess, onError);
+
+        // ── Upgrade preview (server-authoritative chance, read-only) ────────────
+        public IEnumerator UpgradePreview(string[] inputInventoryItemIds, string targetSkinId,
+                                          Action<UpgradePreviewResponse> onSuccess, Action<BackendError> onError)
+            => Send("POST", ApiPrefix + "/upgrade/preview",
+                    JsonUtility.ToJson(new UpgradePreviewRequest { inputInventoryItemIds = inputInventoryItemIds, targetSkinId = targetSkinId }),
                     auth: true, onSuccess, onError);
 
         // ── Case Battle (server-authoritative, bots) ────────────────────────────
@@ -173,6 +188,21 @@ namespace ValoCase.Services.Backend
             => Send("POST", ApiPrefix + "/missions/" + UnityWebRequest.EscapeURL(missionId) + "/claim", "{}",
                     auth: true, onSuccess, onError);
 
+        // ── Leaderboards (server-authoritative, read-only) ──────────────────────
+        public IEnumerator GetLeaderboard(string type, Action<LeaderboardResponse> onSuccess, Action<BackendError> onError)
+            => Send("GET", ApiPrefix + "/leaderboards?type=" + UnityWebRequest.EscapeURL(type), null,
+                    auth: true, onSuccess, onError);
+
+        // ── Earn VP session start (server-authoritative session window) ─────────────
+        public IEnumerator StartEarnVpSession(Action<EarnVpStartResponse> onSuccess, Action<BackendError> onError)
+        {
+            const string path = "/api/earn-vp/session/start";
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            Debug.Log($"[EarnVp] POST {_baseUrl}{path} auth={!string.IsNullOrEmpty(GuestToken)}");
+#endif
+            return Send("POST", path, "{}", auth: true, onSuccess, onError);
+        }
+
         // ── Earn VP session (server-authoritative; server calculates the VP) ────────
         public IEnumerator ClaimEarnVpSession(int tapCount, long sessionDurationMs, string clientSessionId,
             int[] tapOffsetsMs, Action<EarnVpClaimResponse> onSuccess, Action<BackendError> onError)
@@ -190,6 +220,50 @@ namespace ValoCase.Services.Backend
 #endif
             return Send("POST", path, body, auth: true, onSuccess, onError);
         }
+
+        // ── Rewarded ads (server-authoritative; claim only ARMS the reward) ─────────
+        // Status is context-aware: the upgrade placement needs the current selection and
+        // the earn-vp placement may carry the current earn session. A bare array is wrapped
+        // under "placements"; an object that already wraps it is left as-is.
+        public IEnumerator GetAdRewardStatus(string[] inputItemIds, string[] targetSkinIds, string earnSessionId,
+            Action<AdRewardStatusResponse> onSuccess, Action<BackendError> onError)
+        {
+            var sb = new StringBuilder(ApiPrefix + "/ads/rewards/status");
+            bool first = true;
+            void Append(string key, string value)
+            {
+                sb.Append(first ? '?' : '&'); first = false;
+                sb.Append(key).Append('=').Append(UnityWebRequest.EscapeURL(value));
+            }
+            if (!string.IsNullOrEmpty(earnSessionId)) Append("earnSessionId", earnSessionId);
+            if (inputItemIds != null)
+                foreach (var id in inputItemIds) if (!string.IsNullOrEmpty(id)) Append("inputItemIds", id);
+            if (targetSkinIds != null)
+                foreach (var id in targetSkinIds) if (!string.IsNullOrEmpty(id)) Append("targetSkinIds", id);
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            var inputCount = inputItemIds != null ? inputItemIds.Length : 0;
+            var targetCount = targetSkinIds != null ? targetSkinIds.Length : 0;
+            var context = !string.IsNullOrEmpty(earnSessionId) ? "earn" : (inputCount > 0 || targetCount > 0 ? "upgrade" : "none");
+            Debug.Log($"[AdsStatus] context={context} authPresent={!string.IsNullOrEmpty(GuestToken)} earnSessionIdPresent={!string.IsNullOrEmpty(earnSessionId)} inputItemIds={inputCount} targetSkinIds={targetCount}");
+#endif
+            return Send("GET", sb.ToString(), null, auth: true, onSuccess, onError, wrapArrayKey: "placements");
+        }
+
+        // Claim is sent ONLY after a rewarded ad reports completed. It ARMS the reward for
+        // the given context; it does not grant VP. EARN_VP_2X is applied later by the normal
+        // earn-vp claim; UPGRADE_PLUS_5 is applied by upgrade preview/execute server-side.
+        public IEnumerator ClaimAdReward(AdRewardClaimRequest request,
+            Action<AdRewardClaimResponse> onSuccess, Action<BackendError> onError)
+            => Send("POST", ApiPrefix + "/ads/rewards/claim",
+                    JsonUtility.ToJson(request), auth: true, onSuccess, onError);
+
+        // Clears the active tap-screen 2x bonus when leaving the Earn VP screen.
+        public IEnumerator ClearEarnVp2x(string earnSessionId,
+            Action<AdRewardStatusResponse> onSuccess, Action<BackendError> onError)
+            => Send("POST", ApiPrefix + "/ads/rewards/earn-vp-2x/clear",
+                    JsonUtility.ToJson(new AdRewardClearRequest { earnSessionId = earnSessionId }),
+                    auth: true, onSuccess, onError);
 
         // ── Core request pipeline ───────────────────────────────────────────────
 
@@ -345,6 +419,15 @@ namespace ValoCase.Services.Backend
         public string message;   // "OK" or "DUPLICATE"
     }
 
+    [Serializable]
+    public sealed class EarnVpStartResponse
+    {
+        public string sessionId;
+        public long maxDurationMs;
+        public int maxTapRatePerSecond;
+        public int maxTaps;
+    }
+
     // ── Error envelope (transport-agnostic) ─────────────────────────────────────
     public sealed class BackendError
     {
@@ -478,6 +561,56 @@ namespace ValoCase.Services.Backend
         // derived caller-side from the selected case price (see CaseOpeningFlowController).
     }
 
+    // ── Case catalog DTOs (player-aware fields default when no token / absent) ──
+
+    [Serializable]
+    public sealed class CaseSummaryResponse
+    {
+        public string caseId;
+        public string displayName;
+        public int priceVp;
+        public string weaponCategory;
+        public int requiredLevel;
+        public bool canOpen;
+        public string lockedReason;
+        public int currentLevel;
+        public bool affordable;
+    }
+
+    [Serializable]
+    public sealed class CaseSummaryListResponse
+    {
+        public CaseSummaryResponse[] cases;
+    }
+
+    [Serializable]
+    public sealed class CaseDropResponse
+    {
+        public string skinId;
+        public string displayName;
+        public string weapon;
+        public string rarity;
+        public int vpValue;
+        public string imageRef;
+        public float dropChance;
+    }
+
+    [Serializable]
+    public sealed class CaseDetailResponse
+    {
+        public string caseId;
+        public string displayName;
+        public int priceVp;
+        public string weaponCategory;
+        public int requiredLevel;
+        public bool canOpen;
+        public string lockedReason;
+        public int currentLevel;
+        public bool affordable;
+        public int expectedValueVp;
+        public CaseDropResponse[] drops;
+    }
+
     // ── Account display name DTOs ───────────────────────────────────────────────
 
     [Serializable]
@@ -549,6 +682,13 @@ namespace ValoCase.Services.Backend
     }
 
     [Serializable]
+    public sealed class UpgradePreviewRequest
+    {
+        public string[] inputInventoryItemIds;
+        public string targetSkinId;
+    }
+
+    [Serializable]
     public sealed class UpgradeResponse
     {
         public string upgradeId;
@@ -557,6 +697,16 @@ namespace ValoCase.Services.Backend
         public string[] consumedItemIds;
         public string targetSkinId;
         public string grantedInventoryItemId;   // informational for now (null on failure)
+    }
+
+    [Serializable]
+    public sealed class UpgradePreviewResponse
+    {
+        public bool canUpgrade;
+        public float chancePercent;
+        public string reason;
+        public int inputValue;
+        public int targetValue;
     }
 
     // ── Case Battle request/response DTOs ───────────────────────────────────────
@@ -744,6 +894,96 @@ namespace ValoCase.Services.Backend
         public int rewardVp;
         public int newVpBalance;       // authoritative wallet AFTER the claim
         public string status;
+    }
+
+    // ── Leaderboard DTOs ────────────────────────────────────────────────────────
+
+    [Serializable]
+    public sealed class LeaderboardEntryResponse
+    {
+        public int rank;
+        public string displayName;
+        public string avatarKey;
+        public long value;
+        public string secondaryValue;
+    }
+
+    [Serializable]
+    public sealed class LeaderboardMeResponse
+    {
+        public int rank;
+        public string rankLabel;
+        public string displayName;
+        public string avatarKey;
+        public long value;
+        public string secondaryValue;
+    }
+
+    [Serializable]
+    public sealed class LeaderboardResponse
+    {
+        public string type;
+        public LeaderboardEntryResponse[] entries;
+        public LeaderboardMeResponse me;
+    }
+
+    // ── Rewarded ad DTOs ────────────────────────────────────────────────────────
+    // No daily-limit fields: EARN_VP_2X and UPGRADE_PLUS_5 have no daily cap.
+
+    [Serializable]
+    public sealed class AdRewardClaimRequest
+    {
+        public string   rewardType;      // EARN_VP_2X | UPGRADE_PLUS_5
+        public string   earnSessionId;   // EARN_VP_2X context
+        public string[] inputItemIds;    // UPGRADE_PLUS_5 context
+        public string   targetSkinId;
+        public string[] targetSkinIds;
+    }
+
+    [Serializable]
+    public sealed class AdRewardClearRequest
+    {
+        public string earnSessionId;
+    }
+
+    [Serializable]
+    public sealed class AdRewardPlacementStatus
+    {
+        public string rewardType;
+        public bool   isAvailable;
+        public int    remainingToday;
+        public string unavailableReason;
+        public bool   earnVp2xActive;
+        public long   earnVp2xRemainingSeconds;
+        public bool   upgradePlus5Active;
+        public bool   upgradePlus5AlreadyUsedForCurrentContext;
+        public long   cooldownRemainingSeconds;   // non-authoritative unless non-zero
+    }
+
+    [Serializable]
+    public sealed class AdRewardStatusResponse
+    {
+        public AdRewardPlacementStatus[] placements;
+
+        public AdRewardPlacementStatus Find(string rewardType)
+        {
+            if (placements == null || string.IsNullOrEmpty(rewardType)) return null;
+            foreach (var p in placements)
+                if (p != null && p.rewardType == rewardType) return p;
+            return null;
+        }
+    }
+
+    [Serializable]
+    public sealed class AdRewardClaimResponse
+    {
+        public string rewardType;
+        public bool   earnVp2xActive;
+        public long   earnVp2xRemainingSeconds;
+        public bool   upgradePlus5Active;
+        public bool   upgradePlus5AlreadyUsedForCurrentContext;
+        public long   cooldownRemainingSeconds;
+        public string message;
     }
 
     [Serializable]

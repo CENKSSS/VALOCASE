@@ -9,6 +9,7 @@ using ValoCase.Audio;
 using ValoCase.Core;
 using ValoCase.Data;
 using ValoCase.Services;
+using ValoCase.Services.Ads;
 using ValoCase.Services.Backend;
 
 namespace ValoCase.UI.Screens
@@ -107,6 +108,15 @@ namespace ValoCase.UI.Screens
         bool      _isUpgrading;
         Coroutine _pulseCo;
 
+        int                    _previewToken;
+        string                 _previewSignature;
+        UpgradePreviewResponse _lastPreview;
+        bool                   _previewInFlight;
+        UpgradeRewardContext   _upgradeContext;
+        string                 _upgradeContextSelectionSignature;
+        bool                   _upgradeContextInFlight;
+        int                    _upgradeContextToken;
+
         UpgradeSpinAnimator _spinAnimator;
         ScrollRect          _skinScrollRect;     // left (ENVANTER) list
 
@@ -126,11 +136,28 @@ namespace ValoCase.UI.Screens
         bool            _themed;
         TextMeshProUGUI _chanceCaption;
 
+        // ── Rewarded ad chance buff (+5%) ──────────────────────────────────────
+        static readonly Color AdGold = new Color(1f, 0.823f, 0.290f, 1f);
+        Button          _adBuffButton;
+        Image           _adBuffButtonImg;
+        TextMeshProUGUI _adBuffButtonLabel;
+        TextMeshProUGUI _adBuffBadge;
+        bool            _adBuffBuilt;
+        bool            _adBuffClaimInFlight;
+        bool            _adBuffAvailable = true;
+        string          _adBuffUnavailableReason;
+        float           _adBuffCooldownRemaining;
+        bool            _adBuffActive;
+        bool            _adBuffAlreadyUsed;
+        string          _adStatusSignature;
+        int             _adStatusToken;
+        Coroutine       _adBuffTicker;
+
         // Center module (ring + caption + value + UPGRADE) is held in a container that
         // fills spinCenter and is uniformly scaled down when the panel is too small, so
         // the stack can never spill out of the center panel into the lists below.
         RectTransform   _centerModule;
-        const float     CenterDesignH  = 340f;
+        const float     CenterDesignH  = 412f;
         const float     CenterDesignW  = 252f;
         const float     CenterMinScale = 0.5f;
 
@@ -181,10 +208,15 @@ namespace ValoCase.UI.Screens
             _isUpgrading = false;
             _selectedInputs.Clear();
             _selectedTargets.Clear();
+            _upgradeContext = null;
+            _upgradeContextSelectionSignature = null;
+            _upgradeContextInFlight = false;
+            _upgradeContextToken++;
 
             RemoveLegacyVpButtons();
             ApplyPanelTheme();
             BuildCenterModule();
+            BuildAdBuffControls();
             BuildSplitLists();
             BuildSortButtons();
             BuildEmptyState();
@@ -194,6 +226,7 @@ namespace ValoCase.UI.Screens
             RefreshInputSummary();
             RefreshTargetSummary();
             RebuildGrid();
+            RefreshBackendInventoryForUpgrade();
             RefreshChance();
 
             if (resultFlash != null) resultFlash.color = new Color(0, 0, 0, 0);
@@ -202,6 +235,17 @@ namespace ValoCase.UI.Screens
             StartCoroutine(InitSpinAnimator());
             if (_pulseCo != null) StopCoroutine(_pulseCo);
             _pulseCo = StartCoroutine(PulseButton());
+
+            _adBuffClaimInFlight = false;
+            _adBuffActive = false;
+            _adBuffAlreadyUsed = false;
+            _adBuffAvailable = true;
+            _adBuffUnavailableReason = null;
+            _adBuffCooldownRemaining = 0f;
+            _adStatusSignature = null;
+            RefreshAdBuffButton();
+            if (_adBuffTicker != null) StopCoroutine(_adBuffTicker);
+            _adBuffTicker = StartCoroutine(AdBuffTicker());
         }
 
         protected override void OnHidden()
@@ -209,6 +253,7 @@ namespace ValoCase.UI.Screens
             GameEvents.OnInventoryChanged -= HandleInventoryChanged;
             GameEvents.OnVpChanged        -= HandleVpChanged;
             if (_pulseCo != null) { StopCoroutine(_pulseCo); _pulseCo = null; }
+            if (_adBuffTicker != null) { StopCoroutine(_adBuffTicker); _adBuffTicker = null; }
             _spinAnimator?.ResetNeedle();
         }
 
@@ -229,6 +274,28 @@ namespace ValoCase.UI.Screens
         }
 
         void HandleVpChanged(int _, int __) => RefreshWallet();
+
+        void RefreshBackendInventoryForUpgrade()
+        {
+            var ctx = GameContext.Instance;
+            if (ctx == null || !ctx.BackendEnabled) return;
+
+            ctx.RefreshInventoryBackend(
+                onDone: () =>
+                {
+                    if (this == null || !isActiveAndEnabled) return;
+                    ValidateTargets();
+                    RefreshInputSummary();
+                    RefreshTargetSummary();
+                    RebuildGrid();
+                    RefreshChance();
+                },
+                onFailed: _ =>
+                {
+                    if (this == null || !isActiveAndEnabled) return;
+                    RefreshChance();
+                });
+        }
 
         void RefreshWallet()
         {
@@ -545,7 +612,7 @@ namespace ValoCase.UI.Screens
                 rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0.5f);
                 rt.pivot     = new Vector2(0.5f, 0.5f);
                 rt.sizeDelta        = new Vector2(236f, 56f);
-                rt.anchoredPosition = new Vector2(0f, -136f);
+                rt.anchoredPosition = new Vector2(0f, -118f);
             }
 
             var border = upgradeButton.GetComponent<Outline>();
@@ -1354,6 +1421,173 @@ namespace ValoCase.UI.Screens
 
         void RefreshChance()
         {
+            bool backend = GameContext.Instance != null && GameContext.Instance.BackendEnabled;
+            if (!backend) { RefreshChanceLocal(); return; }
+
+            if (_isUpgrading)
+            {
+                if (upgradeButton != null)
+                {
+                    upgradeButton.interactable = false;
+                    var img = upgradeButton.GetComponent<Image>();
+                    if (img != null) img.color = BtnOff;
+                }
+                if (upgradeButtonLabel != null) upgradeButtonLabel.text = "...";
+                return;
+            }
+
+            MaybeRefreshAdBuffStatus();
+            RefreshChanceBackend();
+        }
+
+        // Backend is the source of truth for chance + availability. A preview is requested
+        // only when the selection changes; the latest token's response is the only one applied.
+        void RefreshChanceBackend()
+        {
+            int total    = SelectedTotal();
+            int tgtTotal  = TargetTotal();
+
+            if (_selectedInputs.Count == 0 || _selectedTargets.Count == 0)
+            {
+                _previewToken++;
+                _previewSignature = null;
+                _lastPreview = null;
+                _previewInFlight = false;
+                _upgradeContext = null;
+                _upgradeContextSelectionSignature = null;
+                _upgradeContextInFlight = false;
+                string hint = _selectedInputs.Count == 0 ? "ENVANTERden skin seç" : "Hedef skin seç";
+                ApplyChanceUi(0f, false, hint, false, loading: false);
+                return;
+            }
+
+            string selectionSig = BuildSelectionSignature();
+            if (_upgradeContext == null || _upgradeContextSelectionSignature != selectionSig || !_upgradeContext.IsValid)
+            {
+                if (!_upgradeContextInFlight)
+                {
+                    _upgradeContextInFlight = true;
+                    _upgradeContextSelectionSignature = selectionSig;
+                    _upgradeContext = null;
+                    int contextToken = ++_upgradeContextToken;
+                    ApplyChanceUi(0f, false, $"{total:N0} VP â†’ {tgtTotal:N0} VP", true, loading: true);
+                    GameContext.Instance.ResolveUpgradeRewardContext(
+                        new List<SkinDefinitionSO>(_selectedInputs),
+                        new List<SkinDefinitionSO>(_selectedTargets),
+                        context =>
+                        {
+                            if (this == null || contextToken != _upgradeContextToken) return;
+                            _upgradeContextInFlight = false;
+                            _upgradeContext = context;
+                            _adStatusSignature = null;
+                            MaybeRefreshAdBuffStatus();
+                            RefreshChanceBackend();
+                        },
+                        message =>
+                        {
+                            if (this == null || contextToken != _upgradeContextToken) return;
+                            _upgradeContextInFlight = false;
+                            _upgradeContextSelectionSignature = null;
+                            ApplyChanceUi(0f, false, string.IsNullOrEmpty(message) ? "YÃ¼kseltilemez" : message, false, loading: false);
+                        });
+                }
+                return;
+            }
+
+            MaybeRefreshAdBuffStatus();
+            string sig = _upgradeContext.Signature;
+            if (sig == _previewSignature)
+            {
+                if (_lastPreview != null) { ApplyPreview(_lastPreview); return; }
+                if (_previewInFlight) return;
+                _previewSignature = null;
+            }
+
+            _previewSignature = sig;
+            _lastPreview = null;
+            _previewInFlight = true;
+            int token = ++_previewToken;
+
+            ApplyChanceUi(0f, false, $"{total:N0} VP → {tgtTotal:N0} VP", true, loading: true);
+
+            GameContext.Instance.UpgradePreviewBackend(
+                _upgradeContext,
+                res =>
+                {
+                    if (this == null || token != _previewToken) return;
+                    _previewInFlight = false;
+                    _lastPreview = res;
+                    ApplyPreview(res);
+                },
+                (err, message) =>
+                {
+                    if (this == null || token != _previewToken) return;
+                    _previewInFlight = false;
+                    _previewSignature = null;
+                    string hint = IsPreviewTransportError(err) ? "Bağlantı hatası"
+                        : !string.IsNullOrEmpty(message) ? message : "Yükseltilemez";
+                    ApplyChanceUi(0f, false, hint, false, loading: false);
+                });
+        }
+
+        static bool IsPreviewTransportError(BackendError err)
+            => err != null && (err.HttpStatus == 0 || err.IsOffline || err.IsTimeout);
+
+        void ApplyPreview(UpgradePreviewResponse res)
+        {
+            if (res == null) return;
+            if (res.canUpgrade)
+            {
+                float chance01 = Mathf.Clamp01(res.chancePercent / 100f);
+                ApplyChanceUi(chance01, true, $"{res.inputValue:N0} VP → {res.targetValue:N0} VP", true, loading: false);
+            }
+            else
+            {
+                ApplyChanceUi(0f, false, "Yükseltilemez", false, loading: false);
+            }
+        }
+
+        void ApplyChanceUi(float chance01, bool canUpgrade, string hint, bool hintBright, bool loading)
+        {
+            if (chanceLabel != null)
+            {
+                chanceLabel.text  = loading ? "..." : $"{chance01 * 100f:0.00}%";
+                chanceLabel.color = loading ? Muted : UpgradeSpinAnimator.GetChanceColor(chance01);
+            }
+
+            if (inputChanceLabel  != null) inputChanceLabel.gameObject.SetActive(false);
+            if (targetChanceLabel != null) targetChanceLabel.gameObject.SetActive(false);
+
+            if (chanceHint != null)
+            {
+                chanceHint.text  = hint;
+                chanceHint.color = hintBright ? TabActive : Muted;
+            }
+
+            if (!loading) _spinAnimator?.SetChance(chance01);
+
+            bool interact = canUpgrade && !_isUpgrading;
+            if (upgradeButton != null)
+            {
+                upgradeButton.interactable = interact;
+                var img = upgradeButton.GetComponent<Image>();
+                if (img != null) img.color = interact ? NeonRed : BtnOff;
+            }
+            if (upgradeButtonLabel != null)
+                upgradeButtonLabel.text = _isUpgrading ? "..." : "YÜKSELT";
+        }
+
+        string BuildSelectionSignature()
+        {
+            var sb = new System.Text.StringBuilder();
+            for (int i = 0; i < _selectedInputs.Count; i++) { sb.Append(_selectedInputs[i].SkinId); sb.Append(','); }
+            sb.Append('|');
+            for (int i = 0; i < _selectedTargets.Count; i++) { sb.Append(_selectedTargets[i].SkinId); sb.Append(','); }
+            return sb.ToString();
+        }
+
+        void RefreshChanceLocal()
+        {
             var upgrade = GameContext.Instance?.Upgrade;
             bool valid  = CanUpgradeNow();
             int  total  = SelectedTotal();
@@ -1401,6 +1635,257 @@ namespace ValoCase.UI.Screens
         }
 
         // ─────────────────────────────────────────────────────────────────────
+        // REWARDED AD CHANCE BUFF (+5%)
+        // ─────────────────────────────────────────────────────────────────────
+
+        // The +5% ad button lives inside the scaled center module, directly under the
+        // UPGRADE button, so it shrinks with the rest of the stack and never crowds the
+        // panel. The active-buff badge sits at the top of the center panel.
+        void BuildAdBuffControls()
+        {
+            if (_adBuffBuilt || _centerModule == null || spinCenter == null) return;
+            _adBuffBuilt = true;
+
+            var go = new GameObject("AdBuffButton", typeof(RectTransform), typeof(Image), typeof(Button), typeof(Outline));
+            go.transform.SetParent(_centerModule, false);
+            var rt = (RectTransform)go.transform;
+            rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(0.5f, 0.5f);
+            rt.sizeDelta        = new Vector2(236f, 40f);
+            rt.anchoredPosition = new Vector2(0f, -176f);
+
+            _adBuffButtonImg = go.GetComponent<Image>();
+            _adBuffButtonImg.color = CenterBg;
+            var ol = go.GetComponent<Outline>();
+            ol.effectColor    = new Color(AdGold.r, AdGold.g, AdGold.b, 0.8f);
+            ol.effectDistance = new Vector2(1f, -1f);
+
+            _adBuffButton = go.GetComponent<Button>();
+            _adBuffButton.transition = Selectable.Transition.None;
+            _adBuffButton.onClick.AddListener(OnAdBuffClicked);
+
+            var lblGo = new GameObject("Lbl", typeof(RectTransform));
+            lblGo.transform.SetParent(rt, false);
+            _adBuffButtonLabel = lblGo.AddComponent<TextMeshProUGUI>();
+            _adBuffButtonLabel.text             = "REKLAM: +%5 ŞANS";
+            _adBuffButtonLabel.fontSize         = 15;
+            _adBuffButtonLabel.fontStyle        = FontStyles.Bold;
+            _adBuffButtonLabel.characterSpacing = 2f;
+            _adBuffButtonLabel.alignment        = TextAlignmentOptions.Center;
+            _adBuffButtonLabel.color            = AdGold;
+            _adBuffButtonLabel.raycastTarget    = false;
+            _adBuffButtonLabel.enableWordWrapping = false;
+            var lrt = _adBuffButtonLabel.rectTransform;
+            lrt.anchorMin = Vector2.zero; lrt.anchorMax = Vector2.one;
+            lrt.offsetMin = new Vector2(8f, 0f); lrt.offsetMax = new Vector2(-8f, 0f);
+
+            var badgeGo = new GameObject("AdBuffBadge", typeof(RectTransform));
+            badgeGo.transform.SetParent(spinCenter, false);
+            var brt = (RectTransform)badgeGo.transform;
+            brt.anchorMin = brt.anchorMax = new Vector2(0.5f, 1f);
+            brt.pivot     = new Vector2(0.5f, 1f);
+            brt.anchoredPosition = new Vector2(0f, -6f);
+            brt.sizeDelta = new Vector2(220f, 24f);
+            _adBuffBadge = badgeGo.AddComponent<TextMeshProUGUI>();
+            _adBuffBadge.alignment        = TextAlignmentOptions.Center;
+            _adBuffBadge.fontSize         = 14;
+            _adBuffBadge.fontStyle        = FontStyles.Bold;
+            _adBuffBadge.characterSpacing = 3f;
+            _adBuffBadge.color            = NeonGreen;
+            _adBuffBadge.raycastTarget    = false;
+            _adBuffBadge.enableWordWrapping = false;
+            badgeGo.SetActive(false);
+
+            LayoutCenterModule();
+        }
+
+        bool HasUpgradeContext() => _selectedInputs.Count > 0 && _selectedTargets.Count > 0;
+
+        void RefreshAdBuffButton()
+        {
+            if (_adBuffButton == null) return;
+            bool backend = GameContext.Instance != null && GameContext.Instance.BackendEnabled;
+            _adBuffButton.gameObject.SetActive(backend);
+            UpdateAdBuffBadge();
+            if (!backend) return;
+
+            if (_adBuffClaimInFlight)             { SetAdBuff(false, "REKLAM İZLENİYOR...", AdGold); return; }
+            if (_isUpgrading)                     { _adBuffButton.interactable = false; return; }
+            if (!HasUpgradeContext())             { SetAdBuff(false, "SKİN VE HEDEF SEÇ", Muted); return; }
+            if (_adBuffActive)                    { SetAdBuff(false, "+%5 ŞANS AKTİF", NeonGreen); return; }
+            if (_adBuffAlreadyUsed)               { SetAdBuff(false, "+%5 KULLANILDI", Muted); return; }
+            if (_adBuffCooldownRemaining > 0.5f)  { SetAdBuff(false, $"BEKLE {FormatAdCooldown(_adBuffCooldownRemaining)}", Muted); return; }
+            if (!_adBuffAvailable)                { SetAdBuff(false, AdRewardMessages.MapUnavailable(_adBuffUnavailableReason), Muted); return; }
+
+            SetAdBuff(true, "REKLAM: +%5 ŞANS", AdGold);
+        }
+
+        void SetAdBuff(bool interactable, string text, Color color)
+        {
+            _adBuffButton.interactable = interactable;
+            if (_adBuffButtonImg != null) _adBuffButtonImg.color = CenterBg;
+            if (_adBuffButtonLabel != null) { _adBuffButtonLabel.text = text; _adBuffButtonLabel.color = color; }
+        }
+
+        void UpdateAdBuffBadge()
+        {
+            if (_adBuffBadge == null) return;
+            _adBuffBadge.gameObject.SetActive(_adBuffActive);
+            if (_adBuffActive) _adBuffBadge.text = "+%5 ŞANS AKTİF";
+        }
+
+        static string FormatAdCooldown(float seconds)
+        {
+            int s = Mathf.CeilToInt(seconds);
+            return $"{s / 60:00}:{s % 60:00}";
+        }
+
+        // Refetches the +5 status for the current selection. Deduped by selection signature
+        // so it fires once per context change; no valid selection resets to the select state.
+        void MaybeRefreshAdBuffStatus()
+        {
+            var ctx = GameContext.Instance;
+            if (ctx == null || !ctx.BackendEnabled) return;
+            if (!ctx.HasGuestToken)
+            {
+                _adBuffAvailable = false;
+                _adBuffUnavailableReason = "AUTH_PENDING";
+                RefreshAdBuffButton();
+                return;
+            }
+
+            if (!HasUpgradeContext())
+            {
+                _adStatusSignature = null;
+                _adBuffActive = false;
+                _adBuffAlreadyUsed = false;
+                RefreshAdBuffButton();
+                return;
+            }
+            if (_upgradeContext == null || !_upgradeContext.IsValid) return;
+
+            string sig = _upgradeContext.Signature;
+            if (sig == _adStatusSignature) return;
+            _adStatusSignature = sig;
+
+            int token = ++_adStatusToken;
+            ctx.RefreshUpgradeAdStatus(
+                _upgradeContext,
+                res =>
+                {
+                    if (this == null || token != _adStatusToken) return;
+                    var placement = res != null ? res.Find(AdRewardTypes.UpgradePlus5) : null;
+                    if (placement == null) Debug.LogWarning("[AdsStatus] missing placement UPGRADE_PLUS_5");
+                    ApplyAdBuffStatus(placement);
+                },
+                reason =>
+                {
+                    if (this == null || token != _adStatusToken) return;
+                    Debug.LogWarning("[AdsStatus] upgrade status failed — " + (string.IsNullOrEmpty(reason) ? "<empty>" : reason));
+                    _adBuffAvailable = false;
+                    _adBuffUnavailableReason = string.IsNullOrEmpty(reason) ? null : reason;
+                    RefreshAdBuffButton();
+                });
+        }
+
+        void ApplyAdBuffStatus(AdRewardPlacementStatus s)
+        {
+            if (s != null)
+            {
+                _adBuffAvailable         = s.isAvailable;
+                _adBuffUnavailableReason = s.unavailableReason;
+                _adBuffActive            = s.upgradePlus5Active;
+                _adBuffAlreadyUsed       = s.upgradePlus5AlreadyUsedForCurrentContext;
+                _adBuffCooldownRemaining = s.cooldownRemainingSeconds;
+            }
+            else
+            {
+                _adBuffAvailable = true;
+                _adBuffUnavailableReason = null;
+                _adBuffActive = false;
+                _adBuffAlreadyUsed = false;
+                _adBuffCooldownRemaining = 0f;
+            }
+            RefreshAdBuffButton();
+        }
+
+        void OnAdBuffClicked()
+        {
+            if (_adBuffClaimInFlight || _isUpgrading || !HasUpgradeContext()) return;
+            var ctx = GameContext.Instance;
+            if (ctx == null || !ctx.BackendEnabled) return;
+            if (!ctx.HasGuestToken)
+            {
+                _adBuffUnavailableReason = "AUTH_PENDING";
+                RefreshAdBuffButton();
+                return;
+            }
+            if (_upgradeContext == null || !_upgradeContext.IsValid)
+            {
+                RefreshChance();
+                return;
+            }
+            var context = _upgradeContext;
+
+            _adBuffClaimInFlight = true;
+            SoundManager.Instance?.Play(SoundId.UiClick);
+            RefreshAdBuffButton();
+
+            ctx.WatchUpgradePlus5Ad(
+                context,
+                res =>
+                {
+                    if (this == null) return;
+                    _adBuffClaimInFlight = false;
+                    if (res != null)
+                    {
+                        _adBuffActive            = res.upgradePlus5Active;
+                        _adBuffAlreadyUsed       = res.upgradePlus5AlreadyUsedForCurrentContext;
+                        _adBuffCooldownRemaining = res.cooldownRemainingSeconds;
+                        if (res.upgradePlus5Active) GameEvents.RaiseToast("+%5 yükseltme şansı aktif");
+                    }
+                    RefreshAdBuffButton();
+                    ForcePreviewAndStatusRefresh(context);
+                },
+                msg =>
+                {
+                    if (this == null) return;
+                    _adBuffClaimInFlight = false;
+                    RefreshAdBuffButton();
+                    if (!string.IsNullOrEmpty(msg)) GameEvents.RaiseToast(msg);
+                },
+                onCancelled: () =>
+                {
+                    if (this == null) return;
+                    _adBuffClaimInFlight = false;
+                    RefreshAdBuffButton();
+                });
+        }
+
+        void ForcePreviewAndStatusRefresh(UpgradeRewardContext context)
+        {
+            if (context != null && context == _upgradeContext)
+                _adStatusSignature = null;
+            _previewSignature = null;
+            _lastPreview = null;
+            MaybeRefreshAdBuffStatus();
+            RefreshChance();
+        }
+
+        IEnumerator AdBuffTicker()
+        {
+            var wait = new WaitForSecondsRealtime(0.5f);
+            while (true)
+            {
+                if (_adBuffCooldownRemaining > 0f && !_adBuffClaimInFlight)
+                {
+                    _adBuffCooldownRemaining = Mathf.Max(0f, _adBuffCooldownRemaining - 0.5f);
+                    RefreshAdBuffButton();
+                }
+                yield return wait;
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
         // UPGRADE FLOW
         // ─────────────────────────────────────────────────────────────────────
 
@@ -1409,6 +1894,12 @@ namespace ValoCase.UI.Screens
             if (_isUpgrading || !CanUpgradeNow()) return;
             var ctx = GameContext.Instance;
             if (ctx?.Upgrade == null) return;
+            var context = ctx.BackendEnabled ? _upgradeContext : null;
+            if (ctx.BackendEnabled && (context == null || !context.IsValid))
+            {
+                RefreshChance();
+                return;
+            }
 
             // Offline pre-check (backend mode only): do not start the spin or lock the
             // button when offline — no skins removed, no VP change, no target grant.
@@ -1423,7 +1914,8 @@ namespace ValoCase.UI.Screens
             RefreshChance();
             StartCoroutine(UpgradeSequence(ctx,
                 new List<SkinDefinitionSO>(_selectedInputs),
-                new List<SkinDefinitionSO>(_selectedTargets)));
+                new List<SkinDefinitionSO>(_selectedTargets),
+                context));
         }
 
         // The single skin shown in the win popup / toasts when several targets are won.
@@ -1436,13 +1928,16 @@ namespace ValoCase.UI.Screens
             return best;
         }
 
-        IEnumerator UpgradeSequence(GameContext ctx, List<SkinDefinitionSO> inputs, List<SkinDefinitionSO> targets)
+        IEnumerator UpgradeSequence(GameContext ctx, List<SkinDefinitionSO> inputs, List<SkinDefinitionSO> targets,
+            UpgradeRewardContext context = null)
         {
             int total = 0;
             for (int i = 0; i < inputs.Count; i++) total += inputs[i].VpValue;
             int targetTotal = 0;
             for (int i = 0; i < targets.Count; i++) targetTotal += targets[i].VpValue;
-            float chance = ctx.Upgrade.ComputeValueChance(total, targetTotal);
+            float chance = ctx.BackendEnabled && _lastPreview != null
+                ? Mathf.Clamp01(_lastPreview.chancePercent / 100f)
+                : ctx.Upgrade.ComputeValueChance(total, targetTotal);
             _spinAnimator?.SetChance(chance);
 
             // Backend mode: the server decides + commits. Play the existing animation
@@ -1450,7 +1945,7 @@ namespace ValoCase.UI.Screens
             // left exactly as it was.
             if (ctx.BackendEnabled)
             {
-                yield return BackendUpgradeSequence(ctx, inputs, targets, chance);
+                yield return BackendUpgradeSequence(ctx, inputs, targets, chance, context);
                 yield break;
             }
 
@@ -1511,7 +2006,7 @@ namespace ValoCase.UI.Screens
         // — Unity never calls TryUpgradeMulti and never guesses success/fail. The wheel
         // free-spins until the server answers, then lands on the authoritative result.
         IEnumerator BackendUpgradeSequence(GameContext ctx, List<SkinDefinitionSO> inputs,
-            List<SkinDefinitionSO> targets, float localChance)
+            List<SkinDefinitionSO> targets, float localChance, UpgradeRewardContext context)
         {
             // Freeze on-screen selection/preview through the request + animation, exactly
             // like the local path, so the win/lose flow renders against stable state.
@@ -1520,7 +2015,7 @@ namespace ValoCase.UI.Screens
             // Start the spin NOW (instant feedback) and fire the request in parallel.
             UpgradeBackendResult result = null;
             bool requestDone = false;
-            StartCoroutine(RequestUpgrade(ctx, inputs, targets, r => { result = r; requestDone = true; }));
+            StartCoroutine(RequestUpgrade(ctx, inputs, targets, context, r => { result = r; requestDone = true; }));
 
             bool spinFinished = false;
             var spinCo = StartCoroutine(
@@ -1577,6 +2072,9 @@ namespace ValoCase.UI.Screens
 
             _selectedInputs.Clear();
             _selectedTargets.Clear();
+            _upgradeContext = null;
+            _upgradeContextSelectionSignature = null;
+            _adStatusSignature = null;
             _isUpgrading = false;
             _spinAnimator?.ResetNeedle();
 
@@ -1588,10 +2086,13 @@ namespace ValoCase.UI.Screens
 
         // Runs the backend upgrade request to completion and reports the result.
         IEnumerator RequestUpgrade(GameContext ctx, List<SkinDefinitionSO> inputs,
-            List<SkinDefinitionSO> targets, Action<UpgradeBackendResult> onDone)
+            List<SkinDefinitionSO> targets, UpgradeRewardContext context, Action<UpgradeBackendResult> onDone)
         {
             UpgradeBackendResult r = null;
-            yield return ctx.UpgradeBackendRoutine(inputs, targets, x => r = x);
+            if (context != null && context.IsValid)
+                yield return ctx.UpgradeBackendRoutine(context, x => r = x);
+            else
+                yield return ctx.UpgradeBackendRoutine(inputs, targets, x => r = x);
             onDone?.Invoke(r);
         }
 

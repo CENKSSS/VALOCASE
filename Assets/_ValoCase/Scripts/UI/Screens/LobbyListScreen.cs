@@ -58,6 +58,7 @@ namespace ValoCase.UI.Screens
 
         CreateBattleScreen _createPanel;
         WaitingRoomScreen  _waitingPanel;
+        LeaderboardPopup   _leaderboardPopup;
 
         readonly List<GameObject> _cardGos = new();
         List<BattleLobbyData>     _lobbies = new();
@@ -81,7 +82,7 @@ namespace ValoCase.UI.Screens
         TextMeshProUGUI _statBattles;
         TextMeshProUGUI _statWinRate;
         TextMeshProUGUI _statEarned;
-        TextMeshProUGUI _statLost;
+        TextMeshProUGUI _statWins;
         TextMeshProUGUI _statStreak;
 
         // True while the Battle Room overlay is up (ready, running or finished).
@@ -127,6 +128,7 @@ namespace ValoCase.UI.Screens
 
             _createPanel?.Hide();
             _waitingPanel?.Hide();
+            _leaderboardPopup?.Hide();
             SetLobbyChromeActive(true);   // restore lobby if returning from a battle
             RefreshBalance();
             RefreshStats();
@@ -228,7 +230,7 @@ namespace ValoCase.UI.Screens
             chip.gameObject.SetActive(false);   // wallet shown in top navbar
         }
 
-        enum StatIcon { Trophy, Crosshair, Coin, Defeat, Star }
+        enum StatIcon { Trophy, Crosshair, Coin, Defeat, Star, Victory }
 
         void BuildStatsRow(RectTransform rt)
         {
@@ -247,8 +249,41 @@ namespace ValoCase.UI.Screens
             _statBattles = BuildStatCard(rowGo.transform, ColorPalette.ActiveRed,  "0", ColorPalette.TextBright, "BATTLES", StatIcon.Trophy);
             _statWinRate = BuildStatCard(rowGo.transform, ColorPalette.ActiveRed,  "0%", ColorPalette.TextBright, "WIN %",   StatIcon.Crosshair);
             _statEarned  = BuildStatCard(rowGo.transform, ColorPalette.GoldAccent, "0", ColorPalette.GoldAccent, "EARNED",  StatIcon.Coin);
-            _statLost    = BuildStatCard(rowGo.transform, ColorPalette.RedDim,     "0", ColorPalette.TextBright, "LOST",    StatIcon.Defeat);
+            _statWins    = BuildStatCard(rowGo.transform, ColorPalette.GoldAccent, "0", ColorPalette.TextBright, "WINS",    StatIcon.Victory);
             _statStreak  = BuildStatCard(rowGo.transform, ColorPalette.GoldAccent, "0", ColorPalette.GoldAccent, "STREAK",  StatIcon.Star);
+            BuildLeaderboardCard(rowGo.transform);
+        }
+
+        void BuildLeaderboardCard(Transform parent)
+        {
+            var card = MakeImage("Stat_LEADERBOARD", parent, ColorPalette.CardBg);
+            card.raycastTarget = true;
+            var le = card.gameObject.AddComponent<LayoutElement>();
+            le.flexibleWidth = 1f;
+            le.minWidth      = 48f;
+            var border = card.gameObject.AddComponent<Outline>();
+            border.effectColor    = ColorPalette.WithAlpha(ColorPalette.ActiveRed, 0.55f);
+            border.effectDistance = new Vector2(1f, -1f);
+
+            var btn = card.gameObject.AddComponent<Button>();
+            btn.transition = Selectable.Transition.None;
+            btn.onClick.AddListener(OpenLeaderboard);
+
+            var iconRoot = NewGo("Icon", card.transform);
+            var iconRt   = (RectTransform)iconRoot.transform;
+            SetRect(iconRt, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0.5f, 1f),
+                new Vector2(0f, -17f), new Vector2(15f, 15f));
+            iconRt.localScale = Vector3.one * 2.772f;
+            BuildNoticeBoardIcon(iconRoot.transform, ColorPalette.ActiveRed);
+
+            var lbl = MakeTmp(card.transform, "Label", "LEADERBOARD", 12f, FontStyles.Bold, ColorPalette.TextBright);
+            lbl.alignment = TextAlignmentOptions.Center;
+            lbl.characterSpacing = 1f;
+            lbl.enableAutoSizing = true;
+            lbl.fontSizeMin = 7f;
+            lbl.fontSizeMax = 12f;
+            SetRect(lbl.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(0.5f, 0f),
+                new Vector2(0f, 12f), new Vector2(-2f, 30f));
         }
 
         TextMeshProUGUI BuildStatCard(Transform parent, Color iconColor, string value, Color valueColor, string label, StatIcon iconType)
@@ -273,6 +308,7 @@ namespace ValoCase.UI.Screens
                 case StatIcon.Coin:      BuildCoinIcon(iconRoot.transform, iconColor);      break;
                 case StatIcon.Defeat:    BuildDefeatIcon(iconRoot.transform, iconColor);    break;
                 case StatIcon.Star:      BuildStarIcon(iconRoot.transform, iconColor);      break;
+                case StatIcon.Victory:   BuildVictoryIcon(iconRoot.transform, iconColor);   break;
             }
 
             var val = MakeTmp(card.transform, "Value", value, 22.5f, FontStyles.Bold, valueColor);
@@ -298,6 +334,25 @@ namespace ValoCase.UI.Screens
             r.anchoredPosition = new Vector2(x, y);
             r.sizeDelta        = new Vector2(w, h);
             return img;
+        }
+
+        // Notice board: outer frame + inner frame + small triangular hanger roof.
+        void BuildNoticeBoardIcon(Transform p, Color c)
+        {
+            IconBar("OT", p, c,  0f,   4.2f, 14f,  1.5f);
+            IconBar("OB", p, c,  0f,  -6.6f, 14f,  1.5f);
+            IconBar("OL", p, c, -6.3f, -1.2f, 1.5f, 11f);
+            IconBar("OR", p, c,  6.3f, -1.2f, 1.5f, 11f);
+
+            IconBar("IT", p, c,  0f,   1.2f, 7f,   1.2f);
+            IconBar("IB", p, c,  0f,  -3.6f, 7f,   1.2f);
+            IconBar("IL", p, c, -3.2f, -1.2f, 1.2f, 4.8f);
+            IconBar("IR", p, c,  3.2f, -1.2f, 1.2f, 4.8f);
+
+            var rl = IconBar("HL", p, c, -1.9f, 6.2f, 4.8f, 1.5f);
+            rl.rectTransform.localRotation = Quaternion.Euler(0f, 0f, 38f);
+            var rr = IconBar("HR", p, c,  1.9f, 6.2f, 4.8f, 1.5f);
+            rr.rectTransform.localRotation = Quaternion.Euler(0f, 0f, -38f);
         }
 
         // Trophy: cup outline + handles + stem + base.
@@ -345,6 +400,16 @@ namespace ValoCase.UI.Screens
 
             var l2 = IconBar("L2", p, c, 0f, 0f, 1.5f, 12f);
             l2.rectTransform.localRotation = Quaternion.Euler(0f, 0f, -45f);
+        }
+
+        // Victory: checkmark — short down-left stroke + long up-right stroke.
+        void BuildVictoryIcon(Transform p, Color c)
+        {
+            var sShort = IconBar("VL", p, c, -2.8f, -1.5f, 1.8f, 5.5f);
+            sShort.rectTransform.localRotation = Quaternion.Euler(0f, 0f, 42f);
+
+            var sLong = IconBar("VR", p, c, 2f, 1f, 1.8f, 10f);
+            sLong.rectTransform.localRotation = Quaternion.Euler(0f, 0f, -42f);
         }
 
         // Streak: 8-ray starburst (H + V + two diagonals) with center dot.
@@ -518,7 +583,14 @@ namespace ValoCase.UI.Screens
             _waitingPanel.OnLeave       += CloseWaiting;
             _waitingPanel.OnStartBattle += OnBattleStart;
             waitGo.SetActive(false);
+
+            var lbGo = NewGo("LeaderboardPopup", rt);
+            Stretch(lbGo);
+            _leaderboardPopup = lbGo.AddComponent<LeaderboardPopup>();
+            lbGo.SetActive(false);
         }
+
+        void OpenLeaderboard() => _leaderboardPopup?.Show();
 
         // ── List population ──────────────────────────────────────────────────────
         void PopulateList()
@@ -783,7 +855,7 @@ namespace ValoCase.UI.Screens
             if (_statBattles != null) _statBattles.text = data.battleTotal.ToString();
             if (_statWinRate != null) _statWinRate.text  = data.battleWinRate.ToString("F0") + "%";
             if (_statEarned  != null) _statEarned.text   = FormatK(data.battleEarnings);
-            if (_statLost    != null) _statLost.text      = data.battleLosses.ToString();
+            if (_statWins    != null) _statWins.text      = Mathf.Max(0, data.battleTotal - data.battleLosses).ToString();
             if (_statStreak  != null) _statStreak.text    = data.battleStreak.ToString();
         }
 
@@ -960,7 +1032,7 @@ namespace ValoCase.UI.Screens
                 var child = transform.GetChild(i);
                 if (child == null) continue;
                 string n = child.name;
-                if (n == "WaitingPanel" || n == "CreatePanel") continue;
+                if (n == "WaitingPanel" || n == "CreatePanel" || n == "LeaderboardPopup") continue;
                 child.gameObject.SetActive(active);
             }
         }

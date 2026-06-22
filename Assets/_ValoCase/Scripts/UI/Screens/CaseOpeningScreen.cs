@@ -50,6 +50,9 @@ namespace ValoCase.UI.Screens
         readonly List<CaseListItemView> _caseItems = new();
         readonly List<DropItemView> _dropItems = new();
         CaseDefinitionSO _selected;
+        CaseDetailResponse _detail;
+        string _detailCaseId;
+        int    _detailToken;
         bool _buttonReady;
         bool _showingResult;
         Coroutine _spinWatchdog;
@@ -142,6 +145,7 @@ namespace ValoCase.UI.Screens
             EnsureOpenButtonClickable();
             BuildCaseList();
             RefreshWallet();
+            if (walletLabel != null) walletLabel.gameObject.SetActive(false);
             ShowSpinOverlay(false);
             GameEvents.OnVpChanged += OnVpChanged;
 
@@ -371,7 +375,7 @@ namespace ValoCase.UI.Screens
         void UpdateOpenButtonTexts()
         {
             if (_openSubLabel == null) return;
-            var total = (_selected != null ? _selected.VpPrice : 0) * _quantity;
+            var total = SelectedUnitPrice() * _quantity;
             _openSubLabel.text = $"{total:N0} VP HARCANACAK";
         }
 
@@ -445,7 +449,14 @@ namespace ValoCase.UI.Screens
             if (_backBtnCreated) return;
             _backBtnCreated = true;
 
-            // ── Container — child of THIS transform (screen root, NOT a scroll/panel child) ──
+            // Keep a single back control: restyle the existing top button into a clean
+            // arrow. Only build a runtime one if the serialized button is missing.
+            if (backButton != null)
+            {
+                StyleAsBackArrow(backButton);
+                return;
+            }
+
             var go = new GameObject("BackButton_Runtime",
                 typeof(RectTransform), typeof(Image), typeof(Button));
             go.transform.SetParent(transform, false);
@@ -455,19 +466,16 @@ namespace ValoCase.UI.Screens
             rt.anchorMin        = new Vector2(0f, 1f);
             rt.anchorMax        = new Vector2(0f, 1f);
             rt.pivot            = new Vector2(0f, 1f);
-            rt.anchoredPosition = new Vector2(24f, -185f);
-            rt.sizeDelta        = new Vector2(96f, 36f);
+            rt.anchoredPosition = new Vector2(16f, -56f);
+            rt.sizeDelta        = new Vector2(52f, 52f);
 
-            // Fully opaque background — alpha 1 so nothing makes it invisible
             var img = go.GetComponent<Image>();
             img.color = new Color(0.05f, 0.08f, 0.16f, 1f);
 
-            // Red neon border via Outline
             var outline = go.AddComponent<Outline>();
             outline.effectColor    = new Color(1f, 0.122f, 0.224f, 0.85f);
             outline.effectDistance = new Vector2(1.5f, -1.5f);
 
-            // Button — wire to OnBack (respects flow.SessionActive guard inside OnBack)
             var btn = go.GetComponent<Button>();
             var bc  = btn.colors;
             bc.normalColor      = Color.white;
@@ -475,9 +483,8 @@ namespace ValoCase.UI.Screens
             bc.pressedColor     = new Color(0.75f, 0.50f, 0.50f, 1f);
             btn.colors = bc;
             btn.onClick.AddListener(OnBack);
-            backButton = btn;  // also update the serialized field so OnBack guard works
+            backButton = btn;
 
-            // ── Label — MUST be a separate child (TMP + Image can't share a GameObject) ──
             var lblGo = new GameObject("Label", typeof(RectTransform));
             lblGo.transform.SetParent(go.transform, false);
             var lblRt = lblGo.GetComponent<RectTransform>();
@@ -486,20 +493,30 @@ namespace ValoCase.UI.Screens
             lblRt.offsetMin = Vector2.zero;
             lblRt.offsetMax = Vector2.zero;
             var lbl = lblGo.AddComponent<TextMeshProUGUI>();
-            lbl.text               = "GERİ";
-            lbl.fontSize           = 13f;
+            lbl.text               = "←";
+            lbl.fontSize           = 30f;
             lbl.fontStyle          = FontStyles.Bold;
             lbl.alignment          = TextAlignmentOptions.Center;
             lbl.color              = new Color(0.925f, 0.910f, 0.882f, 1f);
             lbl.enableWordWrapping = false;
             lbl.raycastTarget      = false;
 
-            // Place on top of all other children so no panel covers it
             go.transform.SetAsLastSibling();
+        }
 
-            Debug.Log("[CASE_OPENING_BACK] created active=" + go.activeInHierarchy);
-            Debug.Log("[CASE_OPENING_BACK] final pos=" + rt.anchoredPosition + " size=" + rt.sizeDelta);
-            Debug.Log("[CASE_OPENING_BACK] sibling=" + go.transform.GetSiblingIndex());
+        void StyleAsBackArrow(Button btn)
+        {
+            var rt = (RectTransform)btn.transform;
+            rt.sizeDelta = new Vector2(52f, rt.sizeDelta.y);
+
+            var lbl = btn.GetComponentInChildren<TextMeshProUGUI>(true);
+            if (lbl != null)
+            {
+                lbl.text = "←";
+                lbl.fontSize = 30f;
+                lbl.alignment = TextAlignmentOptions.Center;
+                lbl.characterSpacing = 0f;
+            }
         }
 
         void ConvertToTamam()
@@ -534,7 +551,11 @@ namespace ValoCase.UI.Screens
 
         // ── VP ───────────────────────────────────────────────────────────────
 
-        void OnVpChanged(int _, int __) => RefreshWallet();
+        void OnVpChanged(int _, int __)
+        {
+            RefreshWallet();
+            RefreshOpenButton();
+        }
 
         void RefreshWallet()
         {
@@ -580,6 +601,8 @@ namespace ValoCase.UI.Screens
         void SelectCase(CaseDefinitionSO caseDef)
         {
             _selected = caseDef;
+            _detail = null;
+            _detailCaseId = null;
             foreach (var item in _caseItems)
                 item.SetSelected(item.Case == caseDef);
 
@@ -612,6 +635,74 @@ namespace ValoCase.UI.Screens
             RefreshOpenButton();
             UpdateOpenButtonTexts();
             BuildDropList(caseDef);
+            FetchDetailForSelected();
+        }
+
+        bool HasDetailForSelected => _detail != null && _selected != null && _detailCaseId == _selected.CaseId;
+
+        int SelectedUnitPrice() => HasDetailForSelected && _detail.priceVp > 0
+            ? _detail.priceVp
+            : (_selected != null ? _selected.VpPrice : 0);
+
+        void FetchDetailForSelected()
+        {
+            var ctx = GameContext.Instance;
+            if (_selected == null || ctx == null || !ctx.BackendEnabled) return;
+
+            int token = ++_detailToken;
+            string id = _selected.CaseId;
+            ctx.FetchCaseDetailBackend(id,
+                d =>
+                {
+                    if (this == null || token != _detailToken) return;
+                    _detail = d;
+                    _detailCaseId = id;
+                    ApplyDetail();
+                },
+                _ => { });
+        }
+
+        void ApplyDetail()
+        {
+            if (!HasDetailForSelected) return;
+            if (priceLabel != null) priceLabel.text = $"{SelectedUnitPrice():N0} VP";
+            BuildRateTable(_selected);
+            UpdateOpenButtonTexts();
+            RefreshOpenButton();
+        }
+
+        void InvalidateSelectedDetail()
+        {
+            _detailToken++;
+            _detail = null;
+            _detailCaseId = null;
+        }
+
+        bool DetailLocksSelected(out int requiredLevel, out string reason)
+        {
+            requiredLevel = 0;
+            reason = null;
+            if (!HasDetailForSelected || _detail.canOpen) return false;
+
+            requiredLevel = _detail.requiredLevel;
+            reason = _detail.lockedReason;
+            if (reason == "CASE_INACTIVE") return true;
+
+            int current = _detail.currentLevel > 0 ? _detail.currentLevel : PlayerProgression.Level;
+            if (requiredLevel > 0 && requiredLevel > current) return true;
+
+            if (string.IsNullOrEmpty(reason)) return false;
+            return reason.IndexOf("LEVEL", StringComparison.OrdinalIgnoreCase) >= 0
+                || reason.IndexOf("LOCK", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        bool CanOpenSelectedCase()
+        {
+            if (_selected == null) return false;
+            if (DetailLocksSelected(out _, out _)) return false;
+            if (GameContext.Instance?.BackendEnabled == true)
+                return PlayerProgression.IsCaseUnlocked(_selected.CaseId);
+            return GameContext.Instance?.CaseProgression?.IsCaseUnlocked(_selected) ?? true;
         }
 
         void RefreshOpenButton()
@@ -619,19 +710,28 @@ namespace ValoCase.UI.Screens
             if (openButton == null) return;
 
             bool sessionBusy = (flow != null && flow.SessionActive) || _multiOpenActive;
-            bool baseOk       = GameContext.Instance?.CaseOpening?.CanOpen(_selected) == true;
-            int  balance      = GameContext.Instance?.Vp?.Balance ?? 0;
-            int  total        = (_selected != null ? _selected.VpPrice : 0) * _quantity;
-            bool canOpen      = baseOk && balance >= total;
-            bool insufficient = _selected != null && !sessionBusy && !canOpen;
+            bool lockedByDetail = DetailLocksSelected(out var requiredLevel, out var lockReason);
+            bool canOpenCase = CanOpenSelectedCase();
+            int  balance     = GameContext.Instance?.Vp?.Balance ?? 0;
+            int  total       = SelectedUnitPrice() * _quantity;
+            bool affordable  = balance >= total;
 
-            openButton.interactable = _selected != null && !sessionBusy && canOpen;
+            bool openable = _selected != null && !sessionBusy && canOpenCase && affordable;
+            openButton.interactable = openable;
 
             var btnLabel = _openMainLabel != null
                 ? _openMainLabel
                 : openButton.GetComponentInChildren<TextMeshProUGUI>(true);
             if (btnLabel != null)
-                btnLabel.text = insufficient ? "YETERSİZ VP" : "OPEN CASE";
+            {
+                if (lockedByDetail || (_selected != null && !canOpenCase))
+                    btnLabel.text = lockReason == "CASE_INACTIVE" ? "KULLANILAMIYOR"
+                                  : requiredLevel > 0 ? $"SEVİYE {requiredLevel}" : "KİLİTLİ";
+                else if (_selected != null && !sessionBusy && !affordable)
+                    btnLabel.text = "YETERSİZ VP";
+                else
+                    btnLabel.text = "OPEN CASE";
+            }
         }
 
         // ── Drop List ─────────────────────────────────────────────────────────
@@ -832,21 +932,11 @@ namespace ValoCase.UI.Screens
         // 5 rarity rows regardless of which case was shown before.
         void BuildRateTable(CaseDefinitionSO caseDef)
         {
-            if (caseDef?.DropTable == null) return;
+            bool hasBackend = _detail != null && caseDef != null &&
+                              _detailCaseId == caseDef.CaseId && _detail.drops != null;
+            if (caseDef == null || (caseDef.DropTable == null && !hasBackend)) return;
 
-            // ── Read rates ────────────────────────────────────────────────────
-            float selectRate    = GetRarityRate(caseDef, SkinRarity.Select);
-            float deluxeRate    = GetRarityRate(caseDef, SkinRarity.Deluxe);
-            float premiumRate   = GetRarityRate(caseDef, SkinRarity.Premium);
-            float exclusiveRate = GetRarityRate(caseDef, SkinRarity.Exclusive);
-            float ultraRate     = GetRarityRate(caseDef, SkinRarity.Ultra);
-
-            Debug.Log("[CASE_RARITY_TABLE] rebuilding for=" + caseDef.DisplayName);
-            Debug.Log("[CASE_RARITY_TABLE] SELECT="    + selectRate);
-            Debug.Log("[CASE_RARITY_TABLE] DELUXE="    + deluxeRate);
-            Debug.Log("[CASE_RARITY_TABLE] PREMIUM="   + premiumRate);
-            Debug.Log("[CASE_RARITY_TABLE] EXCLUSIVE=" + exclusiveRate);
-            Debug.Log("[CASE_RARITY_TABLE] ULTRA="     + ultraRate);
+            float[] rates = RarityRatesFor(caseDef);
 
             // ── Choose parent — caseDisplayPanel avoids DropScroll clipping ──
             var tableParent = caseDisplayPanel != null
@@ -919,7 +1009,6 @@ namespace ValoCase.UI.Screens
                              Color.white, Color.white, isTitle: true, height: 30f);
 
             // ── 5 Rarity rows (always created, never skipped) ─────────────────
-            float[] rates = { selectRate, deluxeRate, premiumRate, exclusiveRate, ultraRate };
             for (int i = 0; i < k_RarityOrder.Length; i++)
                 MakeRarityOddsRow(containerTf, "Row_" + i, k_RarityOrder[i],
                                   k_RarityNames[i], k_RarityColors[i], rates[i], height: 46f);
@@ -934,6 +1023,30 @@ namespace ValoCase.UI.Screens
         static float GetRarityRate(CaseDefinitionSO caseDef, SkinRarity rarity) =>
             caseDef.DropTable?.RarityWeights?
                 .FirstOrDefault(w => w.rarity == rarity)?.weightPercent ?? 0f;
+
+        // Backend drops are authoritative when present (already exclude inactive/zero-weight);
+        // their per-skin dropChance is summed per rarity. Local weights are the fallback.
+        float[] RarityRatesFor(CaseDefinitionSO caseDef)
+        {
+            if (_detail != null && caseDef != null && _detailCaseId == caseDef.CaseId && _detail.drops != null)
+            {
+                var rates = new float[k_RarityOrder.Length];
+                foreach (var d in _detail.drops)
+                {
+                    if (d == null || string.IsNullOrEmpty(d.rarity)) continue;
+                    if (!Enum.TryParse<SkinRarity>(d.rarity, true, out var parsed)) continue;
+                    int idx = Array.IndexOf(k_RarityOrder, parsed);
+                    if (idx >= 0) rates[idx] += d.dropChance;   // backend dropChance is a 0–1 fraction
+                }
+                for (int i = 0; i < rates.Length; i++) rates[i] *= 100f;
+                return rates;
+            }
+
+            var local = new float[k_RarityOrder.Length];
+            for (int i = 0; i < k_RarityOrder.Length; i++)
+                local[i] = GetRarityRate(caseDef, k_RarityOrder[i]);
+            return local;
+        }
 
         // Creates one row inside the rate table container.
         // isTitle = true  → single centred label spanning full width.
@@ -1220,7 +1333,11 @@ namespace ValoCase.UI.Screens
                 return;
             }
 
-            if (GameContext.Instance?.CaseOpening?.CanOpen(_selected) != true) { RefreshOpenButton(); return; }
+            var ctx = GameContext.Instance;
+            int total = SelectedUnitPrice() * _quantity;
+            int balance = ctx?.Vp?.Balance ?? 0;
+            if (!CanOpenSelectedCase() || balance < total) { RefreshOpenButton(); return; }
+            if (ctx?.BackendEnabled != true && ctx?.CaseOpening?.CanOpen(_selected) != true) { RefreshOpenButton(); return; }
 
             // All quantities (including 1) spin inside the rates-panel area.
             StartMultiOpen(_quantity);
@@ -1410,7 +1527,21 @@ namespace ValoCase.UI.Screens
         {
             var popup = ValoCase.UI.SkinWinPopup.EnsureExists();
             if (popup != null)
-                popup.Show(skin, () => { EnsureInteractive(); RefreshOpenButton(); });
+                popup.Show(skin, OnResultPopupClosed);
+        }
+
+        void OnResultPopupClosed()
+        {
+            _showingResult = false;
+            _multiOpenActive = false;
+            SetNavLock(false);
+            EnsureInteractive();
+            if (openButton != null) openButton.gameObject.SetActive(true);
+            RefreshWallet();
+            InvalidateSelectedDetail();
+            UpdateOpenButtonTexts();
+            RefreshOpenButton();
+            FetchDetailForSelected();
         }
 
         Transform _rateTable;
@@ -2112,13 +2243,8 @@ namespace ValoCase.UI.Screens
                 popup.Show(skin, () =>
                 {
                     Debug.Log("[CASE] Confirm clicked — staying on result, ready for next open");
-                    _showingResult = false;
-                    if (openButton != null)
-                    {
-                        openButton.gameObject.SetActive(true);
-                        openButton.interactable = true;
-                    }
-                    EnsureInteractive();
+                    if (openButton != null) openButton.gameObject.SetActive(true);
+                    OnResultPopupClosed();
                 });
             else
                 ConvertToTamam();
