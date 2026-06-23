@@ -768,6 +768,49 @@ namespace ValoCase.Core
             onDone?.Invoke(res);
         }
 
+        // MARKET_VP_2500 — watch a rewarded ad, then claim. The backend grants the VP;
+        // the wallet is re-synced from the server so no local amount is ever trusted.
+        public void WatchMarketVp2500Ad(Action<AdRewardClaimResponse> onClaimed, Action<string> onFailed, Action onCancelled = null)
+        {
+            if (!BackendReady) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
+            if (!HasGuestToken) { onFailed?.Invoke("AUTH_PENDING"); return; }
+            if (RewardedAds == null || !RewardedAds.IsReady) { onFailed?.Invoke("Reklam şu anda hazır değil."); return; }
+
+            RewardedAds.Show(AdRewardTypes.MarketVp2500, (result, token) =>
+            {
+                switch (result)
+                {
+                    case RewardedAdResult.Completed:
+                        StartCoroutine(MarketVp2500ClaimRoutine(token, onClaimed, onFailed));
+                        break;
+                    case RewardedAdResult.Cancelled: onCancelled?.Invoke(); break;
+                    default: onFailed?.Invoke("Reklam gösterilemedi. Lütfen tekrar dene."); break;
+                }
+            });
+        }
+
+        public void RefreshMarketAdStatus(Action<AdRewardStatusResponse> onDone, Action<string> onFailed)
+        {
+            if (!BackendReady) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
+            if (!HasGuestToken) { onFailed?.Invoke("AUTH_PENDING"); return; }
+            StartCoroutine(AdStatusRoutine(null, null, null, onDone, onFailed));
+        }
+
+        IEnumerator MarketVp2500ClaimRoutine(string adToken, Action<AdRewardClaimResponse> onClaimed, Action<string> onFailed)
+        {
+            var request = new AdRewardClaimRequest { rewardType = AdRewardTypes.MarketVp2500, adToken = adToken };
+            AdRewardClaimResponse res = null;
+            string failMsg = null;
+            yield return ClaimAdRoutine(request, r => res = r, msg => failMsg = msg);
+            if (res == null) { onFailed?.Invoke(failMsg); yield break; }
+
+            yield return Backend.GetWallet(
+                w => Vp?.SetBalance(w.vpBalance),
+                err => Debug.LogWarning("[Backend] Market VP wallet sync failed — " + err));
+            Save?.Save();
+            onClaimed?.Invoke(res);
+        }
+
         static string DescribeAdPlacements(AdRewardStatusResponse res)
         {
             if (res?.placements == null || res.placements.Length == 0) return "<none>";

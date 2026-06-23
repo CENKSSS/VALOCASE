@@ -985,6 +985,13 @@ namespace ValoCase.Services.Backend
         public bool   upgradePlus5AlreadyUsedForCurrentContext;
         public long   cooldownRemainingSeconds;
         public string message;
+        public bool   isAvailable;
+        public string unavailableReason;
+        public long   grantedVp;
+        public long   newVpBalance;
+        public long   marketRemainingClaims;
+        public bool   marketCooldownActive;
+        public long   marketCooldownRemainingSeconds;
     }
 
     [Serializable]

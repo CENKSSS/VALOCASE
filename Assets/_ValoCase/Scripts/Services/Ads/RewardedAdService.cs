@@ -12,8 +12,9 @@ namespace ValoCase.Services.Ads
     // are the only contract the client needs to address each placement.
     public static class AdRewardTypes
     {
-        public const string EarnVp2x     = "EARN_VP_2X";
-        public const string UpgradePlus5 = "UPGRADE_PLUS_5";
+        public const string EarnVp2x      = "EARN_VP_2X";
+        public const string UpgradePlus5  = "UPGRADE_PLUS_5";
+        public const string MarketVp2500  = "MARKET_VP_2500";
     }
 
     // Maps a backend unavailableReason code to a clean player-facing Turkish label. Never

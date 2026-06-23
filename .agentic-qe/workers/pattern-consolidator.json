@@ -1,0 +1,8 @@
+{
+  "name": "pattern-consolidator",
+  "enabled": true,
+  "interval": 1800000,
+  "projectRoot": "C:\\Users\\cenk_\\ValoCase",
+  "dataDir": "C:\\Users\\cenk_\\ValoCase\\.agentic-qe\\data",
+  "createdAt": "2026-06-22T22:43:08.033Z"
+}
