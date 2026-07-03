@@ -42,6 +42,15 @@ desktop.ini
 *.app
 *.exe
 
+# Signing keystores and secrets (never commit)
+*.keystore
+*.jks
+*.p12
+*.pfx
+keystore.properties
+*keystore*secrets*
+ks_secrets.txt
+
 # Crash reports
 sysinfo.txt
 
