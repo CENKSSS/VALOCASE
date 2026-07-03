@@ -41,7 +41,7 @@ namespace ValoCase.Services.Backend
 
         public BackendApiClient(string baseUrl, int timeoutSeconds, string guestToken = null)
         {
-            _baseUrl = string.IsNullOrEmpty(baseUrl) ? "https://valocase-backend-production.up.railway.app" : baseUrl.TrimEnd('/');
+            _baseUrl = string.IsNullOrEmpty(baseUrl) ? "https://valocase-backend-digitalocean-isy6d.ondigitalocean.app" : baseUrl.TrimEnd('/');
             _timeoutSeconds = timeoutSeconds > 0 ? timeoutSeconds : DefaultTimeoutSeconds;
             GuestToken = guestToken;
         }
@@ -179,6 +179,18 @@ namespace ValoCase.Services.Backend
         public IEnumerator ClaimDailyReward(Action<DailyClaimResponse> onSuccess, Action<BackendError> onError)
             => Send("POST", ApiPrefix + "/daily/claim", "{}", auth: true, onSuccess, onError);
 
+        // ── Market (server-authoritative; diamonds spent, VP granted server-side) ──
+        // Catalog is read-only. VP purchase deducts diamonds and credits VP on the
+        // server, returning the authoritative balances. Real-money diamond packs are
+        // display-only (no billing endpoint).
+        public IEnumerator GetMarketCatalog(Action<MarketCatalogResponse> onSuccess, Action<BackendError> onError)
+            => Send("GET", ApiPrefix + "/market/catalog", null, auth: true, onSuccess, onError);
+
+        public IEnumerator PurchaseMarketVp(string offerId, Action<MarketVpPurchaseResponse> onSuccess, Action<BackendError> onError)
+            => Send("POST", ApiPrefix + "/market/vp/purchase",
+                    JsonUtility.ToJson(new MarketVpPurchaseRequest { offerId = offerId }),
+                    auth: true, onSuccess, onError);
+
         // ── Missions (server-authoritative) ─────────────────────────────────────
         // GET returns a bare array; wrap it under "missions" so JsonUtility can map it.
         public IEnumerator GetMissions(Action<MissionListResponse> onSuccess, Action<BackendError> onError)
@@ -277,10 +289,10 @@ namespace ValoCase.Services.Backend
             if (debugTag != null)
                 Debug.Log($"[BACKEND_DEBUG] {debugTag} -> {method} {url} authed={(auth && !string.IsNullOrEmpty(GuestToken))} body={body}");
 #endif
-            // Battle-lobby request trace stays on in player builds so the live multi-device
-            // create/list flow can be diagnosed from device logs (no token value emitted).
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
             if (debugTag != null && debugTag.StartsWith("BATTLE"))
                 Debug.Log($"[BATTLE_LOBBY_DIAG] REQ {debugTag} {method} {url} authed={(auth && !string.IsNullOrEmpty(GuestToken))} body={body}");
+#endif
 
             // Offline pre-check at the shared layer: never even open the socket when the
             // device reports no reachability. Callers map this to the offline message and
@@ -310,11 +322,13 @@ namespace ValoCase.Services.Backend
             if (auth && !string.IsNullOrEmpty(GuestToken))
                 req.SetRequestHeader("X-Guest-Token", GuestToken);
 
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
             // Never log the token/account id itself — only whether the call is
             // authenticated. Keeps tokens out of player/release logs.
             if (auth)
                 Debug.Log($"[BackendAuth] -> {method} {path} | " +
                           (string.IsNullOrEmpty(GuestToken) ? "auth missing" : "authenticated"));
+#endif
 
             yield return req.SendWebRequest();
 
@@ -342,8 +356,10 @@ namespace ValoCase.Services.Backend
             if (debugTag != null)
                 Debug.Log($"[BACKEND_DEBUG] {debugTag} <- HTTP {status} rawBody={text}");
 #endif
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
             if (debugTag != null && debugTag.StartsWith("BATTLE"))
                 Debug.Log($"[BATTLE_LOBBY_DIAG] RES {debugTag} HTTP {status} rawBody={text}");
+#endif
 
             // HTTP error status (4xx/5xx)
             if (req.result == UnityWebRequest.Result.ProtocolError || status >= 400)
@@ -473,6 +489,7 @@ namespace ValoCase.Services.Backend
         public string displayName;   // backend-assigned default (AgentXXXX) for new guests
         public string avatarId;      // backend-assigned default (avatar_1) for new guests
         public int vpBalance;        // server may include the starting wallet here
+        public int diamondBalance;   // premium currency starting balance (0 on older backends)
 
         public string ResolveToken()
         {
@@ -502,6 +519,7 @@ namespace ValoCase.Services.Backend
     {
         public string accountId;     // for same-account verification across boots
         public int vpBalance;
+        public int diamondBalance;   // premium currency; 0 on older backends
         public ProgressionResponse progression;   // null on older backends — readers null-check
     }
 
@@ -834,6 +852,8 @@ namespace ValoCase.Services.Backend
         public string winnerDisplayName;
         public string winnerAvatarId;
         public ProgressionResponse progression;   // present on completed PvP; null otherwise
+        public bool isEventLobby;
+        public string eventType;
     }
 
     [Serializable]
@@ -862,6 +882,53 @@ namespace ValoCase.Services.Backend
         public int currentStreak;
         public int newVpBalance;       // authoritative wallet AFTER the claim
         public string claimDate;
+    }
+
+    // ── Market DTOs ─────────────────────────────────────────────────────────────
+    // Catalog is optional/display-supporting: the client keeps a fixed fallback set of
+    // offers, so any field the backend omits or renames is tolerated (readers null-check).
+
+    [Serializable]
+    public sealed class MarketVpPurchaseRequest
+    {
+        public string offerId;
+    }
+
+    [Serializable]
+    public sealed class MarketVpOfferResponse
+    {
+        public string offerId;
+        public int vpAmount;
+        public int diamondCost;
+    }
+
+    [Serializable]
+    public sealed class MarketDiamondPackResponse
+    {
+        public string packId;
+        public int diamondAmount;
+        public string priceUsd;
+        public bool available;
+    }
+
+    [Serializable]
+    public sealed class MarketCatalogResponse
+    {
+        public int vpBalance;
+        public int diamondBalance;
+        public MarketVpOfferResponse[] vpOffers;
+        public MarketDiamondPackResponse[] diamondPacks;
+    }
+
+    [Serializable]
+    public sealed class MarketVpPurchaseResponse
+    {
+        public string offerId;
+        public int vpGranted;
+        public int diamondsSpent;
+        public int newVpBalance;       // authoritative wallet AFTER the purchase
+        public int newDiamondBalance;  // authoritative diamonds AFTER the purchase
+        public string message;
     }
 
     // ── Mission DTOs ────────────────────────────────────────────────────────────
@@ -989,6 +1056,8 @@ namespace ValoCase.Services.Backend
         public string unavailableReason;
         public long   grantedVp;
         public long   newVpBalance;
+        public long   grantedDiamonds;    // DIAMOND_1 grant (0 for other placements)
+        public long   newDiamondBalance;  // authoritative diamond balance after a DIAMOND_1 claim
         public long   marketRemainingClaims;
         public bool   marketCooldownActive;
         public long   marketCooldownRemainingSeconds;

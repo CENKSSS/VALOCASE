@@ -23,5 +23,5 @@ MonoBehaviour:
   onlineCountMax: 12800
   casesOpenedPerUnlockTier: 15
   useBackend: 1
-  backendBaseUrl: https://valocase-backend-production.up.railway.app
+  backendBaseUrl: https://valocase-backend-digitalocean-isy6d.ondigitalocean.app
   requestTimeoutSeconds: 15
