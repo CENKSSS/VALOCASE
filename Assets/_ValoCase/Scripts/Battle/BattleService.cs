@@ -75,6 +75,7 @@ namespace ValoCase.Battle
 
         bool _rewardsDistributed;
         bool _statsRecorded;
+        bool _refunded;
 
         public bool IsAsync => false;
 
@@ -110,6 +111,7 @@ namespace ValoCase.Battle
 
             _rewardsDistributed = false;
             _statsRecorded = false;
+            _refunded = false;
 
             return BattleStartResult.Ok(battle, cost);
         }
@@ -124,8 +126,23 @@ namespace ValoCase.Battle
 
         public void Settle(BattleResult battle)
         {
+            RefundDraw(battle);
             DistributeRewards(battle);
             RecordStatistics(battle);
+        }
+
+        // Offline there is no server authority, so the draw refund is ours to make.
+        // Guarded because Settle runs from both the normal finish and the leave-triggered
+        // force-settle; the entry cost must come back exactly once.
+        void RefundDraw(BattleResult battle)
+        {
+            if (_refunded) return;
+            if (battle == null || !battle.IsDraw) return;
+            if (battle.RefundVp <= 0 || _vp == null) return;
+
+            _vp.Add(battle.RefundVp);
+            _refunded = true;
+            _save?.Save();
         }
 
         void DistributeRewards(BattleResult battle)
@@ -146,12 +163,9 @@ namespace ValoCase.Battle
             if (_statsRecorded) return;
             if (battle == null || _stats == null) return;
 
-            var outcome  = battle.UserWon ? BattleOutcome.PlayerWins : BattleOutcome.OpponentWins;
-            int earnings = battle.UserWon ? battle.TotalPotVp - BattleStatsRecorder.UserTotalVp(battle) : 0;
-
-            _stats.RecordBattleResult(outcome, earnings);
+            // Same outcome/earnings rule as the backend path — kept in one place.
+            BattleStatsRecorder.Record(_stats, _save, battle);
             _statsRecorded = true;
-            _save?.Save();
         }
     }
 
@@ -181,7 +195,7 @@ namespace ValoCase.Battle
         {
             if (_ctx == null || !_ctx.BackendReady)
             {
-                onResult?.Invoke(BattleStartResult.BackendFailed("Sunucu kullanılamıyor."));
+                onResult?.Invoke(BattleStartResult.BackendFailed("Server unavailable."));
                 yield break;
             }
 
@@ -232,7 +246,8 @@ namespace ValoCase.Battle
 
             _settled = false;
             Debug.Log($"[Backend] Bot battle OK — battleId={response.battleId} userWon={response.userWon} " +
-                      $"winnerIndex={response.winnerIndex} entryCost={response.entryCost} newBalance={response.newVpBalance}");
+                      $"winnerIndex={response.winnerIndex} isDraw={response.isDraw} refundVp={response.refundVp} " +
+                      $"entryCost={response.entryCost} newBalance={response.newVpBalance}");
             onResult?.Invoke(BattleStartResult.Ok(battle, response.entryCost));
         }
 
@@ -256,8 +271,10 @@ namespace ValoCase.Battle
             {
                 Case        = caseDef,
                 Rounds      = Mathf.Max(1, r.rounds),
-                WinnerIndex = r.winnerIndex,
-                UserWon     = r.userWon,
+                WinnerIndex = r.isDraw ? -1 : r.winnerIndex,
+                UserWon     = !r.isDraw && r.userWon,
+                IsDraw      = r.isDraw,
+                RefundVp    = Mathf.Max(0, r.refundVp),
                 ReelPool    = BuildReelPool(caseDef),   // cosmetic filler, same as local
             };
 
@@ -274,7 +291,7 @@ namespace ValoCase.Battle
                 {
                     Name     = p.name,
                     IsUser   = p.isUser,
-                    IsWinner = p.index == r.winnerIndex,
+                    IsWinner = battle.WinnerIndex >= 0 && p.index == battle.WinnerIndex,
                     TotalVp  = p.totalVp,   // authoritative; do not recompute
                 };
 
@@ -324,7 +341,11 @@ namespace ValoCase.Battle
         {
             if (battle == null || stats == null || battle.Players.Count == 0) return;
 
-            var outcome  = battle.UserWon ? BattleOutcome.PlayerWins : BattleOutcome.OpponentWins;
+            // A draw is neither a win nor a loss — the entry cost came back, so earnings
+            // stay 0 and the win streak is preserved (see VpCurrency/Statistics service).
+            var outcome  = battle.IsDraw  ? BattleOutcome.Tie
+                         : battle.UserWon ? BattleOutcome.PlayerWins
+                                          : BattleOutcome.OpponentWins;
             int earnings = battle.UserWon ? battle.TotalPotVp - UserTotalVp(battle) : 0;
 
             stats.RecordBattleResult(outcome, earnings);

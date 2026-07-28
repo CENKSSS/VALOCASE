@@ -137,7 +137,6 @@ namespace ValoCase.UI.Screens
             Canvas.ForceUpdateCanvases();
             LayoutRebuilder.ForceRebuildLayoutImmediate(rt);
             Debug.Log("[ONLINE_BATTLE] lobby layout rebuilt on show");
-            StartCoroutine(UIAnimator.SlideFromBottom(rt, 0.25f));
         }
 
         protected override void OnHidden()
@@ -268,6 +267,7 @@ namespace ValoCase.UI.Screens
             var btn = card.gameObject.AddComponent<Button>();
             btn.transition = Selectable.Transition.None;
             btn.onClick.AddListener(OpenLeaderboard);
+            WireButtonClick(btn);
 
             var iconRoot = NewGo("Icon", card.transform);
             var iconRt   = (RectTransform)iconRoot.transform;
@@ -446,6 +446,7 @@ namespace ValoCase.UI.Screens
             var btn = _createBg.gameObject.AddComponent<Button>();
             btn.transition = Selectable.Transition.None;
             btn.onClick.AddListener(OnCreatePressed);
+            WireButtonClick(btn);
 
             var plus = MakeTmp(_createBg.transform, "Plus", "+", 24f, FontStyles.Bold, Color.white);
             plus.alignment = TextAlignmentOptions.Center;
@@ -605,7 +606,9 @@ namespace ValoCase.UI.Screens
                 _cardGos.Add(card.gameObject);
             }
 
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
             Debug.Log("[BATTLE_LOBBY_DIAG] rendered " + _cardGos.Count + " lobby cards (onlineMode=" + _onlineMode + ")");
+#endif
 
             if (_activeCountLbl != null)
                 _activeCountLbl.text = _lobbies.Count + " LIVE";
@@ -674,9 +677,11 @@ namespace ValoCase.UI.Screens
                     _onlineMode       = true;
                     _botFallbackShown = false;
 
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
                     Debug.Log("[BATTLE_LOBBY_DIAG] GET /api/v1/battles/lobbies — online mode, requesting… baseUrl=" +
                               ctx.BackendBaseUrl + " backendReady=" + ctx.BackendReady +
                               " hasToken=" + ctx.HasGuestToken + " hasAccountId=" + ctx.HasGuestAccountId);
+#endif
 
                     LobbyListResponse resp = null;
                     BackendError      err  = null;
@@ -699,6 +704,7 @@ namespace ValoCase.UI.Screens
                                      " hasToken=" + (ctx != null && ctx.HasGuestToken));
                     _lobbies = BuildBotLobbies();
                     PopulateList();
+                    FreeLobbyEventBanner.NotifyEventActive(null);
                 }
 
                 yield return new WaitForSecondsRealtime(3f);
@@ -720,8 +726,8 @@ namespace ValoCase.UI.Screens
             if (!_lobbyListHadSuccessfulFetch || _lobbyListFetchFailures >= 3)
             {
                 GameEvents.RaiseToast(_lobbyListHadSuccessfulFetch
-                    ? "Lobi bilgileri güncellenemedi, tekrar deneniyor..."
-                    : "Bağlantı yenileniyor...");
+                    ? "Couldn't refresh lobby info, retrying..."
+                    : "Reconnecting...");
                 _nextLobbyListErrorToastAt = Time.unscaledTime + LobbyListErrorToastCooldown;
             }
         }
@@ -734,7 +740,9 @@ namespace ValoCase.UI.Screens
         {
             var list = new List<BattleLobbyData>();
             int rawCount = resp.lobbies != null ? resp.lobbies.Length : 0;
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
             Debug.Log("[BATTLE_LOBBY_DIAG] backend returned " + rawCount + " lobbies (raw, pre-filter)");
+#endif
             if (resp.lobbies != null)
             {
                 foreach (var r in resp.lobbies)
@@ -743,31 +751,49 @@ namespace ValoCase.UI.Screens
 
                     if (!string.Equals(r.status, "WAITING", StringComparison.OrdinalIgnoreCase))
                     {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
                         Debug.Log("[BATTLE_LOBBY_DIAG] DROP id=" + r.battleId + " reason=status!=WAITING status=" + r.status);
+#endif
                         continue;
                     }
 
                     if (HasResultData(r))
                     {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
                         Debug.Log("[BATTLE_LOBBY_DIAG] DROP id=" + r.battleId + " reason=hasResultData");
+#endif
                         continue;
                     }
 
                     var data = BattleLobbyMapper.ToLobbyData(r);
                     if (data == null)
                     {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
                         Debug.Log("[BATTLE_LOBBY_DIAG] DROP id=" + r.battleId + " reason=mapNull");
+#endif
                         continue;
                     }
 
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
                     Debug.Log("[BATTLE_LOBBY_DIAG] KEEP id=" + r.battleId + " status=" + r.status +
                               " case=" + r.caseId + " creator=" + (r.creator != null ? r.creator.accountId : "-"));
+#endif
                     list.Add(data);
                 }
             }
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
             Debug.Log("[BATTLE_LOBBY_DIAG] accepted " + list.Count + " of " + rawCount + " lobbies after filters");
+#endif
             _lobbies = list;
             PopulateList();
+            FreeLobbyEventBanner.NotifyEventActive(FirstJoinableEventLobbyId());
+        }
+
+        string FirstJoinableEventLobbyId()
+        {
+            foreach (var l in _lobbies)
+                if (l != null && l.IsEventLobby && l.ComputeStatus() == LobbyStatus.Waiting) return l.LobbyId;
+            return null;
         }
 
         // True when a lobby already carries battle-result fields, regardless of a stale
@@ -777,6 +803,7 @@ namespace ValoCase.UI.Screens
             // JsonUtility never leaves nested serializable fields null, so progression is
             // checked for real content — a non-null empty instance is not a result.
             if (r.progression != null && (r.progression.level > 0 || r.progression.totalXp > 0)) return true;
+            if (r.isDraw) return true;   // a draw carries no winner name
             if (!string.IsNullOrEmpty(r.winnerDisplayName)) return true;
             if (r.slots != null)
                 foreach (var s in r.slots)
@@ -942,7 +969,7 @@ namespace ValoCase.UI.Screens
             {
                 _creating = false;
                 _createPanel.SetConfirmInFlight(false);
-                GameEvents.RaiseToast("Sunucu kullanılamıyor.");
+                GameEvents.RaiseToast("Server unavailable.");
                 yield break;
             }
 
@@ -953,12 +980,14 @@ namespace ValoCase.UI.Screens
             if (selections.Count == 0 && !string.IsNullOrEmpty(lobby.CaseId))
                 selections.Add(new CaseSelectionRequest { caseId = lobby.CaseId, quantity = Mathf.Max(1, lobby.Rounds) });
 
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
             Debug.Log("[BATTLE_LOBBY_DIAG] CREATE POST /api/v1/battles/lobbies selections=" + selections.Count +
                       " maxSlots=" + lobby.MaxPlayers + " hasToken=" + ctx.HasGuestToken);
             foreach (var s in selections)
                 Debug.Log("[BATTLE_LOBBY_DIAG] create selection caseId=" + s.caseId + " qty=" + s.quantity +
                           " locallyUnlocked=" + PlayerProgression.IsCaseUnlocked(s.caseId) +
                           " requiredLevel=" + PlayerProgression.RequiredLevelForCaseId(s.caseId));
+#endif
 
             LobbyResponse resp = null;
             BackendError  err  = null;
@@ -977,7 +1006,9 @@ namespace ValoCase.UI.Screens
                 yield break;
             }
 
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
             Debug.Log("[BATTLE_LOBBY_DIAG] CREATE ok battleId=" + resp.battleId + " status=" + resp.status);
+#endif
             ctx.RequestBackendResync();   // entry cost is charged server-side on create
             _creating = false;
             _createPanel.Hide();
@@ -996,7 +1027,7 @@ namespace ValoCase.UI.Screens
         bool CanAffordEntry(BattleLobbyData lobby)
         {
             if (CanAffordLobby(lobby)) return true;
-            GameEvents.RaiseToast("Yetersiz VP");
+            GameEvents.RaiseToast("Not enough VP");
             return false;
         }
 

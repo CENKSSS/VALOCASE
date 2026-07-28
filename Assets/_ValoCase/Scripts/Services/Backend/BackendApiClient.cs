@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Text;
 using UnityEngine;
 using UnityEngine.Networking;
+using ValoCase.Core;
 using ValoCase.Services;
 
 namespace ValoCase.Services.Backend
@@ -277,13 +278,44 @@ namespace ValoCase.Services.Backend
                     JsonUtility.ToJson(new AdRewardClearRequest { earnSessionId = earnSessionId }),
                     auth: true, onSuccess, onError);
 
+        // ── App session lifecycle analytics (server-authoritative durations) ────
+        // Presence reporting only. Always silent so an offline/failed analytics ping can
+        // never raise the global connectivity popup or otherwise touch gameplay. Reuses
+        // the shared pipeline: same base URL, X-Guest-Token auth, timeout, and JSON.
+        public IEnumerator PostSessionStart(AnalyticsLifecycleRequest body, Action<AnalyticsAckResponse> onSuccess, Action<BackendError> onError)
+            => Send("POST", ApiPrefix + "/analytics/session/start", JsonUtility.ToJson(body), auth: true, onSuccess, onError, silent: true);
+
+        public IEnumerator PostSessionHeartbeat(AnalyticsSignalRequest body, Action<AnalyticsAckResponse> onSuccess, Action<BackendError> onError)
+            => Send("POST", ApiPrefix + "/analytics/session/heartbeat", JsonUtility.ToJson(body), auth: true, onSuccess, onError, silent: true);
+
+        public IEnumerator PostSessionPause(AnalyticsSignalRequest body, Action<AnalyticsAckResponse> onSuccess, Action<BackendError> onError)
+            => Send("POST", ApiPrefix + "/analytics/session/pause", JsonUtility.ToJson(body), auth: true, onSuccess, onError, silent: true);
+
+        public IEnumerator PostSessionResume(AnalyticsLifecycleRequest body, Action<AnalyticsAckResponse> onSuccess, Action<BackendError> onError)
+            => Send("POST", ApiPrefix + "/analytics/session/resume", JsonUtility.ToJson(body), auth: true, onSuccess, onError, silent: true);
+
+        public IEnumerator PostSessionEnd(AnalyticsEndRequest body, Action<AnalyticsAckResponse> onSuccess, Action<BackendError> onError)
+            => Send("POST", ApiPrefix + "/analytics/session/end", JsonUtility.ToJson(body), auth: true, onSuccess, onError, silent: true);
+
         // ── Core request pipeline ───────────────────────────────────────────────
 
         IEnumerator Send<T>(string method, string path, string body, bool auth,
                             Action<T> onSuccess, Action<BackendError> onError,
-                            string wrapArrayKey = null, string debugTag = null) where T : class
+                            string wrapArrayKey = null, string debugTag = null, bool silent = false) where T : class
         {
             var url = _baseUrl + path;
+
+            // Central connectivity/server-error dispatch. Every failed request routes through
+            // here, so screens never have to detect this themselves. Offline raises the No
+            // Internet popup; a server/backend failure raises the Server Error popup; normal
+            // 4xx app errors raise neither. Silent (analytics) requests never surface a popup.
+            void Fail(BackendError e)
+            {
+                onError?.Invoke(e);
+                if (silent) return;
+                if (e.IsOffline) GameEvents.RaiseConnectivityLost();
+                else if (e.IsServerError) GameEvents.RaiseServerError();
+            }
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             if (debugTag != null)
@@ -303,8 +335,8 @@ namespace ValoCase.Services.Backend
                 if (debugTag != null)
                     Debug.LogWarning($"[CASE_OPEN_ERROR] {debugTag} aborted BEFORE request — offline (no reachability)");
 #endif
-                onError?.Invoke(new BackendError(0, $"{method} {path} -> offline (no reachability)",
-                                                 isTimeout: false, isOffline: true));
+                Fail(new BackendError(0, $"{method} {path} -> offline (no reachability)",
+                                      isTimeout: false, isOffline: true));
                 yield break;
             }
 
@@ -344,8 +376,8 @@ namespace ValoCase.Services.Backend
                 if (debugTag != null)
                     Debug.LogWarning($"[CASE_OPEN_ERROR] {debugTag} transport failure DURING request — result={req.result} error={req.error} timeout={timeout} offline={offline}");
 #endif
-                onError?.Invoke(new BackendError(0, $"{method} {path} -> {req.error}",
-                                                 isTimeout: timeout, isOffline: offline));
+                Fail(new BackendError(0, $"{method} {path} -> {req.error}",
+                                      isTimeout: timeout, isOffline: offline));
                 yield break;
             }
 
@@ -372,10 +404,10 @@ namespace ValoCase.Services.Backend
                 if (debugTag != null)
                     Debug.LogError($"[CASE_OPEN_ERROR] {debugTag} HTTP {status} AFTER response — {method} {path} | mappedMessage=\"{message}\" | rawBody={text}");
 #endif
-                onError?.Invoke(new BackendError(status, $"{method} {path} -> HTTP {status}: {message}",
-                                                 lockedCategory: parsed?.category,
-                                                 requiredLevel: parsed?.requiredLevel ?? 0,
-                                                 currentLevel: parsed?.currentLevel ?? 0));
+                Fail(new BackendError(status, $"{method} {path} -> HTTP {status}: {message}",
+                                      lockedCategory: parsed?.category,
+                                      requiredLevel: parsed?.requiredLevel ?? 0,
+                                      currentLevel: parsed?.currentLevel ?? 0));
                 yield break;
             }
 
@@ -387,7 +419,8 @@ namespace ValoCase.Services.Backend
                 if (debugTag != null)
                     Debug.LogError($"[CASE_OPEN_ERROR] {debugTag} response parse FAILED AFTER response — DTO={typeof(T).Name} | rawBody={text}");
 #endif
-                onError?.Invoke(new BackendError(status, $"{method} {path} -> could not parse response body"));
+                Fail(new BackendError(status, $"{method} {path} -> could not parse response body",
+                                      isInvalidResponse: true));
                 yield break;
             }
 
@@ -451,6 +484,7 @@ namespace ValoCase.Services.Backend
         public readonly string Message;
         public readonly bool IsTimeout; // transport failure caused by a request timeout
         public readonly bool IsOffline; // request not sent / failed due to no reachability
+        public readonly bool IsInvalidResponse; // 2xx received but body was empty/unparseable (backend failure)
 
         // Populated only for a 403 locked-category error (otherwise null/0).
         public readonly string LockedCategory;
@@ -458,18 +492,25 @@ namespace ValoCase.Services.Backend
         public readonly int CurrentLevel;
 
         public BackendError(int httpStatus, string message, bool isTimeout = false, bool isOffline = false,
-                            string lockedCategory = null, int requiredLevel = 0, int currentLevel = 0)
+                            string lockedCategory = null, int requiredLevel = 0, int currentLevel = 0,
+                            bool isInvalidResponse = false)
         {
-            HttpStatus     = httpStatus;
-            Message        = message;
-            IsTimeout      = isTimeout;
-            IsOffline      = isOffline;
-            LockedCategory = lockedCategory;
-            RequiredLevel  = requiredLevel;
-            CurrentLevel   = currentLevel;
+            HttpStatus        = httpStatus;
+            Message           = message;
+            IsTimeout         = isTimeout;
+            IsOffline         = isOffline;
+            IsInvalidResponse = isInvalidResponse;
+            LockedCategory    = lockedCategory;
+            RequiredLevel     = requiredLevel;
+            CurrentLevel      = currentLevel;
         }
         public bool IsAuthError => HttpStatus == 401 || HttpStatus == 403;
         public bool IsLockedCategory => HttpStatus == 403 && !string.IsNullOrEmpty(LockedCategory);
+
+        // A server-side or backend-connectivity failure (not a normal 4xx app error, not offline):
+        // timeouts, connection failures with no HTTP response, 5xx, or an unparseable success body.
+        public bool IsServerError =>
+            !IsOffline && (IsTimeout || IsInvalidResponse || HttpStatus == 0 || HttpStatus >= 500);
         public override string ToString() => $"BackendError(status={HttpStatus}, timeout={IsTimeout}, offline={IsOffline}, msg={Message})";
     }
 
@@ -769,6 +810,8 @@ namespace ValoCase.Services.Backend
         public int newVpBalance;                 // authoritative wallet AFTER the battle
         public int winnerIndex;
         public bool userWon;
+        public bool isDraw;                      // every participant tied — no winner
+        public int refundVp;                     // entry cost returned to this player on a draw
         public string[] grantedInventoryItemIds; // informational; Unity resyncs inventory
         public BotBattleParticipantResponse[] participants;
     }
@@ -851,6 +894,8 @@ namespace ValoCase.Services.Backend
         public int winnerSlotIndex;
         public string winnerDisplayName;
         public string winnerAvatarId;
+        public bool isDraw;                       // every slot tied — no winner, entry refunded
+        public int refundVp;                      // entry cost returned to this player on a draw
         public ProgressionResponse progression;   // present on completed PvP; null otherwise
         public bool isEventLobby;
         public string eventType;
@@ -1061,6 +1106,47 @@ namespace ValoCase.Services.Backend
         public long   marketRemainingClaims;
         public bool   marketCooldownActive;
         public long   marketCooldownRemainingSeconds;
+    }
+
+    // ── App session lifecycle analytics DTOs (exact V76 shapes) ─────────────────
+    // start & resume -> SessionStartRequest (6 fields); heartbeat & pause ->
+    // SessionSignalRequest (3 fields); end -> SessionEndRequest (4 fields). Each is a
+    // distinct type so JsonUtility never emits a field the backend record does not declare.
+
+    [Serializable]
+    public sealed class AnalyticsLifecycleRequest
+    {
+        public string clientSessionId;
+        public string installationId;
+        public string appVersion;
+        public string platform;
+        public string clientSentAtUtc;
+        public long lifecycleSequence;
+    }
+
+    [Serializable]
+    public sealed class AnalyticsSignalRequest
+    {
+        public string clientSessionId;
+        public string clientSentAtUtc;
+        public long lifecycleSequence;
+    }
+
+    [Serializable]
+    public sealed class AnalyticsEndRequest
+    {
+        public string clientSessionId;
+        public string clientSentAtUtc;
+        public long lifecycleSequence;
+        public string endReason;
+    }
+
+    [Serializable]
+    public sealed class AnalyticsAckResponse
+    {
+        public string serverSessionId;
+        public string lifecycleState;
+        public string serverTimeUtc;
     }
 
     [Serializable]

@@ -354,11 +354,13 @@ namespace ValoCase.Services
                     stats.battleBestStreak = stats.battleStreak;
                 stats.battleEarnings += earningsVp;
             }
-            else
+            else if (outcome != BattleOutcome.Tie)
             {
                 stats.battleLosses++;
                 stats.battleStreak = 0;
             }
+            // Tie: the battle was played but nobody won and the entry cost was refunded,
+            // so it counts toward the total only — no loss, and the win streak survives.
 
             stats.battleWinRate = stats.battleTotal > 0
                 ? stats.battleWins * 100f / stats.battleTotal

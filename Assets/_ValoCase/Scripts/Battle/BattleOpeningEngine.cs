@@ -108,11 +108,15 @@ namespace ValoCase.Battle
                 }
             }
 
-            // Winner: highest total VP. Tie → first player who reached that total.
+            // Winner: highest total VP. When EVERY player finished on the same total the
+            // battle is a DRAW — no winner, no loot, and the entry cost is refunded.
+            int firstVp = result.Players.Count > 0 ? result.Players[0].TotalVp : 0;
             int bestIdx = 0;
-            int bestVp  = result.Players.Count > 0 ? result.Players[0].TotalVp : 0;
+            int bestVp  = firstVp;
+            bool allEqual = result.Players.Count > 0;
             for (int p = 1; p < result.Players.Count; p++)
             {
+                if (result.Players[p].TotalVp != firstVp) allEqual = false;
                 if (result.Players[p].TotalVp > bestVp)
                 {
                     bestVp  = result.Players[p].TotalVp;
@@ -120,10 +124,22 @@ namespace ValoCase.Battle
                 }
             }
 
-            result.WinnerIndex = result.Players.Count > 0 ? bestIdx : -1;
-            if (result.WinnerIndex >= 0)
-                result.Players[result.WinnerIndex].IsWinner = true;
-            result.UserWon = result.WinnerIndex == 0;
+            result.IsDraw = allEqual && result.Players.Count >= 2;
+
+            if (result.IsDraw)
+            {
+                // No IsWinner flag on any player — the panels/popup read the draw state.
+                result.WinnerIndex = -1;
+                result.UserWon     = false;
+                result.RefundVp    = Mathf.Max(0, lobby.WagerVP);
+            }
+            else
+            {
+                result.WinnerIndex = result.Players.Count > 0 ? bestIdx : -1;
+                if (result.WinnerIndex >= 0)
+                    result.Players[result.WinnerIndex].IsWinner = true;
+                result.UserWon = result.WinnerIndex == 0;
+            }
 
             return result;
         }
@@ -180,6 +196,12 @@ namespace ValoCase.Battle
         public int WinnerIndex = -1;
         public bool UserWon;
         public int TotalPotVp;
+
+        // Draw: every participant tied on the same total. WinnerIndex stays -1 and no
+        // player carries IsWinner, which distinguishes a real draw from an unresolved
+        // winner (mapping/transport failure). RefundVp is the entry cost returned.
+        public bool IsDraw;
+        public int RefundVp;
 
         public readonly List<BattlePlayerResult> Players  = new List<BattlePlayerResult>();
         public readonly List<SkinDefinitionSO>   AllSkins = new List<SkinDefinitionSO>();

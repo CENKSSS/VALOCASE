@@ -35,10 +35,12 @@ namespace ValoCase.UI.Screens
         public void RequestLeaveExternally() => RequestLeave();
 
         const float SidePad    = 16f;
-        const float HeaderH    = 60f;
-        const float CtaH       = 54f;
+        const float TopPad     = 12f;
+        const float CtaH       = 66f;
         const float NavReserve = 150f;
-        const float SummaryH   = 270f;
+        const float SlotsBottomGap = 24f;
+        const float BattleBottomGap = 36f;
+        const float SummaryH   = 195f;
         const float AddBotCooldownSeconds = 0.25f;
         const float PollErrorToastCooldown = 12f;
         const int PollErrorFeedbackThreshold = 3;
@@ -60,6 +62,9 @@ namespace ValoCase.UI.Screens
         TextMeshProUGUI              _statusLbl;
         GameObject                   _resultOverlay;
         bool                         _panelsStaged;
+
+        bool                         _fastSkipRequested;
+        GameObject                   _fastSkipGo;
 
         // Optimistic warmup state (backend async path only). _warmupRunning gates the
         // in-flight warmup coroutine; _warmupShown records that the reels were already
@@ -203,6 +208,9 @@ namespace ValoCase.UI.Screens
             ForceSettleIfNeeded();
             StopPolling();
             StopAllCoroutines();
+            _fastSkipRequested = false;
+            if (_fastSkipGo != null) _fastSkipGo.SetActive(false);
+            foreach (var p in _panels) if (p != null) p.HideFastSkipIndicator();
             DismissResultPopup();
             DestroyConfetti();
             _online        = false;
@@ -268,24 +276,18 @@ namespace ValoCase.UI.Screens
 
         void BuildHeader(RectTransform rt)
         {
-            var hdr = MakeImage("Header", rt, ColorPalette.CardBg, raycast: true);
-            TopStrip(hdr.rectTransform, HeaderH);
-
-            var accent = MakeImage("TopAccent", hdr.transform, ColorPalette.ActiveRed);
+            var accent = MakeImage("TopAccent", rt, ColorPalette.ActiveRed);
             accent.raycastTarget = false;
             TopStrip(accent.rectTransform, 2f);
 
-            var divider = MakeImage("BottomBorder", hdr.transform, ColorPalette.Border);
-            divider.raycastTarget = false;
-            BottomStrip(divider.rectTransform, 1f);
-
-            var leaveGo = NewGo("LeaveBtn", hdr.transform, typeof(Image), typeof(Button));
+            var leaveGo = NewGo("LeaveBtn", rt, typeof(Image), typeof(Button));
             leaveGo.GetComponent<Image>().color = ColorPalette.Surface;
             var leaveBorder = leaveGo.AddComponent<Outline>();
             leaveBorder.effectColor = ColorPalette.Border; leaveBorder.effectDistance = new Vector2(1f, -1f);
+            // Aligned with the room status row, in the free strip left of the status text.
             SetRect((RectTransform)leaveGo.transform,
-                new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(0f, 0.5f),
-                new Vector2(SidePad, 0f), new Vector2(74f, 36f));
+                new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f),
+                new Vector2(SidePad, -(TopPad + SummaryH + 12f + 6f)), new Vector2(74f, 36f));
 
             var leaveLbl = MakeTmp(leaveGo.transform, "Lbl", "LEAVE", 13f, FontStyles.Bold, ColorPalette.TextBright);
             leaveLbl.alignment = TextAlignmentOptions.Center;
@@ -295,15 +297,94 @@ namespace ValoCase.UI.Screens
             var leaveBtn = leaveGo.GetComponent<Button>();
             leaveBtn.transition = Selectable.Transition.None;
             leaveBtn.onClick.AddListener(RequestLeave);
+            WireButtonClick(leaveBtn);
             _leaveGo  = leaveGo;
             _leaveBtn = leaveBtn;
+        }
 
-            var title = MakeTmp(hdr.transform, "Title", "CASE BATTLE", 18f, FontStyles.Bold, ColorPalette.TextBright);
-            title.characterSpacing = 3f;
-            title.alignment = TextAlignmentOptions.Center;
-            SetRect(title.rectTransform,
-                new Vector2(0f, 0f), new Vector2(1f, 1f), new Vector2(0.5f, 0.5f),
-                new Vector2(0f, -4f), new Vector2(-160f, 0f));
+        // Angled pill pinned to the far right of the center status row.
+        void BuildFastSkipButton(Transform parent)
+        {
+            var bg = MakeAngled("FastSkipBtn", parent, ColorPalette.Surface, 7f, raycast: true);
+            var go = bg.gameObject;
+            var border = go.AddComponent<Outline>();
+            border.effectColor = ColorPalette.ActiveRed;
+            border.effectDistance = new Vector2(1.5f, -1.5f);
+            SetRect(bg.rectTransform,
+                new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(1f, 0.5f),
+                new Vector2(0f, 0f), new Vector2(100f, 44f));
+
+            var tri = RightTriangleSprite();
+            for (int k = 0; k < 2; k++)
+            {
+                var arrow = NewGo("Arrow" + k, go.transform, typeof(Image));
+                var ai = arrow.GetComponent<Image>();
+                ai.sprite        = tri;
+                ai.color         = ColorPalette.ActiveRed;
+                ai.raycastTarget = false;
+                SetRect((RectTransform)arrow.transform,
+                    new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(0.5f, 0.5f),
+                    new Vector2(14f + k * 9f, 0f), new Vector2(13f, 13f));
+            }
+
+            var lbl = MakeTmp(go.transform, "Lbl", "SKIP", 14f, FontStyles.Bold, ColorPalette.TextBright);
+            lbl.alignment = TextAlignmentOptions.MidlineLeft;
+            lbl.characterSpacing = 2f;
+            SetRect(lbl.rectTransform,
+                new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(0f, 0.5f),
+                new Vector2(38f, 0f), new Vector2(58f, 26f));
+
+            var btn = go.AddComponent<Button>();
+            btn.transition = Selectable.Transition.None;
+            btn.onClick.AddListener(OnFastSkipPressed);
+            WireButtonClick(btn);
+
+            go.SetActive(false);
+            _fastSkipGo = go;
+        }
+
+        // Procedural right-pointing filled triangle (white, tinted via Image.color).
+        Sprite _rightTriangleSprite;
+        Sprite RightTriangleSprite()
+        {
+            if (_rightTriangleSprite != null) return _rightTriangleSprite;
+
+            const int s = 32;
+            var tex = new Texture2D(s, s, TextureFormat.RGBA32, false) { filterMode = FilterMode.Bilinear };
+            var px = new Color32[s * s];
+            for (int x = 0; x < s; x++)
+            {
+                float t = 1f - (float)x / (s - 1);       // 1 at left base, 0 at right apex
+                float halfHeight = t * (s * 0.5f);
+                for (int y = 0; y < s; y++)
+                {
+                    float dy = Mathf.Abs(y - s * 0.5f);
+                    byte a = dy <= halfHeight ? (byte)255 : (byte)0;
+                    px[y * s + x] = new Color32(255, 255, 255, a);
+                }
+            }
+            tex.SetPixels32(px);
+            tex.Apply();
+            _rightTriangleSprite = Sprite.Create(tex, new Rect(0, 0, s, s), new Vector2(0.5f, 0.5f));
+            return _rightTriangleSprite;
+        }
+
+        void OnFastSkipPressed()
+        {
+            _fastSkipRequested = true;
+            if (_fastSkipGo != null) _fastSkipGo.SetActive(false);
+        }
+
+        IEnumerator PlayFastSkipTransition()
+        {
+            int count = Mathf.Min(_result.PlayerCount, _panels.Count);
+            for (int i = 0; i < count; i++)
+                _panels[i].ShowFastSkipIndicator();
+
+            yield return new WaitForSecondsRealtime(1.2f);
+
+            for (int i = 0; i < count; i++)
+                _panels[i].HideFastSkipIndicator();
         }
 
         void BuildCta(RectTransform rt)
@@ -319,6 +400,7 @@ namespace ValoCase.UI.Screens
             var btn = _startBg.gameObject.AddComponent<Button>();
             btn.transition = Selectable.Transition.None;
             btn.onClick.AddListener(OnCtaPressed);
+            WireButtonClick(btn);
 
             _startLbl = MakeTmp(_startBg.transform, "Lbl", "START BATTLE", 17f, FontStyles.Bold, Color.white);
             _startLbl.characterSpacing = 3f;
@@ -349,7 +431,7 @@ namespace ValoCase.UI.Screens
 
         void BuildLobbySummary(RectTransform rt)
         {
-            const float topOffset = HeaderH + 16f;
+            const float topOffset = TopPad;
             const float height    = SummaryH;
 
             var card = MakeImage("SummaryCard", rt, ColorPalette.CardBg);
@@ -370,16 +452,7 @@ namespace ValoCase.UI.Screens
 
             const float il = 25f;
 
-            var caseIcon = ResolveCaseIcon();
-            if (caseIcon != null)
-            {
-                var thumb = MakeImage("CaseIcon", card.transform, Color.white);
-                thumb.sprite         = caseIcon;
-                thumb.preserveAspect = true;
-                thumb.raycastTarget  = false;
-                SetRect(thumb.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
-                    new Vector2(0f, 10f), new Vector2(200f, 200f));
-            }
+            BuildCaseStrip(card.transform, il);
 
             var nameLbl = MakeTmp(card.transform, "CaseName",
                 CasesSummary(),
@@ -389,7 +462,7 @@ namespace ValoCase.UI.Screens
             nameLbl.overflowMode = TextOverflowModes.Ellipsis;
             SetRect(nameLbl.rectTransform,
                 new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0f, 1f),
-                new Vector2(il, -24f), new Vector2(-14f, 40f));
+                new Vector2(il, -72f), new Vector2(-14f, 32f));
 
             string modeStr = (_lobby?.MaxPlayers ?? 2) == 4 ? "1V1V1V1" :
                              (_lobby?.MaxPlayers ?? 2) == 3 ? "1V1V1" : "1V1";
@@ -398,7 +471,7 @@ namespace ValoCase.UI.Screens
             var modeBadge = MakeAngled("ModeBadge", card.transform, ColorPalette.Surface, 5f);
             SetRect(modeBadge.rectTransform,
                 new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f),
-                new Vector2(il, -76f), new Vector2(modeW, 32f));
+                new Vector2(il, -110f), new Vector2(modeW, 30f));
 
             var mb = modeBadge.gameObject.AddComponent<Outline>();
             mb.effectColor    = ColorPalette.WithAlpha(ColorPalette.ActiveRed, 0.55f);
@@ -415,7 +488,7 @@ namespace ValoCase.UI.Screens
             var roundBadge = MakeImage("RoundBadge", card.transform, ColorPalette.Surface);
             SetRect(roundBadge.rectTransform,
                 new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f),
-                new Vector2(il + modeW + 11f, -76f), new Vector2(130f, 32f));
+                new Vector2(il + modeW + 11f, -110f), new Vector2(130f, 30f));
 
             var rb = roundBadge.gameObject.AddComponent<Outline>();
             rb.effectColor    = ColorPalette.Border;
@@ -429,10 +502,10 @@ namespace ValoCase.UI.Screens
             var roundCircle = MakeAngled("RoundCircleBadge", card.transform, ColorPalette.ActiveRed, 14f);
             SetRect(roundCircle.rectTransform,
                 new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(1f, 1f),
-                new Vector2(-25f, -25f), new Vector2(54f, 54f));
+                new Vector2(-16f, -12f), new Vector2(50f, 50f));
 
             var roundNumLbl = MakeTmp(roundCircle.transform, "RoundNum",
-                rounds.ToString(), 25f, FontStyles.Bold, Color.white);
+                rounds.ToString(), 22f, FontStyles.Bold, Color.white);
             roundNumLbl.alignment = TextAlignmentOptions.Center;
             Stretch(roundNumLbl.rectTransform);
 
@@ -446,14 +519,14 @@ namespace ValoCase.UI.Screens
             totalCostLbl.alignment = TextAlignmentOptions.MidlineLeft;
             SetRect(totalCostLbl.rectTransform,
                 new Vector2(0f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 0f),
-                new Vector2(il, 18f), new Vector2(-4f, 32f));
+                new Vector2(il, 12f), new Vector2(-4f, 26f));
 
             var openingLbl = MakeTmp(card.transform, "OpeningCases",
                 "Opening cases", 18f, FontStyles.Bold, ColorPalette.TextBright);
             openingLbl.alignment = TextAlignmentOptions.MidlineRight;
             SetRect(openingLbl.rectTransform,
                 new Vector2(0.5f, 0f), new Vector2(1f, 0f), new Vector2(1f, 0f),
-                new Vector2(0f, 18f), new Vector2(-25f, 32f));
+                new Vector2(0f, 12f), new Vector2(-25f, 26f));
         }
 
         // Single case → its name; multiple → "First +N more" so the big title stays legible.
@@ -467,11 +540,70 @@ namespace ValoCase.UI.Screens
             return sels[0].CaseName + "  +" + (sels.Count - 1) + " more";
         }
 
-        Sprite ResolveCaseIcon()
+        // Mirrors the lobby card's case-content strip: each selected case shown side by
+        // side with its quantity badge (x5 / x3 / x1), instead of one centered image.
+        void BuildCaseStrip(Transform card, float il)
+        {
+            var sels = _lobby?.CaseSelections;
+            bool hasSels = sels != null && sels.Count > 0;
+            int count = hasSels ? Mathf.Clamp(sels.Count, 1, 5) : 1;
+
+            const int basis = 5;
+
+            var strip = NewGo("CaseStrip", card);
+            var sRt = (RectTransform)strip.transform;
+            TopStrip(sRt, 56f, -10f);
+            sRt.offsetMin = new Vector2(il, sRt.offsetMin.y);
+            sRt.offsetMax = new Vector2(-74f, sRt.offsetMax.y);
+
+            for (int i = 0; i < count; i++)
+            {
+                var slot = MakeImage("Slot_" + i, strip.transform, Color.clear);
+                var slRt = slot.rectTransform;
+                slRt.anchorMin = new Vector2(i / (float)basis, 0f);
+                slRt.anchorMax = new Vector2((i + 1) / (float)basis, 1f);
+                slRt.offsetMin = new Vector2(3f, 0f);
+                slRt.offsetMax = new Vector2(-3f, 0f);
+
+                string caseId = hasSels ? sels[i].CaseId : _lobby?.CaseId;
+                var iconSprite = ResolveSelectionIcon(caseId);
+
+                var box = MakeImage("Box", slot.transform, ColorPalette.Surface);
+                var boxRt = box.rectTransform;
+                boxRt.anchorMin = Vector2.zero; boxRt.anchorMax = Vector2.one;
+                boxRt.pivot     = new Vector2(0.5f, 0.5f);
+                boxRt.offsetMin = Vector2.zero; boxRt.offsetMax = Vector2.zero;
+                var bb = box.gameObject.AddComponent<Outline>();
+                bb.effectColor    = ColorPalette.Border;
+                bb.effectDistance = new Vector2(1f, -1f);
+
+                if (iconSprite != null)
+                {
+                    var img = MakeImage("Icon", box.transform, Color.white);
+                    img.sprite         = iconSprite;
+                    img.preserveAspect = true;
+                    img.raycastTarget  = false;
+                    var iRt = img.rectTransform;
+                    iRt.anchorMin = Vector2.zero; iRt.anchorMax = Vector2.one;
+                    iRt.offsetMin = new Vector2(2f, 2f); iRt.offsetMax = new Vector2(-2f, -2f);
+                }
+
+                int qty = hasSels ? Mathf.Max(1, sels[i].Quantity) : Mathf.Max(1, _lobby?.Rounds ?? 1);
+                var qtyBg = MakeAngled("QtyBg", box.transform, ColorPalette.ActiveRed, 3f);
+                SetRect(qtyBg.rectTransform,
+                    new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(1f, 1f),
+                    new Vector2(-2f, -2f), new Vector2(26f, 16f));
+                var qtyLbl = MakeTmp(qtyBg.transform, "Qty", "x" + qty, 11f, FontStyles.Bold, Color.white);
+                qtyLbl.alignment = TextAlignmentOptions.Center;
+                Stretch(qtyLbl.rectTransform);
+            }
+        }
+
+        Sprite ResolveSelectionIcon(string caseId)
         {
             var content = GameContext.Instance?.Content;
-            if (content == null || string.IsNullOrEmpty(_lobby?.CaseId)) return null;
-            var c = content.GetCase(_lobby.CaseId);
+            if (content == null || string.IsNullOrEmpty(caseId)) return null;
+            var c = content.GetCase(caseId);
             return c != null ? c.CaseIcon : null;
         }
 
@@ -581,13 +713,15 @@ namespace ValoCase.UI.Screens
             while (!_panelsStaged) yield return null;
             if (!_warmupRunning) yield break;   // resolved/failed before staging finished
 
-            var pool  = ResolveWarmupPool();
-            int count = _panels.Count;
+            var caseDef = ResolveWarmupCase();
+            var pool    = ResolveWarmupPool(caseDef);
+            var weights = caseDef?.DropTable?.RarityWeights;
+            int count   = _panels.Count;
 
             SetRoomStatus("OPENING CASES…", ColorPalette.ActiveRed);
             for (int i = 0; i < count; i++)
             {
-                if (pool != null) _panels[i].SetReelPool(pool);
+                if (pool != null) _panels[i].SetReelPool(pool, weights);
                 StartCoroutine(_panels[i].HideWaiting(0.25f));
                 _panels[i].SetStatus("PLAYING", ColorPalette.ActiveRed);
             }
@@ -597,7 +731,7 @@ namespace ValoCase.UI.Screens
             if (!_warmupRunning) yield break;
 
             for (int i = 0; i < count; i++)
-                _panels[i].BeginWarmupSpin(pool);
+                _panels[i].BeginWarmupSpin(pool, weights);
         }
 
         void StopBattleWarmup()
@@ -607,14 +741,17 @@ namespace ValoCase.UI.Screens
                 p?.StopWarmupSpin();
         }
 
-        // Resolves the case's drop-table skins for warmup filler — the same pool the
-        // backend result will carry (BuildReelPool), available locally at tap time.
-        IReadOnlyList<SkinDefinitionSO> ResolveWarmupPool()
+        // Resolves the case the lobby will open, so warmup filler can use the same pool
+        // AND rarity weights the determined result will carry.
+        CaseDefinitionSO ResolveWarmupCase()
         {
             var ctx = GameContext.Instance;
             if (ctx?.Content == null) return null;
+            return new BattleOpeningEngine(ctx.Content, ctx.CaseOpening).ResolveCase(_lobby);
+        }
 
-            var caseDef = new BattleOpeningEngine(ctx.Content, ctx.CaseOpening).ResolveCase(_lobby);
+        static IReadOnlyList<SkinDefinitionSO> ResolveWarmupPool(CaseDefinitionSO caseDef)
+        {
             if (caseDef?.DropTable?.PossibleDrops == null) return null;
 
             var pool = new List<SkinDefinitionSO>();
@@ -680,7 +817,7 @@ namespace ValoCase.UI.Screens
 
         void BuildBattleArea(RectTransform rt)
         {
-            const float topOffset = HeaderH + 16f + SummaryH + 12f;
+            const float topOffset = TopPad + SummaryH + 12f;
             const float botOffset = NavReserve + CtaH + 16f;
 
             var areaGo = NewGo("BattleArea", rt);
@@ -690,10 +827,21 @@ namespace ValoCase.UI.Screens
             _battleArea.offsetMin = new Vector2(SidePad, botOffset);
             _battleArea.offsetMax = new Vector2(-SidePad, -topOffset);
 
-            _statusLbl = MakeTmp(_battleArea, "Status", "WAITING TO START", 12f, FontStyles.Bold, ColorPalette.TextDim);
-            _statusLbl.characterSpacing = 3f;
+            var rowGo = NewGo("StatusRow", _battleArea);
+            var rowRt = (RectTransform)rowGo.transform;
+            TopStrip(rowRt, 48f, 0f);
+
+            _statusLbl = MakeTmp(rowRt, "Status", "WAITING TO START", 24f, FontStyles.Bold, ColorPalette.TextDim);
+            _statusLbl.characterSpacing = 2f;
             _statusLbl.alignment = TextAlignmentOptions.Center;
-            TopStrip(_statusLbl.rectTransform, 20f, 0f);
+            _statusLbl.enableAutoSizing = true;
+            _statusLbl.fontSizeMin = 16f;
+            _statusLbl.fontSizeMax = 26f;
+            SetRect(_statusLbl.rectTransform,
+                new Vector2(0f, 0f), new Vector2(1f, 1f), new Vector2(0.5f, 0.5f),
+                Vector2.zero, new Vector2(-212f, 0f));
+
+            BuildFastSkipButton(rowRt);
         }
 
         // Builds the real battle panels up front, in the pre-battle waiting state.
@@ -725,26 +873,39 @@ namespace ValoCase.UI.Screens
             float areaW = _battleArea.rect.width;
             float areaH = _battleArea.rect.height;
 
-            const float statusH = 24f;
+            // Reserve clear space below the status text so panels never crowd or cover it.
+            const float statusH = 56f;
             const float gap     = 5f;
+
+            // Vertical breathing room kept clear at the top and bottom of the viewport so the
+            // panels (and the dropped-card grid at their base) are never clipped by the
+            // non-scrolling viewport mask. Every row must fit inside fitH.
+            const float topInset = 16f;
+            const float botInset = 10f;
+            // Online battles hide the CTA — extend below the battle area so the
+            // panel rows end BattleBottomGap above the bottom nav.
+            float bottomExtend = _online ? NavReserve + CtaH + 16f + botInset - BattleBottomGap : 0f;
+            float fitH = Mathf.Max(64f, areaH + bottomExtend - statusH - topInset - botInset);
 
             int count = identities != null && identities.Count >= 2
                 ? Mathf.Clamp(identities.Count, 2, 4)
                 : Mathf.Clamp(_lobby?.MaxPlayers ?? 2, 2, 4);
 
-            float panelW = count switch
-            {
-                2 => Mathf.Min(460f, (areaW - gap) / 1.05f),
-                3 => Mathf.Min(360f, (areaW - gap * 2f) / 1.35f),
-                _ => Mathf.Min(420f, (areaW - gap) / 1.05f),
-            };
-
-            float panelH = count == 4
-                ? Mathf.Min(680f, (areaH - statusH - gap) / 1.35f)
-                : Mathf.Min(1120f, areaH - statusH);
-
             int cols = count == 4 ? 2 : count;
             int rows = count == 4 ? 2 : 1;
+
+            float maxPanelW = count switch
+            {
+                2 => 460f,
+                3 => 360f,
+                _ => 420f,
+            };
+
+            float panelW = Mathf.Min(maxPanelW, (areaW - (cols - 1) * gap) / cols);
+
+            float panelH = count == 4
+                ? Mathf.Min(680f, (fitH - gap) / 2f)
+                : Mathf.Min(1120f, fitH);
 
             var scrollGo = NewGo("PanelScroll", _battleArea, typeof(ScrollRect), typeof(Image));
             scrollGo.GetComponent<Image>().color = Color.clear;
@@ -752,7 +913,7 @@ namespace ValoCase.UI.Screens
             var scrollRt = (RectTransform)scrollGo.transform;
             scrollRt.anchorMin = new Vector2(0f, 0f);
             scrollRt.anchorMax = new Vector2(1f, 1f);
-            scrollRt.offsetMin = new Vector2(0f, 0f);
+            scrollRt.offsetMin = new Vector2(0f, -bottomExtend);
             scrollRt.offsetMax = new Vector2(0f, -statusH);
 
             var viewport = NewGo("Viewport", scrollGo.transform, typeof(RectMask2D), typeof(Image));
@@ -769,7 +930,7 @@ namespace ValoCase.UI.Screens
             float contentH = rows * panelH + (rows - 1) * gap;
 
             float startX = Mathf.Max(0f, (areaW - contentW) * 0.5f);
-            float startY = -Mathf.Clamp((areaH - statusH - contentH) * 0.18f, 16f, 80f);
+            float startY = -(topInset + Mathf.Max(0f, (fitH - contentH) * 0.35f));
 
             contentRt.anchoredPosition = new Vector2(startX, startY);
             contentRt.sizeDelta = new Vector2(contentW, contentH);
@@ -825,11 +986,18 @@ namespace ValoCase.UI.Screens
             // user somehow pressed START before staging completed.
             while (!_panelsStaged) yield return null;
 
+            _fastSkipRequested = false;
+
             int count = Mathf.Min(_result.PlayerCount, _panels.Count);
 
-            // Always apply the authoritative reel pool from the result.
+            // Always apply the authoritative reel pool from the result, with the case's
+            // rarity weights so filler frequency matches the real drop odds.
+            var resultWeights = _result.Case?.DropTable?.RarityWeights;
             for (int i = 0; i < count; i++)
-                _panels[i].SetReelPool(_result.ReelPool);
+            {
+                _panels[i].SetReelPool(_result.ReelPool, resultWeights);
+                _panels[i].PrepareResults(_result.Rounds);
+            }
 
             // Transition staged panels into the reel — UNLESS the optimistic warmup
             // already revealed and spun them, in which case we flow straight into the
@@ -846,10 +1014,25 @@ namespace ValoCase.UI.Screens
                     _panels[i].SetStatus("PLAYING", ColorPalette.ActiveRed);
             }
 
-            const float baseDur = 1.9f;
+            int fastSkipAfter = (_lobby != null && _lobby.IsEventLobby) ? 1 : 5;
+
+            const float baseDur = 3.0f;
 
             for (int round = 0; round < _result.Rounds; round++)
             {
+                if (_fastSkipRequested)
+                {
+                    yield return PlayFastSkipTransition();
+                    for (int rr = round; rr < _result.Rounds; rr++)
+                        for (int i = 0; i < count; i++)
+                        {
+                            var player = _result.Players[i];
+                            var skin = rr < player.Skins.Count ? player.Skins[rr] : null;
+                            if (skin != null) _panels[i].AddResultRow(skin);
+                        }
+                    break;
+                }
+
                 // Tüm oyuncuların reel'leri aynı anda başlasın, aynı hızda dönsün ve aynı anda dursun.
                 for (int i = 0; i < count; i++)
                 {
@@ -870,8 +1053,13 @@ namespace ValoCase.UI.Screens
                     _panels[i].AddResultRow(skin);
                 }
 
+                if (round + 1 >= fastSkipAfter && _fastSkipGo != null && !_fastSkipGo.activeSelf)
+                    _fastSkipGo.SetActive(true);
+
                 yield return new WaitForSecondsRealtime(0.35f);
             }
+
+            if (_fastSkipGo != null) _fastSkipGo.SetActive(false);
 
             // Son skin durduktan sonra kısa bir bekleme, ardından roulette alanını gizle.
             yield return new WaitForSecondsRealtime(0.3f);
@@ -896,7 +1084,15 @@ namespace ValoCase.UI.Screens
 
             SetRoomStatus("FINAL EARNINGS", ColorPalette.GoldAccent);
 
-            const float countUpDuration = 1.15f;
+            var soundManager = ValoCase.Audio.SoundManager.Instance;
+            if (soundManager != null)
+                yield return soundManager.WaitForCoinDropsReady();
+
+            float coinLen = soundManager != null ? soundManager.PlayCoinDrops() : 0f;
+            float countUpDuration = coinLen > 0.01f ? Mathf.Clamp(coinLen, 1.0f, 3.95f) : 1.15f;
+
+            if (soundManager != null)
+                yield return null;
 
             for (int i = 0; i < count; i++)
             {
@@ -905,14 +1101,26 @@ namespace ValoCase.UI.Screens
             }
 
             yield return new WaitForSecondsRealtime(countUpDuration + 0.1f);
+            ValoCase.Audio.SoundManager.Instance?.StopCoinDrops();
 
+            // Draw: everyone tied, so no panel is a winner — all get the same gold
+            // DRAW treatment and the room banner states the entry was refunded.
+            bool draw = _result.IsDraw;
             for (int i = 0; i < count; i++)
             {
-                _panels[i].SetStatus("FINISHED", ColorPalette.TextDim);
-                _panels[i].MarkWinner(i == _result.WinnerIndex);
+                if (draw)
+                {
+                    _panels[i].SetStatus("DRAW", ColorPalette.GoldAccent);
+                    _panels[i].MarkDraw();
+                }
+                else
+                {
+                    _panels[i].SetStatus("FINISHED", ColorPalette.TextDim);
+                    _panels[i].MarkWinner(i == _result.WinnerIndex);
+                }
             }
 
-            SetRoomStatus("BATTLE FINISHED!", ColorPalette.GoldAccent);
+            SetRoomStatus(draw ? DrawStatusText() : "BATTLE FINISHED!", ColorPalette.GoldAccent);
 
             // Service owns rewards (inventory grant) + statistics + saves, in the same
             // order as before. The screen no longer touches VP or inventory directly.
@@ -936,6 +1144,10 @@ namespace ValoCase.UI.Screens
             if (_result != null && _result.UserWon)
                 PlayWinCelebration();
         }
+
+        // Free/event lobbies have no entry cost, so "refunded" would read as 0 VP returned.
+        string DrawStatusText()
+            => _result != null && _result.RefundVp > 0 ? "DRAW — ENTRY REFUNDED" : "DRAW — NO WINNER";
 
         void PlayWinCelebration()
         {
@@ -1049,7 +1261,7 @@ namespace ValoCase.UI.Screens
             _panelsStaged = false;
             _warmupShown  = false;
 
-            SetRoomStatus("BAĞLANIYOR…", ColorPalette.TextDim);
+            SetRoomStatus("CONNECTING…", ColorPalette.TextDim);
 
             if (_pollCo != null)
             {
@@ -1066,7 +1278,11 @@ namespace ValoCase.UI.Screens
 
             var go = NewGo("SlotsRoot", _battleArea);
             _slotsRoot = go;
-            Stretch((RectTransform)go.transform);
+            var rt = (RectTransform)go.transform;
+            Stretch(rt);
+            // Online rooms hide the CTA — the slot grid uses its strip and ends
+            // SlotsBottomGap above the nav (screen rect bottom = nav top edge).
+            rt.offsetMin = new Vector2(0f, -(NavReserve + CtaH + 16f - SlotsBottomGap));
         }
 
         // Polls the lobby once per second until it completes, cancels, or the room closes.
@@ -1109,10 +1325,10 @@ namespace ValoCase.UI.Screens
             Debug.LogWarning("[ONLINE_BATTLE] lobby poll failed — " + err);
             if (_pollFailures < PollErrorFeedbackThreshold) return;
 
-            SetRoomStatus("Lobi bilgileri güncellenemedi, tekrar deneniyor...", ColorPalette.TextDim);
+            SetRoomStatus("Couldn't refresh lobby info, retrying...", ColorPalette.TextDim);
             if (Time.unscaledTime < _nextPollErrorToastAt) return;
 
-            GameEvents.RaiseToast("Lobi bilgileri güncellenemedi, tekrar deneniyor...");
+            GameEvents.RaiseToast("Couldn't refresh lobby info, retrying...");
             _nextPollErrorToastAt = Time.unscaledTime + PollErrorToastCooldown;
         }
 
@@ -1141,14 +1357,14 @@ namespace ValoCase.UI.Screens
                 case "WAITING":
                     SetBackButton(!_amSeated);
                     RenderSlots(lobby);
-                    SetRoomStatus("OYUNCU BEKLENİYOR…", ColorPalette.TextDim);
+                    SetRoomStatus("WAITING FOR PLAYERS…", ColorPalette.TextDim);
                     break;
 
                 case "STARTING":
                     if (!_amSeated) { LeaveAsViewer(); break; }
                     SetBackButton(false);
                     RenderSlots(lobby);
-                    SetRoomStatus("BAŞLIYOR…", ColorPalette.ActiveRed);
+                    SetRoomStatus("STARTING…", ColorPalette.ActiveRed);
                     break;
 
                 case "COMPLETED":
@@ -1166,7 +1382,7 @@ namespace ValoCase.UI.Screens
                 case "CANCELLED":
                     SetBackButton(false);
                     StopPolling();
-                    GameEvents.RaiseToast("Kimse katılmadığı için lobi kapandı.");
+                    GameEvents.RaiseToast("Lobby closed because no one joined.");
                     OnLeave?.Invoke();
                     break;
 
@@ -1229,35 +1445,49 @@ namespace ValoCase.UI.Screens
             Canvas.ForceUpdateCanvases();
             LayoutRebuilder.ForceRebuildLayoutImmediate(_battleArea);
 
-            float areaW = _battleArea.rect.width;
-            float areaH = _battleArea.rect.height;
+            var hostRt = (RectTransform)host;
+            float areaW = hostRt.rect.width;
+            float areaH = hostRt.rect.height;
             if (areaW < 1f) areaW = ((RectTransform)transform).rect.width - SidePad * 2f;
             if (areaH < 1f) areaH = 600f;
 
-            const float statusH = 24f;
+            // Reserve clear space below the status text so panels never crowd or cover it.
+            const float statusH = 50f;
             const float gap     = 5f;
 
             int max = Mathf.Clamp(lobby.maxSlots > 0 ? lobby.maxSlots : 2, 2, 4);
             string myId = GameContext.Instance?.Save?.Data?.guestAccountId;
 
-            float panelW = max switch
-            {
-                2 => Mathf.Min(460f, (areaW - gap) / 1.05f),
-                3 => Mathf.Min(360f, (areaW - gap * 2f) / 1.35f),
-                _ => Mathf.Min(420f, (areaW - gap) / 1.05f),
-            };
-            float panelH = max == 4
-                ? Mathf.Min(680f, (areaH - statusH - gap) / 1.35f)
-                : Mathf.Min(1120f, areaH - statusH);
-
             int cols = max == 4 ? 2 : max;
             int rows = max == 4 ? 2 : 1;
+
+            float maxPanelW = max switch
+            {
+                2 => 460f,
+                3 => 360f,
+                _ => 420f,
+            };
+
+            float panelW = Mathf.Min(maxPanelW, (areaW - (cols - 1) * gap) / cols);
+
+            // Panels live in the region strictly BELOW the status label so they never sit
+            // on top of "WAITING FOR PLAYERS…".
+            float regionH = Mathf.Max(0f, areaH - statusH);
+
+            // 4-player rooms stack 2 rows: both rows + gap must fit inside regionH,
+            // otherwise the bottom row (slots 3/4 with their buttons) is clipped.
+            float panelH = max == 4
+                ? Mathf.Min(680f, (regionH - gap) / 2f)
+                : Mathf.Min(1120f, regionH);
+
+            // Keep 4-player cards clearly taller than wide on every aspect ratio.
+            if (max == 4) panelW = Mathf.Min(panelW, panelH / 1.3f);
 
             float contentW = cols * panelW + (cols - 1) * gap;
             float contentH = rows * panelH + (rows - 1) * gap;
 
             float startX = Mathf.Max(0f, (areaW - contentW) * 0.5f);
-            float startY = -Mathf.Clamp((areaH - statusH - contentH) * 0.18f, 16f, 80f);
+            float topBias = Mathf.Clamp((regionH - contentH) * 0.18f, 0f, 64f);
 
             Transform content;
             Vector2   basePos;
@@ -1279,7 +1509,7 @@ namespace ValoCase.UI.Screens
                 cRt.anchorMax = new Vector2(0f, 1f);
                 cRt.pivot     = new Vector2(0f, 1f);
                 cRt.sizeDelta = new Vector2(contentW, contentH);
-                cRt.anchoredPosition = new Vector2(startX, startY);
+                cRt.anchoredPosition = new Vector2(startX, -topBias);
 
                 var sr = scrollGo.GetComponent<ScrollRect>();
                 sr.viewport         = (RectTransform)viewport.transform;
@@ -1295,7 +1525,7 @@ namespace ValoCase.UI.Screens
             else
             {
                 content = host;
-                basePos = new Vector2(startX, startY);
+                basePos = new Vector2(startX, -(statusH + topBias));
             }
 
             for (int i = 0; i < max; i++)
@@ -1345,12 +1575,12 @@ namespace ValoCase.UI.Screens
             border.effectDistance = new Vector2(empty ? 1f : 2f, empty ? -1f : -2f);
 
             const float pad     = 6f;
-            const float headerH = 28f;
+            const float headerH = 62f;
 
-            string headerName = empty ? "BOŞ SLOT"
+            string headerName = empty ? "EMPTY SLOT"
                 : isBot ? (string.IsNullOrEmpty(slot.displayName) ? "BOT" : slot.displayName)
-                : (string.IsNullOrEmpty(slot.displayName) ? "OYUNCU" : slot.displayName) + (mine ? "  (SEN)" : "");
-            string headerStatus = empty ? "—" : isBot ? "BOT" : (mine ? "SEN" : "OYUNCU");
+                : (string.IsNullOrEmpty(slot.displayName) ? "PLAYER" : slot.displayName) + (mine ? "  (YOU)" : "");
+            string headerStatus = empty ? "—" : isBot ? "BOT" : (mine ? "YOU" : "PLAYER");
             Color  headerColor  = empty ? ColorPalette.TextDim : ColorPalette.TextBright;
 
             BuildPanelHeader(pRt, slot, empty, isBot, mine, accent, headerName, headerStatus, headerColor, pad, headerH);
@@ -1364,7 +1594,7 @@ namespace ValoCase.UI.Screens
                 return;
             }
 
-            var emptyLbl = MakeTmp(pRt, "EmptyLbl", "BOŞ SLOT", 13f, FontStyles.Bold, ColorPalette.TextDim);
+            var emptyLbl = MakeTmp(pRt, "EmptyLbl", "EMPTY SLOT", 13f, FontStyles.Bold, ColorPalette.TextDim);
             emptyLbl.characterSpacing = 2f;
             emptyLbl.alignment = TextAlignmentOptions.Center;
             SetRect(emptyLbl.rectTransform,
@@ -1378,17 +1608,17 @@ namespace ValoCase.UI.Screens
             if (canJoin)
             {
                 int captured = slot != null ? slot.slotIndex : index;
-                BuildPanelButton(pRt, "KATIL", new Color(0.20f, 0.62f, 1f), () => OnJoinSlotPressed(captured));
+                BuildPanelButton(pRt, "JOIN", new Color(0.20f, 0.62f, 1f), () => OnJoinSlotPressed(captured));
             }
             else if (canAddBot)
             {
-                var btn = BuildPanelButton(pRt, "BOT EKLE", ColorPalette.ActiveRed, OnAddBotPressed);
+                var btn = BuildPanelButton(pRt, "ADD BOT", ColorPalette.ActiveRed, OnAddBotPressed);
                 _addBotButtons.Add(btn);
                 btn.interactable = !_addingBot;
             }
             else
             {
-                var hint = MakeTmp(pRt, "Hint", "BEKLENİYOR", 10f, FontStyles.Bold, ColorPalette.TextDim);
+                var hint = MakeTmp(pRt, "Hint", "WAITING", 10f, FontStyles.Bold, ColorPalette.TextDim);
                 hint.characterSpacing = 2f;
                 hint.alignment = TextAlignmentOptions.Center;
                 SetRect(hint.rectTransform,
@@ -1406,10 +1636,10 @@ namespace ValoCase.UI.Screens
             hRt.offsetMin = new Vector2(pad, hRt.offsetMin.y);
             hRt.offsetMax = new Vector2(-pad, hRt.offsetMax.y);
 
-            var avatar = MakeAngled("Avatar", header.transform, empty ? ColorPalette.Surface : accent, 4f);
+            var avatar = MakeAngled("Avatar", header.transform, empty ? ColorPalette.Surface : accent, 6f);
             SetRect(avatar.rectTransform,
                 new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(0f, 0.5f),
-                new Vector2(0f, 0f), new Vector2(22f, 22f));
+                new Vector2(0f, 0f), new Vector2(48f, 48f));
 
             if (!empty)
             {
@@ -1422,32 +1652,34 @@ namespace ValoCase.UI.Screens
                     var ph = photo.rectTransform;
                     ph.anchorMin = new Vector2(0f, 0f);
                     ph.anchorMax = new Vector2(1f, 1f);
-                    ph.offsetMin = new Vector2(1f, 1f);
-                    ph.offsetMax = new Vector2(-1f, -1f);
+                    ph.offsetMin = new Vector2(2f, 2f);
+                    ph.offsetMax = new Vector2(-2f, -2f);
                 }
                 else
                 {
                     string initial = !string.IsNullOrEmpty(name) ? name.Substring(0, 1).ToUpperInvariant() : "?";
-                    var aLbl = MakeTmp(avatar.transform, "I", initial, 12f, FontStyles.Bold,
+                    var aLbl = MakeTmp(avatar.transform, "I", initial, 26f, FontStyles.Bold,
                         mine ? ColorPalette.BgDeep : Color.white);
                     aLbl.alignment = TextAlignmentOptions.Center;
                     Stretch(aLbl.rectTransform);
                 }
             }
 
-            var nameLbl = MakeTmp(header.transform, "Name", name, 12f, FontStyles.Bold, nameColor);
+            var nameLbl = MakeTmp(header.transform, "Name", name, 26f, FontStyles.Bold, nameColor);
             nameLbl.alignment = TextAlignmentOptions.MidlineLeft;
+            nameLbl.enableWordWrapping = false;
+            nameLbl.overflowMode = TextOverflowModes.Ellipsis;
             SetRect(nameLbl.rectTransform,
                 new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0f, 1f),
-                new Vector2(28f, -1f), new Vector2(-28f, 15f));
+                new Vector2(58f, -4f), new Vector2(-66f, 32f));
 
-            var statusLbl = MakeTmp(header.transform, "Status", status, 8f, FontStyles.Bold,
+            var statusLbl = MakeTmp(header.transform, "Status", status, 17f, FontStyles.Bold,
                 empty ? ColorPalette.TextDim : accent);
             statusLbl.characterSpacing = 1f;
             statusLbl.alignment = TextAlignmentOptions.MidlineLeft;
             SetRect(statusLbl.rectTransform,
                 new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(0f, 0f),
-                new Vector2(28f, 1f), new Vector2(-28f, 12f));
+                new Vector2(58f, 3f), new Vector2(-66f, 22f));
 
             var sep = MakeImage("HeaderSeparator", pRt, ColorPalette.WithAlpha(Color.white, 0.12f), raycast: false);
             var sepRt = sep.rectTransform;
@@ -1468,11 +1700,11 @@ namespace ValoCase.UI.Screens
             var sprite = ResolveSlotAvatar(slot, isBot, mine);
             string name = isBot
                 ? (string.IsNullOrEmpty(slot.displayName) ? "BOT" : slot.displayName)
-                : (string.IsNullOrEmpty(slot.displayName) ? "OYUNCU" : slot.displayName);
+                : (string.IsNullOrEmpty(slot.displayName) ? "PLAYER" : slot.displayName);
             string initial = !string.IsNullOrEmpty(name) ? name.Substring(0, 1).ToUpperInvariant() : "?";
 
-            float avatarSize = Mathf.Clamp(reelH * 0.34f, 64f, 132f);
-            float blockH     = avatarSize + 16f + 24f + 6f + 16f;
+            float avatarSize = Mathf.Clamp(reelH * 0.42f, 80f, 152f);
+            float blockH     = avatarSize + 16f + 26f + 6f + 18f;
             float padTop     = Mathf.Max(8f, (reelH - blockH) * 0.5f);
 
             var ring = MakeAngled("AvatarRing", pRt, ColorPalette.WithAlpha(accent, 0.14f), 8f);
@@ -1511,19 +1743,19 @@ namespace ValoCase.UI.Screens
             }
 
             var nameLbl = MakeTmp(pRt, "CName", name + (mine ? "  (SEN)" : ""),
-                14f, FontStyles.Bold, ColorPalette.TextBright);
+                18f, FontStyles.Bold, ColorPalette.TextBright);
             nameLbl.alignment = TextAlignmentOptions.Center;
             SetRect(nameLbl.rectTransform,
                 new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
-                new Vector2(0f, -(top + padTop + avatarSize + 14f)), new Vector2(-8f, 24f));
+                new Vector2(0f, -(top + padTop + avatarSize + 14f)), new Vector2(-8f, 26f));
 
             var statusLbl = MakeTmp(pRt, "CStatus", isBot ? "BOT" : (mine ? "SEN" : "HAZIR"),
-                9f, FontStyles.Bold, mine ? ColorPalette.GoldAccent : ColorPalette.ActiveRed);
+                11f, FontStyles.Bold, mine ? ColorPalette.GoldAccent : ColorPalette.ActiveRed);
             statusLbl.alignment = TextAlignmentOptions.Center;
             statusLbl.characterSpacing = 3f;
             SetRect(statusLbl.rectTransform,
                 new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
-                new Vector2(0f, -(top + padTop + avatarSize + 14f + 24f + 6f)), new Vector2(-8f, 16f));
+                new Vector2(0f, -(top + padTop + avatarSize + 14f + 26f + 6f)), new Vector2(-8f, 16f));
         }
 
         // Backend-authoritative avatar: every real player / bot shows the avatarId the
@@ -1549,13 +1781,14 @@ namespace ValoCase.UI.Screens
             rt.anchorMax = new Vector2(0.5f, 0f);
             rt.pivot     = new Vector2(0.5f, 0f);
             rt.anchoredPosition = new Vector2(0f, 20f);
-            rt.sizeDelta = new Vector2(150f, 48f);
+            rt.sizeDelta = new Vector2(Mathf.Min(150f, pRt.rect.width - 24f), 48f);
             go.transform.SetAsLastSibling();
 
             var btn = go.GetComponent<Button>();
             btn.transition   = Selectable.Transition.None;
             btn.interactable = true;
             btn.onClick.AddListener(onClick);
+            WireButtonClick(btn);
 
             var lbl = MakeTmp(go.transform, "Lbl", label, 13f, FontStyles.Bold, Color.white);
             lbl.alignment        = TextAlignmentOptions.Center;
@@ -1668,7 +1901,9 @@ namespace ValoCase.UI.Screens
                 return;
             }
 
-            Debug.Log("[ONLINE_BATTLE] local player " + (_result.UserWon ? "WIN" : "LOSS") + " detected");
+            Debug.Log("[ONLINE_BATTLE] local player " +
+                      (_result.IsDraw ? "DRAW (refundVp=" + _result.RefundVp + ")" : _result.UserWon ? "WIN" : "LOSS") +
+                      " detected");
             ResyncAfterPvp(lobby);
 
             if (_slotsRoot != null) { Destroy(_slotsRoot); _slotsRoot = null; }
@@ -1719,102 +1954,184 @@ namespace ValoCase.UI.Screens
             if (e == null) return BackendErrorMapper.Generic;
             if (e.IsOffline) return BackendErrorMapper.Offline;
             if (e.IsTimeout) return BackendErrorMapper.Timeout;
-            if (e.IsLockedCategory) return $"Bu kasa Seviye {e.RequiredLevel}'te açılır.";
+            if (e.IsLockedCategory) return $"This case unlocks at Level {e.RequiredLevel}.";
             switch (e.HttpStatus)
             {
-                case 402: return "Yetersiz VP.";
-                case 403: return "Bu işleme izin yok.";
-                case 409: return "İşlem yapılamadı. Lobi dolu, başlamış veya iptal olmuş olabilir.";
+                case 402: return "Not enough VP.";
+                case 403: return "This action isn't allowed.";
+                case 409: return "Action failed. The lobby may be full, already started, or cancelled.";
                 case 429: return BackendErrorMapper.TooManyReq;
             }
             return BackendErrorMapper.Map(e);
         }
 
+        // Result popup: centered title, "Total win" label over a big green value, a single
+        // row of every participant's avatar (winner framed green, losers framed red — bots
+        // included), and two action buttons. No reward icons, no scoreboard rows.
         void ShowResultPopup()
         {
             if (_result == null) return;
 
-            bool won = _result.UserWon;
             ColorUtility.TryParseHtmlString("#2ECC71", out var green);
-            Color theme = won ? green : ColorPalette.ActiveRed;
+            ColorUtility.TryParseHtmlString("#1B1C34", out var navy);
+            ColorUtility.TryParseHtmlString("#F4A63B", out var gold);
+            Color red = ColorPalette.ActiveRed;
+
+            int count = Mathf.Clamp(_result.PlayerCount, 2, _result.Players.Count);
+            // -1 when there is no winner (draw, or an unresolved one). Never fall back to 0:
+            // that framed the first participant as a phantom winner.
+            int wi    = (_result.WinnerIndex >= 0 && _result.WinnerIndex < _result.Players.Count) ? _result.WinnerIndex : -1;
+            bool draw = _result.IsDraw;
+
+            float avSize = count >= 4 ? 64f : count == 3 ? 72f : 80f;
+            float avRowH = avSize + 16f;
 
             var root = (RectTransform)transform;
-
-            var overlay = MakeImage("ResultOverlay", root, ColorPalette.WithAlpha(Color.black, 0.78f), raycast: true);
+            var overlay = MakeImage("ResultOverlay", root, ColorPalette.WithAlpha(Color.black, 0.82f), raycast: true);
             Stretch(overlay.rectTransform);
             _resultOverlay = overlay.gameObject;
 
-            var card = MakeAngled("ResultCard", overlay.transform, ColorPalette.CardBg, 12f, raycast: true);
+            const float cardW = 360f;
+            const float pad   = 22f;
+
+            float y = pad;
+            float titleY = y;                 y += 40f + 12f;
+            float capY   = y;                 y += 16f + 4f;
+            float valY   = y;                 y += 48f + 18f;
+            float avY    = y;                 y += avRowH + 22f;
+            float btnY   = y;                 y += 54f;
+            y += pad;
+            float cardH = y;
+
+            var card = MakeAngled("ResultCard", overlay.transform, navy, 14f, raycast: true);
             SetRect(card.rectTransform,
                 new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
-                Vector2.zero, new Vector2(300f, won ? 240f : 210f));
+                Vector2.zero, new Vector2(cardW, cardH));
 
             var border = card.gameObject.AddComponent<Outline>();
-            border.effectColor    = theme;
-            border.effectDistance = new Vector2(2f, -2f);
+            border.effectColor    = ColorPalette.WithAlpha(new Color(0.45f, 0.5f, 0.85f), 0.45f);
+            border.effectDistance = new Vector2(1.5f, -1.5f);
 
             var glow = card.gameObject.AddComponent<Shadow>();
-            glow.effectColor    = ColorPalette.WithAlpha(theme, 0.6f);
-            glow.effectDistance = new Vector2(0f, -4f);
+            glow.effectColor    = ColorPalette.WithAlpha(Color.black, 0.55f);
+            glow.effectDistance = new Vector2(0f, -6f);
 
-            var accent = MakeImage("Accent", card.transform, theme);
-            accent.raycastTarget = false;
-            TopStrip(accent.rectTransform, 4f);
+            // Draw shows what came back to the wallet, not a pot nobody won.
+            Color valColor  = draw ? gold : green;
+            string titleTxt = draw ? "DRAW" : "The Battle is over!";
+            string capTxt   = draw ? "Refunded" : "Total win";
+            int    valAmount = draw ? _result.RefundVp : _result.TotalPotVp;
 
-            var title = MakeTmp(card.transform, "Title", won ? "YOU WIN" : "YOU LOSE",
-                34f, FontStyles.Bold, theme);
-            title.characterSpacing = 3f;
+            var title = MakeTmp(card.transform, "Title", titleTxt, 26f, FontStyles.Bold, Color.white);
             title.alignment = TextAlignmentOptions.Center;
-            SetRect(title.rectTransform,
-                new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
-                new Vector2(0f, -34f), new Vector2(-20f, 44f));
+            PlaceBand(title.rectTransform, titleY, 40f, pad);
 
-            if (won)
+            var cap = MakeTmp(card.transform, "TotalCap", capTxt, 14f, FontStyles.Normal, ColorPalette.WithAlpha(Color.white, 0.7f));
+            cap.alignment = TextAlignmentOptions.Center;
+            PlaceBand(cap.rectTransform, capY, 16f, pad);
+
+            var val = MakeTmp(card.transform, "TotalVal", valAmount.ToString("N0") + " VP", 40f, FontStyles.Bold, valColor);
+            val.alignment = TextAlignmentOptions.Center;
+            var valGlow = val.gameObject.AddComponent<Shadow>();
+            valGlow.effectColor = ColorPalette.WithAlpha(valColor, 0.5f); valGlow.effectDistance = new Vector2(0f, -2f);
+            PlaceBand(val.rectTransform, valY, 48f, pad);
+
+            // Draw frames every participant gold — nobody won, nobody lost. wi is -1 there,
+            // so no avatar takes the winner branch and both colours resolve to gold.
+            BuildParticipantAvatars(card.transform, count, wi, avY, avRowH, avSize, pad,
+                                    draw ? gold : green, draw ? gold : red);
+
+            BuildResultButtons(card.transform, btnY, 54f, pad, green, gold);
+
+            StartCoroutine(PopIn(card.rectTransform));
+        }
+
+        void PlaceBand(RectTransform rt, float yFromTop, float h, float pad)
+        {
+            rt.anchorMin = new Vector2(0f, 1f);
+            rt.anchorMax = new Vector2(1f, 1f);
+            rt.pivot     = new Vector2(0.5f, 1f);
+            rt.anchoredPosition = new Vector2(0f, -yFromTop);
+            rt.sizeDelta = new Vector2(-2f * pad, h);
+        }
+
+        void BuildParticipantAvatars(Transform card, int count, int winnerIdx, float yFromTop, float h, float size, float pad, Color green, Color red)
+        {
+            var go = NewGo("Avatars", card, typeof(HorizontalLayoutGroup));
+            PlaceBand((RectTransform)go.transform, yFromTop, h, pad);
+            var hlg = go.GetComponent<HorizontalLayoutGroup>();
+            hlg.childAlignment = TextAnchor.MiddleCenter;
+            hlg.spacing = 12f;
+            hlg.childForceExpandWidth = false; hlg.childForceExpandHeight = false;
+            hlg.childControlWidth = true; hlg.childControlHeight = true;
+
+            for (int i = 0; i < count; i++)
+                AddParticipantAvatar(go.transform, _result.Players[i], i == winnerIdx, size, green, red);
+        }
+
+        void AddParticipantAvatar(Transform parent, BattlePlayerResult p, bool isWinner, float size, Color green, Color red)
+        {
+            Color rc = isWinner ? green : red;
+
+            var av = MakeAngled("PAv", parent, ColorPalette.Surface, 7f, raycast: false);
+            var le = av.gameObject.AddComponent<LayoutElement>();
+            le.preferredWidth = le.minWidth = size; le.preferredHeight = le.minHeight = size;
+
+            var b = av.gameObject.AddComponent<Outline>();
+            b.effectColor    = rc;
+            b.effectDistance = new Vector2(isWinner ? 3f : 2f, isWinner ? -3f : -2f);
+
+            var g = av.gameObject.AddComponent<Shadow>();
+            g.effectColor    = ColorPalette.WithAlpha(rc, isWinner ? 0.85f : 0.65f);
+            g.effectDistance = new Vector2(0f, -4f);
+
+            Sprite face = p.Avatar != null ? p.Avatar : (p.IsUser ? PlayerProfileData.Avatar : null);
+            if (face != null)
             {
-                string prize = $"<color=#{Hex(ColorPalette.GoldAccent)}><b>{_result.TotalPotVp:N0} VP</b></color>";
-
-                var prizeLbl = MakeTmp(card.transform, "Prize", "TOTAL PRIZE\n" + prize,
-                    16f, FontStyles.Normal, ColorPalette.TextDim);
-                prizeLbl.alignment = TextAlignmentOptions.Center;
-                prizeLbl.lineSpacing = 12f;
-                SetRect(prizeLbl.rectTransform,
-                    new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
-                    new Vector2(0f, -92f), new Vector2(-24f, 50f));
-
-                var skinsLbl = MakeTmp(card.transform, "Skins",
-                    $"{_result.AllSkins.Count} SKINS WON", 11f, FontStyles.Bold, ColorPalette.TextBright);
-                skinsLbl.characterSpacing = 1.5f;
-                skinsLbl.alignment = TextAlignmentOptions.Center;
-                SetRect(skinsLbl.rectTransform,
-                    new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
-                    new Vector2(0f, -150f), new Vector2(-24f, 18f));
+                var photo = MakeImage("Photo", av.transform, Color.white, raycast: false);
+                photo.sprite = face; photo.preserveAspect = true;
+                var ph = photo.rectTransform;
+                ph.anchorMin = new Vector2(0f, 0f); ph.anchorMax = new Vector2(1f, 1f);
+                ph.offsetMin = new Vector2(3f, 3f); ph.offsetMax = new Vector2(-3f, -3f);
             }
             else
             {
-                var msg = MakeTmp(card.transform, "Msg", "Better luck next time.",
-                    13f, FontStyles.Normal, ColorPalette.TextDim);
-                msg.alignment = TextAlignmentOptions.Center;
-                SetRect(msg.rectTransform,
-                    new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
-                    new Vector2(0f, -100f), new Vector2(-24f, 24f));
+                string initial = !string.IsNullOrEmpty(p.Name) ? p.Name.Substring(0, 1).ToUpperInvariant() : "?";
+                var lbl = MakeTmp(av.transform, "I", initial, size * 0.4f, FontStyles.Bold, Color.white);
+                lbl.alignment = TextAlignmentOptions.Center;
+                Stretch(lbl.rectTransform);
             }
+        }
 
-            var btnBg = MakeAngled("ContinueBtn", card.transform, theme, 8f, raycast: true);
-            SetRect(btnBg.rectTransform,
-                new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0.5f, 0f),
-                new Vector2(0f, 18f), new Vector2(180f, 42f));
+        void BuildResultButtons(Transform card, float yFromTop, float h, float pad, Color green, Color gold)
+        {
+            var go = NewGo("Actions", card, typeof(HorizontalLayoutGroup));
+            PlaceBand((RectTransform)go.transform, yFromTop, h, pad);
+            var hlg = go.GetComponent<HorizontalLayoutGroup>();
+            hlg.childAlignment = TextAnchor.MiddleCenter;
+            hlg.spacing = 12f;
+            hlg.childForceExpandWidth = true; hlg.childForceExpandHeight = true;
+            hlg.childControlWidth = true; hlg.childControlHeight = true;
+
+            BuildResultButton(go.transform, "PLAY AGAIN", green, Color.white, () => { DismissResultPopup(); OnLeave?.Invoke(); });
+            BuildResultButton(go.transform, "CONTINUE",   gold,  ColorPalette.BgDeep, DismissResultPopup);
+        }
+
+        void BuildResultButton(Transform parent, string label, Color bg, Color textColor, UnityEngine.Events.UnityAction onClick)
+        {
+            var btnBg = MakeAngled("ResBtn", parent, bg, 8f, raycast: true);
+            var le = btnBg.gameObject.AddComponent<LayoutElement>();
+            le.flexibleWidth = 1f; le.minHeight = le.preferredHeight = 54f;
 
             var btn = btnBg.gameObject.AddComponent<Button>();
             btn.transition = Selectable.Transition.None;
-            btn.onClick.AddListener(DismissResultPopup);
+            btn.onClick.AddListener(onClick);
+            WireButtonClick(btn);
 
-            var btnLbl = MakeTmp(btnBg.transform, "Lbl", won ? "CLAIM" : "CONTINUE",
-                14f, FontStyles.Bold, won ? ColorPalette.BgDeep : Color.white);
-            btnLbl.characterSpacing = 2f;
-            btnLbl.alignment = TextAlignmentOptions.Center;
-            Stretch(btnLbl.rectTransform);
-
-            StartCoroutine(PopIn(card.rectTransform));
+            var lbl = MakeTmp(btnBg.transform, "Lbl", label, 15f, FontStyles.Bold, textColor);
+            lbl.characterSpacing = 1.5f;
+            lbl.alignment = TextAlignmentOptions.Center;
+            Stretch(lbl.rectTransform);
         }
 
         static IEnumerator PopIn(RectTransform rt)

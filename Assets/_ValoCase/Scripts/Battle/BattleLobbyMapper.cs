@@ -58,6 +58,7 @@ namespace ValoCase.Battle
                 Mode             = BattleMode.Normal,
                 Rarity           = SkinRarity.Select,
                 Status           = MapStatus(r.status),
+                IsEventLobby     = r.isEventLobby || !string.IsNullOrEmpty(r.eventType) || r.entryCost <= 0,
             };
         }
 
@@ -84,6 +85,8 @@ namespace ValoCase.Battle
             battle.Case     = caseDef;
             battle.Rounds   = ResolveRollCount(r);
             battle.ReelPool = BuildReelPool(caseDef);
+            battle.IsDraw   = r.isDraw;
+            battle.RefundVp = Mathf.Max(0, r.refundVp);
 
             // Keep only real participants (REAL/BOT); skip EMPTY. A COMPLETED lobby is
             // full, but we never assume that — we map whatever the server returned.
@@ -95,7 +98,8 @@ namespace ValoCase.Battle
 
             slots.Sort((a, b) => a.slotIndex.CompareTo(b.slotIndex));
 
-            int winningSlot = ResolveWinnerSlotIndex(r, slots);
+            // A draw has no winner by definition — never run winner resolution for it.
+            int winningSlot = r.isDraw ? -1 : ResolveWinnerSlotIndex(r, slots);
 
             int pot = 0;
             foreach (var s in slots)
@@ -157,12 +161,21 @@ namespace ValoCase.Battle
         // is assigned once by the server; winnerSlotIndex is only a fallback for older lobbies.
         static int ResolveWinnerSlotIndex(LobbyResponse r, List<LobbySlotResponse> slots)
         {
+            // When the server named a winner, that name decides — and if it matches no
+            // slot we report "no winner" rather than falling through to winnerSlotIndex,
+            // whose unset default (0) would frame the first slot as a phantom winner.
             if (!string.IsNullOrEmpty(r.winnerDisplayName))
+            {
                 foreach (var s in slots)
                     if (s != null && string.Equals(s.displayName, r.winnerDisplayName, System.StringComparison.OrdinalIgnoreCase))
                         return s.slotIndex;
-            foreach (var s in slots)
-                if (s != null && s.slotIndex == r.winnerSlotIndex) return s.slotIndex;
+                return -1;
+            }
+
+            if (r.winnerSlotIndex >= 0)
+                foreach (var s in slots)
+                    if (s != null && s.slotIndex == r.winnerSlotIndex) return s.slotIndex;
+
             return -1;
         }
 

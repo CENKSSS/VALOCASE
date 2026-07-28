@@ -4,6 +4,7 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 using ValoCase.Battle;
+using ValoCase.CaseOpening;
 using ValoCase.Data;
 using ValoCase.Profile;
 using static ValoCase.UI.UIBuild;
@@ -12,13 +13,15 @@ namespace ValoCase.UI
 {
     public sealed class BattleRouletteView : MonoBehaviour
     {
-        const int ReelCardCount = 16;
+        const int ReelCardCount = 20;
         const int TargetIdx     = 3;
-        const int SpinCards     = 10;
+        const int SpinCards     = 13;
 
         RectTransform                   _reelContent;
         readonly List<ReelCard>         _cards = new List<ReelCard>();
         IReadOnlyList<SkinDefinitionSO> _pool;
+        readonly List<SkinDefinitionSO> _fillerPool = new List<SkinDefinitionSO>();
+        IReadOnlyList<RarityWeightEntry> _weights;
         RarityVisualSO                  _visuals;
 
         AngledCutImage  _panelBg;
@@ -48,9 +51,19 @@ namespace ValoCase.UI
         RectTransform   _waitingRoot;
         CanvasGroup     _waitingCg;
 
+        RectTransform   _fastSkipRoot;
+        CanvasGroup     _fastSkipCg;
+        RectTransform   _fastSkipIcons;
+        Coroutine       _fastSkipPulseCo;
+
         float _reelH;
         float _cardH;
         bool  _isUser;
+
+        float           _panelW;
+        GridLayoutGroup _resultGrid;
+        float           _resultListW;
+        float           _resultListH;
 
         struct ReelCard
         {
@@ -66,7 +79,9 @@ namespace ValoCase.UI
         {
             _visuals = visuals;
             _pool    = (reelPool != null && reelPool.Count > 0) ? reelPool : player?.Skins;
+            RebuildFillerPool();
             _isUser  = player != null && player.IsUser;
+            _panelW  = panelW;
 
             var rt = (RectTransform)transform;
             _cg = GetComponent<CanvasGroup>();
@@ -78,12 +93,11 @@ namespace ValoCase.UI
             Stretch(_panelBg.rectTransform);
 
             _panelBorder = _panelBg.gameObject.AddComponent<Outline>();
-            _panelBorder.effectColor    = ColorPalette.Border;
-            _panelBorder.effectDistance = new Vector2(1f, -1f);
+            _panelBorder.effectColor    = Color.Lerp(ColorPalette.Border, Color.white, 0.25f);
+            _panelBorder.effectDistance = new Vector2(2f, -2f);
 
             const float pad     = 6f;
-            const float headerH = 28f;
-            const float totalH  = 22f;
+            const float headerH = 62f;
             const float gap     = 5f;
 
             _cardH = Mathf.Clamp(panelH * 0.17f, 52f, 78f);
@@ -91,13 +105,13 @@ namespace ValoCase.UI
 
             float reelTop = headerH + gap;
             float listTop = reelTop + _reelH + gap;
-            float listH   = Mathf.Max(64f, panelH - listTop - (totalH + gap));
+            float listH   = Mathf.Max(64f, panelH - listTop - gap - 8f);
 
             BuildHeader(rt, player, accent, pad, headerH);
             BuildReel(rt, accent, pad, reelTop, _reelH);
             BuildFinalEarnings(rt, pad, reelTop, _reelH);
+            BuildFastSkipIndicator(rt, pad, reelTop, _reelH);
             BuildResultList(rt, pad, listTop, listH);
-            BuildTotal(rt, pad, totalH);
             BuildWinnerLabel(rt);
             BuildWaitingPresentation(rt, accent, reelTop, _reelH, player);
 
@@ -112,10 +126,10 @@ namespace ValoCase.UI
             ((RectTransform)header.transform).offsetMin = new Vector2(pad, ((RectTransform)header.transform).offsetMin.y);
             ((RectTransform)header.transform).offsetMax = new Vector2(-pad, ((RectTransform)header.transform).offsetMax.y);
 
-            var avatar = MakeAngled("Avatar", header.transform, accent, 4f);
+            var avatar = MakeAngled("Avatar", header.transform, accent, 6f);
             SetRect(avatar.rectTransform,
                 new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(0f, 0.5f),
-                new Vector2(0f, 0f), new Vector2(22f, 22f));
+                new Vector2(0f, 0f), new Vector2(48f, 48f));
 
             // Every participant shows their backend avatar when provided; the local user
             // falls back to their own configured profile. Bots/unknowns keep the initial.
@@ -132,8 +146,8 @@ namespace ValoCase.UI
                 var phRt = photo.rectTransform;
                 phRt.anchorMin = new Vector2(0f, 0f);
                 phRt.anchorMax = new Vector2(1f, 1f);
-                phRt.offsetMin = new Vector2(1f, 1f);
-                phRt.offsetMax = new Vector2(-1f, -1f);
+                phRt.offsetMin = new Vector2(2f, 2f);
+                phRt.offsetMax = new Vector2(-2f, -2f);
             }
             else
             {
@@ -142,25 +156,27 @@ namespace ValoCase.UI
                     : (player != null && player.Name.Length > 0
                         ? player.Name.Substring(player.Name.Length - 1) : "B");
 
-                var aLbl = MakeTmp(avatar.transform, "I", initial, 12f, FontStyles.Bold,
+                var aLbl = MakeTmp(avatar.transform, "I", initial, 26f, FontStyles.Bold,
                     _isUser ? ColorPalette.BgDeep : Color.white);
                 aLbl.alignment = TextAlignmentOptions.Center;
                 Stretch(aLbl.rectTransform);
             }
 
             var name = MakeTmp(header.transform, "Name", displayName,
-                12f, FontStyles.Bold, ColorPalette.TextBright);
+                26f, FontStyles.Bold, ColorPalette.TextBright);
             name.alignment = TextAlignmentOptions.MidlineLeft;
+            name.enableWordWrapping = false;
+            name.overflowMode = TextOverflowModes.Ellipsis;
             SetRect(name.rectTransform,
                 new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0f, 1f),
-                new Vector2(28f, -1f), new Vector2(-28f, 15f));
+                new Vector2(58f, -4f), new Vector2(-66f, 32f));
 
-            _statusLbl = MakeTmp(header.transform, "Status", "READY", 8f, FontStyles.Bold, ColorPalette.TextDim);
+            _statusLbl = MakeTmp(header.transform, "Status", "READY", 17f, FontStyles.Bold, ColorPalette.TextDim);
             _statusLbl.characterSpacing = 1f;
             _statusLbl.alignment = TextAlignmentOptions.MidlineLeft;
             SetRect(_statusLbl.rectTransform,
                 new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(0f, 0f),
-                new Vector2(28f, 1f), new Vector2(-28f, 12f));
+                new Vector2(58f, 3f), new Vector2(-66f, 22f));
 
             var sep = MakeImage("HeaderSeparator", rt, ColorPalette.WithAlpha(Color.white, 0.12f), raycast: false);
             var sepRt = sep.rectTransform;
@@ -289,6 +305,112 @@ namespace ValoCase.UI
             root.SetActive(false);
         }
 
+        void BuildFastSkipIndicator(RectTransform rt, float pad, float top, float h)
+        {
+            var root = NewGo("FastSkipRoot", rt, typeof(Image));
+            var img = root.GetComponent<Image>();
+            img.color = ColorPalette.WithAlpha(ColorPalette.BgDeep, 0.72f);
+            img.raycastTarget = false;
+
+            _fastSkipRoot = (RectTransform)root.transform;
+            _fastSkipRoot.anchorMin = new Vector2(0f, 1f);
+            _fastSkipRoot.anchorMax = new Vector2(1f, 1f);
+            _fastSkipRoot.pivot     = new Vector2(0.5f, 1f);
+            _fastSkipRoot.sizeDelta = new Vector2(0f, h);
+            _fastSkipRoot.anchoredPosition = new Vector2(0f, -top);
+            _fastSkipRoot.offsetMin = new Vector2(pad, _fastSkipRoot.offsetMin.y);
+            _fastSkipRoot.offsetMax = new Vector2(-pad, _fastSkipRoot.offsetMax.y);
+
+            _fastSkipCg = root.AddComponent<CanvasGroup>();
+
+            _fastSkipIcons = (RectTransform)NewGo("Icons", root.transform).transform;
+            SetRect(_fastSkipIcons,
+                new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
+                new Vector2(0f, 14f), new Vector2(70f, 40f));
+
+            var tri = FastForwardTriangleSprite();
+            for (int k = 0; k < 2; k++)
+            {
+                var arrow = NewGo("Arrow" + k, _fastSkipIcons, typeof(Image));
+                var ai = arrow.GetComponent<Image>();
+                ai.sprite        = tri;
+                ai.color         = ColorPalette.GoldAccent;
+                ai.raycastTarget = false;
+                SetRect((RectTransform)arrow.transform,
+                    new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
+                    new Vector2(-14f + k * 26f, 0f), new Vector2(34f, 34f));
+            }
+
+            var lbl = MakeTmp(root.transform, "Lbl", "FAST SKIPPING...", 10f, FontStyles.Bold, ColorPalette.TextBright);
+            lbl.alignment = TextAlignmentOptions.Center;
+            lbl.characterSpacing = 2f;
+            SetRect(lbl.rectTransform,
+                new Vector2(0f, 0.5f), new Vector2(1f, 0.5f), new Vector2(0.5f, 0.5f),
+                new Vector2(0f, -22f), new Vector2(-8f, 16f));
+
+            root.SetActive(false);
+        }
+
+        public void ShowFastSkipIndicator()
+        {
+            if (_fastSkipRoot == null) return;
+            _fastSkipRoot.gameObject.SetActive(true);
+            if (_fastSkipCg != null) _fastSkipCg.alpha = 1f;
+            _fastSkipRoot.SetAsLastSibling();
+            if (_fastSkipPulseCo != null) StopCoroutine(_fastSkipPulseCo);
+            _fastSkipPulseCo = StartCoroutine(FastSkipPulse());
+        }
+
+        public void HideFastSkipIndicator()
+        {
+            if (_fastSkipPulseCo != null) { StopCoroutine(_fastSkipPulseCo); _fastSkipPulseCo = null; }
+            if (_fastSkipRoot == null) return;
+            if (_fastSkipIcons != null) { _fastSkipIcons.localScale = Vector3.one; _fastSkipIcons.anchoredPosition = new Vector2(0f, 14f); }
+            _fastSkipRoot.gameObject.SetActive(false);
+        }
+
+        IEnumerator FastSkipPulse()
+        {
+            float t = 0f;
+            while (true)
+            {
+                t += Time.unscaledDeltaTime;
+                float pulse = 1f + 0.1f * Mathf.Sin(t * Mathf.PI * 4f);
+                if (_fastSkipIcons != null)
+                {
+                    _fastSkipIcons.localScale = new Vector3(pulse, pulse, 1f);
+                    _fastSkipIcons.anchoredPosition = new Vector2(Mathf.Sin(t * Mathf.PI * 3f) * 6f, 14f);
+                }
+                yield return null;
+            }
+        }
+
+        // Procedural right-pointing filled triangle (white, tinted via Image.color).
+        static Sprite s_ffTriangle;
+        static Sprite FastForwardTriangleSprite()
+        {
+            if (s_ffTriangle != null) return s_ffTriangle;
+
+            const int s = 32;
+            var tex = new Texture2D(s, s, TextureFormat.RGBA32, false) { filterMode = FilterMode.Bilinear };
+            var px = new Color32[s * s];
+            for (int x = 0; x < s; x++)
+            {
+                float t = 1f - (float)x / (s - 1);
+                float halfHeight = t * (s * 0.5f);
+                for (int y = 0; y < s; y++)
+                {
+                    float dy = Mathf.Abs(y - s * 0.5f);
+                    byte a = dy <= halfHeight ? (byte)255 : (byte)0;
+                    px[y * s + x] = new Color32(255, 255, 255, a);
+                }
+            }
+            tex.SetPixels32(px);
+            tex.Apply();
+            s_ffTriangle = Sprite.Create(tex, new Rect(0, 0, s, s), new Vector2(0.5f, 0.5f));
+            return s_ffTriangle;
+        }
+
         ReelCard BuildCard(RectTransform content, int index)
         {
             float cardInner = _cardH - 6f;
@@ -366,28 +488,52 @@ namespace ValoCase.UI
             var grid = content.GetComponent<GridLayoutGroup>();
             grid.cellSize = new Vector2(82f, 82f);
             grid.spacing = new Vector2(6f, 6f);
-            grid.padding = new RectOffset(0, 0, 10, 0);
+            grid.padding = new RectOffset(8, 8, 8, 12);
             grid.childAlignment = TextAnchor.UpperCenter;
             grid.constraint = GridLayoutGroup.Constraint.Flexible;
 
             content.GetComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+            _resultGrid  = grid;
+            _resultListW = _panelW - 2f * pad;
+            _resultListH = listH;
         }
 
-        void BuildTotal(RectTransform rt, float pad, float h)
+        // Sizes the result grid so every dropped card fits fully inside the panel without
+        // clipping or vertical scrolling — cells shrink as the round count grows.
+        public void PrepareResults(int count)
         {
-            var bar = MakeImage("TotalBar", rt, ColorPalette.Surface);
-            var bRt = bar.rectTransform;
-            bRt.anchorMin = new Vector2(0f, 0f);
-            bRt.anchorMax = new Vector2(1f, 0f);
-            bRt.pivot     = new Vector2(0.5f, 0f);
-            bRt.sizeDelta = new Vector2(0f, h);
-            bRt.anchoredPosition = new Vector2(0f, 4f);
-            bRt.offsetMin = new Vector2(pad, bRt.offsetMin.y);
-            bRt.offsetMax = new Vector2(-pad, bRt.offsetMax.y);
+            if (_resultGrid == null || count <= 0) return;
 
-            _totalLbl = MakeTmp(bar.transform, "Total", "0 VP", 12f, FontStyles.Bold, ColorPalette.GoldAccent);
-            _totalLbl.alignment = TextAlignmentOptions.Center;
-            Stretch(_totalLbl.rectTransform);
+            float w = _resultListW > 1f ? _resultListW : (_listContent != null ? _listContent.rect.width : 0f);
+            float h = _resultListH;
+            if (w < 1f || h < 1f) return;
+
+            const float gap     = 6f;
+            const float sidePad = 8f;
+            const float topPad  = 8f;
+            const float botPad  = 12f;
+            const float maxCell = 82f;
+            const float minCell = 44f;
+
+            float availW = Mathf.Max(1f, w - 2f * sidePad);
+            float availH = Mathf.Max(1f, h - topPad - botPad);
+
+            // Columns come from the available width so cards flow horizontally and wrap.
+            int cols    = Mathf.FloorToInt((availW + gap) / (maxCell + gap));
+            int fitCols = Mathf.FloorToInt((availW + gap) / (minCell + gap));
+            cols = Mathf.Clamp(Mathf.Max(cols, Mathf.Min(2, fitCols)), 1, count);
+
+            int   rows = Mathf.CeilToInt(count / (float)cols);
+            float cw   = (availW - (cols - 1) * gap) / cols;
+            float ch   = (availH - (rows - 1) * gap) / rows;
+            float cell = Mathf.Clamp(Mathf.Min(cw, ch), 1f, maxCell);
+
+            _resultGrid.padding         = new RectOffset((int)sidePad, (int)sidePad, (int)topPad, (int)botPad);
+            _resultGrid.constraint      = GridLayoutGroup.Constraint.FixedColumnCount;
+            _resultGrid.constraintCount = cols;
+            _resultGrid.cellSize        = new Vector2(cell, cell);
+            _resultGrid.spacing         = new Vector2(gap, gap);
         }
 
         void BuildWinnerLabel(RectTransform rt)
@@ -433,8 +579,8 @@ namespace ValoCase.UI
             string initial = _isUser ? "Y" : (player != null && player.Name.Length > 0
                 ? player.Name.Substring(player.Name.Length - 1) : "B");
 
-            float avatarSize = Mathf.Clamp(reelH * 0.34f, 64f, 132f);
-            float blockH     = avatarSize + 16f + 24f + 6f + 16f;
+            float avatarSize = Mathf.Clamp(reelH * 0.42f, 80f, 152f);
+            float blockH     = avatarSize + 16f + 26f + 6f + 18f;
             float padTop     = Mathf.Max(8f, (reelH - blockH) * 0.5f);
 
             var ring = MakeAngled("AvatarRing", root.transform,
@@ -475,22 +621,22 @@ namespace ValoCase.UI
             }
 
             var nameLbl = MakeTmp(root.transform, "Name", displayName,
-                14f, FontStyles.Bold, ColorPalette.TextBright);
+                18f, FontStyles.Bold, ColorPalette.TextBright);
             nameLbl.alignment = TextAlignmentOptions.Center;
             nameLbl.enableWordWrapping = false;
             nameLbl.overflowMode = TextOverflowModes.Ellipsis;
             SetRect(nameLbl.rectTransform,
                 new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
-                new Vector2(0f, -(padTop + avatarSize + 14f)), new Vector2(-8f, 24f));
+                new Vector2(0f, -(padTop + avatarSize + 14f)), new Vector2(-8f, 26f));
 
             Color statusColor = _isUser ? ColorPalette.GoldAccent : ColorPalette.ActiveRed;
             var statusLbl = MakeTmp(root.transform, "Status", "READY",
-                9f, FontStyles.Bold, statusColor);
+                11f, FontStyles.Bold, statusColor);
             statusLbl.alignment = TextAlignmentOptions.Center;
             statusLbl.characterSpacing = 3f;
             SetRect(statusLbl.rectTransform,
                 new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
-                new Vector2(0f, -(padTop + avatarSize + 14f + 24f + 6f)), new Vector2(-8f, 16f));
+                new Vector2(0f, -(padTop + avatarSize + 14f + 26f + 6f)), new Vector2(-8f, 16f));
 
             root.SetActive(false);
         }
@@ -501,9 +647,10 @@ namespace ValoCase.UI
             return _isUser ? PlayerProfileData.Avatar : null;
         }
 
-        public void SetReelPool(IReadOnlyList<SkinDefinitionSO> pool)
+        public void SetReelPool(IReadOnlyList<SkinDefinitionSO> pool, IReadOnlyList<RarityWeightEntry> weights)
         {
-            if (pool != null && pool.Count > 0) _pool = pool;
+            if (pool != null && pool.Count > 0) { _pool = pool; RebuildFillerPool(); }
+            if (weights != null) _weights = weights;
         }
 
         // ── Optimistic warmup spin (backend-authoritative battle) ────────────────
@@ -515,9 +662,10 @@ namespace ValoCase.UI
         Coroutine _warmupCo;
         readonly List<SkinDefinitionSO> _warmupBind = new List<SkinDefinitionSO>();
 
-        public void BeginWarmupSpin(IReadOnlyList<SkinDefinitionSO> pool)
+        public void BeginWarmupSpin(IReadOnlyList<SkinDefinitionSO> pool, IReadOnlyList<RarityWeightEntry> weights)
         {
-            if (pool != null && pool.Count > 0) _pool = pool;
+            if (pool != null && pool.Count > 0) { _pool = pool; RebuildFillerPool(); }
+            if (weights != null) _weights = weights;
             if (_reelContent == null || _cards.Count == 0) return;
 
             if (_reelWindow != null)
@@ -802,32 +950,42 @@ namespace ValoCase.UI
 
             Color rc = ColorPalette.ForRarity(skin.Rarity);
 
-            var box = MakeAngled("SkinBox", _listContent.transform, ColorPalette.Surface, 4f);
-            var border = box.gameObject.AddComponent<Outline>();
-            border.effectColor = ColorPalette.WithAlpha(rc, 0.7f);
-            border.effectDistance = new Vector2(1f, -1f);
+            var box = MakeAngled("SkinBox", _listContent.transform, ColorPalette.WithAlpha(rc, 0.95f), 4f);
 
-            var icon = MakeImage("Icon", box.transform, Color.white);
+            var fill = MakeAngled("Fill", box.transform, ColorPalette.Surface, 4f);
+            Stretch(fill.rectTransform);
+            fill.rectTransform.offsetMin = new Vector2(2f, 2f);
+            fill.rectTransform.offsetMax = new Vector2(-2f, -2f);
+            var cardRoot = fill.transform;
+
+            var icon = MakeImage("Icon", cardRoot, Color.white);
             icon.sprite = skin.Icon;
             icon.enabled = skin.Icon != null;
             icon.preserveAspect = true;
             SetRect(icon.rectTransform,
-                new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0.5f, 1f),
-                new Vector2(0f, -15f), new Vector2(64f, 38f));
+                new Vector2(0.1f, 0.42f), new Vector2(0.9f, 0.95f), new Vector2(0.5f, 0.5f),
+                Vector2.zero, Vector2.zero);
+            ApplyItemScale(icon);
 
-            var nameLbl = MakeTmp(box.transform, "Name", skin.SkinName, 8.5f, FontStyles.Bold, rc);
+            var nameLbl = MakeTmp(cardRoot, "Name", skin.SkinName, 9f, FontStyles.Bold, rc);
             nameLbl.alignment = TextAlignmentOptions.Center;
             nameLbl.enableWordWrapping = false;
             nameLbl.overflowMode = TextOverflowModes.Ellipsis;
+            nameLbl.enableAutoSizing = true;
+            nameLbl.fontSizeMin = 6f;
+            nameLbl.fontSizeMax = 11f;
             SetRect(nameLbl.rectTransform,
-                new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(0.5f, 0f),
-                new Vector2(0f, 16f), new Vector2(-4f, 12f));
+                new Vector2(0.04f, 0.2f), new Vector2(0.96f, 0.42f), new Vector2(0.5f, 0.5f),
+                Vector2.zero, Vector2.zero);
 
-            var vpLbl = MakeTmp(box.transform, "Vp", skin.VpValue.ToString("N0"), 9.5f, FontStyles.Bold, ColorPalette.GoldAccent);
+            var vpLbl = MakeTmp(cardRoot, "Vp", skin.VpValue.ToString("N0"), 10f, FontStyles.Bold, ColorPalette.GoldAccent);
             vpLbl.alignment = TextAlignmentOptions.Center;
+            vpLbl.enableAutoSizing = true;
+            vpLbl.fontSizeMin = 6f;
+            vpLbl.fontSizeMax = 12f;
             SetRect(vpLbl.rectTransform,
-                new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(0.5f, 0f),
-                new Vector2(0f, 4f), new Vector2(-4f, 12f));
+                new Vector2(0.04f, 0.02f), new Vector2(0.96f, 0.2f), new Vector2(0.5f, 0.5f),
+                Vector2.zero, Vector2.zero);
         }
 
         void ShowFullWinnerBorder(Color color)
@@ -896,63 +1054,72 @@ namespace ValoCase.UI
 
         public void MarkWinner(bool isWinner)
         {
-            Color winnerGreen = new Color(0.18f, 0.80f, 0.44f, 1f);
+            if (isWinner) ApplyHighlight(new Color(0.18f, 0.80f, 0.44f, 1f), "WINNER");
+            else          ClearHighlight();
+        }
 
+        /// <summary>
+        /// Draw: every player finished on the same total, so there is no winner. Uses the
+        /// same highlight treatment in gold on every panel, labelled DRAW.
+        /// </summary>
+        public void MarkDraw() => ApplyHighlight(ColorPalette.GoldAccent, "DRAW");
+
+        void ApplyHighlight(Color c, string label)
+        {
             var chip = _winnerLbl != null ? _winnerLbl.transform.parent.gameObject : null;
 
-            if (isWinner)
+            if (_panelBorder != null)
             {
-                if (_panelBorder != null)
-                {
-                    _panelBorder.effectColor    = winnerGreen;
-                    _panelBorder.effectDistance = new Vector2(2.5f, -2.5f);
-                }
-
-                if (_panelBg != null)
-                {
-                    var glow = _panelBg.gameObject.GetComponent<Shadow>();
-                    if (glow == null) glow = _panelBg.gameObject.AddComponent<Shadow>();
-                    glow.effectColor    = ColorPalette.WithAlpha(winnerGreen, 0.75f);
-                    glow.effectDistance = new Vector2(0f, -4f);
-                }
-
-                if (_frameOutline != null)
-                    _frameOutline.effectColor = winnerGreen;
-
-                if (_frameGlow != null)
-                    _frameGlow.effectColor = ColorPalette.WithAlpha(winnerGreen, 0.65f);
-
-                SetTotalColor(winnerGreen);
-                SetFinalAmountColor(winnerGreen);
-                ShowFullWinnerBorder(winnerGreen);
-
-                if (_resultSeparator != null)
-                    _resultSeparator.color = ColorPalette.WithAlpha(winnerGreen, 0.3f);
-
-                if (chip != null)
-                {
-                    chip.SetActive(true);
-
-                    var chipBg = chip.GetComponent<AngledCutImage>();
-                    if (chipBg != null) chipBg.color = winnerGreen;
-
-                    if (_winnerLbl != null)
-                    {
-                        _winnerLbl.text = "WINNER";
-                        _winnerLbl.color = ColorPalette.BgDeep;
-                    }
-                }
-
-                if (_cg != null) _cg.alpha = 1f;
+                _panelBorder.effectColor    = c;
+                _panelBorder.effectDistance = new Vector2(2.5f, -2.5f);
             }
-            else
+
+            if (_panelBg != null)
             {
-                // Kaybeden panel sadece winner highlight'ı almasın.
-                // Tüm paneli (ve alttaki result/skin kutularını) soluklaştırmıyoruz;
-                // böylece rarity renkleri ve skin kutuları normal görünümünü korur.
-                if (chip != null) chip.SetActive(false);
-                if (_cg != null) _cg.alpha = 1f;
+                var glow = _panelBg.gameObject.GetComponent<Shadow>();
+                if (glow == null) glow = _panelBg.gameObject.AddComponent<Shadow>();
+                glow.effectColor    = ColorPalette.WithAlpha(c, 0.75f);
+                glow.effectDistance = new Vector2(0f, -4f);
             }
+
+            if (_frameOutline != null)
+                _frameOutline.effectColor = c;
+
+            if (_frameGlow != null)
+                _frameGlow.effectColor = ColorPalette.WithAlpha(c, 0.65f);
+
+            SetTotalColor(c);
+            SetFinalAmountColor(c);
+            ShowFullWinnerBorder(c);
+
+            if (_resultSeparator != null)
+                _resultSeparator.color = ColorPalette.WithAlpha(c, 0.3f);
+
+            if (chip != null)
+            {
+                chip.SetActive(true);
+
+                var chipBg = chip.GetComponent<AngledCutImage>();
+                if (chipBg != null) chipBg.color = c;
+
+                if (_winnerLbl != null)
+                {
+                    _winnerLbl.text  = label;
+                    _winnerLbl.color = ColorPalette.BgDeep;
+                }
+            }
+
+            if (_cg != null) _cg.alpha = 1f;
+        }
+
+        void ClearHighlight()
+        {
+            // Kaybeden panel sadece winner highlight'ı almasın.
+            // Tüm paneli (ve alttaki result/skin kutularını) soluklaştırmıyoruz;
+            // böylece rarity renkleri ve skin kutuları normal görünümünü korur.
+            var chip = _winnerLbl != null ? _winnerLbl.transform.parent.gameObject : null;
+            if (chip != null) chip.SetActive(false);
+            if (_cg != null) _cg.alpha = 1f;
         }
 
         void BindCard(ReelCard card, SkinDefinitionSO skin)
@@ -988,14 +1155,39 @@ namespace ValoCase.UI
                 card.Icon.sprite  = skin.Icon;
                 card.Icon.enabled = skin.Icon != null;
                 card.Icon.color   = Color.white;
+                ApplyItemScale(card.Icon);
             }
+        }
+
+        // Mirrors the Inventory / Upgrade thumbnail balancing: preserveAspect fits each
+        // weapon by its own crop, so short sprites (pistols, charms) read oversized and
+        // long sprites (rifles) collapse. Scaling the icon by sprite aspect evens out the
+        // visual mass — bounded to [0.85, 1.15], reset to 1 when the sprite is missing.
+        static void ApplyItemScale(Image icon)
+        {
+            float scale = 1f;
+            var sprite = icon.sprite;
+            if (icon.enabled && sprite != null && sprite.rect.height > 0f)
+            {
+                float t = Mathf.InverseLerp(1.5f, 4.3f, sprite.rect.width / sprite.rect.height);
+                scale = Mathf.Lerp(0.85f, 1.15f, t);
+            }
+            icon.rectTransform.localScale = new Vector3(scale, scale, 1f);
         }
 
         SkinDefinitionSO RandomFiller()
         {
-            if (_pool != null && _pool.Count > 0)
-                return _pool[Random.Range(0, _pool.Count)];
-            return null;
+            if (_pool == null || _pool.Count == 0) return null;
+            var pick = CaseReelBuilder.PickFiller(_fillerPool, _weights);
+            return pick != null ? pick : _pool[Random.Range(0, _pool.Count)];
+        }
+
+        void RebuildFillerPool()
+        {
+            _fillerPool.Clear();
+            if (_pool == null) return;
+            for (int i = 0; i < _pool.Count; i++)
+                if (_pool[i] != null) _fillerPool.Add(_pool[i]);
         }
 
         static float EaseOutQuart(float t)
