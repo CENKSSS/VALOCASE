@@ -27,16 +27,15 @@ namespace ValoCase.UI.Screens
 
         const float SidePad    = 16f;
         const float HeaderH    = 60f;
-        const float GridLabelH = 22f;
         const float SelLabelH  = 18f;
         const float TypeH      = 48f;
-        const float CtaH       = 54f;
+        const float CtaH       = 62f;
         const float RowGap     = 10f;
-        const float BotPad     = 16f;
+        const float BotPad     = 28f;
 
-        const float SelRowH     = 50f;
-        const float SelRowGap   = 8f;
-        const float SelEmptyH   = 24f;
+        const float SelRowH     = 70f;
+        const float SelRowGap   = 10f;
+        const float SelEmptyH   = 28f;
         // Tall enough to show every selectable case at once; the inner ScrollRect only
         // engages if rows ever exceed this, and the body scroll reaches it on short screens.
         const float MaxSelectedH = SelRowH * MaxCases + SelRowGap * (MaxCases - 1);
@@ -76,12 +75,23 @@ namespace ValoCase.UI.Screens
         bool            _confirmInFlight;
 
         GridLayoutGroup _caseGrid;
+        LayoutElement   _gridFrameLe;
 
-        const int   CaseCols    = 4;
-        const float CaseGap     = 8f;
+        const int   CaseCols    = 4;       // target: 4 per row → each weapon is one clean row
+        const int   MinCaseCols = 3;       // last-resort fallback for very narrow screens
+        const float CaseGap     = 10f;
         const float CaseAspect  = 122f / 108f;
-        const float MaxCaseCellW = 150f;   // keeps cards compact on wide screens
-        const float MinCaseGap   = 4f;     // gap shrinks before cells get tiny on narrow screens
+        const float MaxCaseCellW = 230f;   // caps card growth so wide rows stay tidy, not huge
+        const float MinCaseCellW = 120f;   // below this at 4 cols, fall back to 3 cols
+        const float MinCaseGap   = 6f;     // gap shrinks before cells get tiny on narrow screens
+        const float GridVisibleRows = 2.5f; // case grid viewport caps at this many visible rows, rest scrolls
+
+        // Create Battle case selection order: weapon category first, then tier — so all 4
+        // cases of a weapon sit together, mirroring the Cases menu grouping. Categories and
+        // tiers are keyed off the caseId ("{category}_{tier}", e.g. "classic_radiant").
+        // Unknown categories/tiers fall to the end, preserving catalog order.
+        static readonly string[] CategoryOrder = { "classic", "ghost", "bulldog", "vandal", "melee" };
+        static readonly string[] TierOrder     = { "basic", "protocol", "radiant", "arcane" };
 
         // ── Lifecycle ────────────────────────────────────────────────────────────
         public void Show()
@@ -140,8 +150,10 @@ namespace ValoCase.UI.Screens
         }
 
         // Header stays fixed at the top; everything else lives in one bounded vertical
-        // scroll so the case grid, selected list, mode pills and CREATE button are always
-        // reachable above the navbar at any height, with no nested scroll views.
+        // scroll so the selected list, mode pills and CREATE button are always reachable
+        // above the navbar at any height. The case grid is capped to ~GridVisibleRows and
+        // scrolls independently inside that outer scroll so a long case list can't push
+        // the rest of the panel off-screen.
         void BuildBody(RectTransform rt)
         {
             var scrollGo = NewGo("BodyScroll", rt, typeof(ScrollRect), typeof(Image));
@@ -155,6 +167,14 @@ namespace ValoCase.UI.Screens
             var viewport = NewGo("Viewport", scrollGo.transform, typeof(RectMask2D), typeof(Image));
             viewport.GetComponent<Image>().color = Color.clear;
             Stretch(viewport);
+
+            // Modal dismiss: tapping the empty area below/around the content closes the
+            // panel. Interactive children (cards, steppers, mode pills, CREATE) consume
+            // their own taps, and ScrollRect drags are unaffected, so only empty-space
+            // taps reach this catcher.
+            var dismiss = viewport.AddComponent<Button>();
+            dismiss.transition = Selectable.Transition.None;
+            dismiss.onClick.AddListener(() => OnBack?.Invoke());
 
             var content = NewGo("Content", viewport.transform, typeof(VerticalLayoutGroup), typeof(ContentSizeFitter));
             var cRt = (RectTransform)content.transform;
@@ -205,49 +225,53 @@ namespace ValoCase.UI.Screens
             border.raycastTarget = false;
             BottomStrip(border.rectTransform, 1f);
 
+            // No close/X control — the back button (bottom-left) is the only exit, so the
+            // title reclaims the right side that used to be reserved for it.
             var title = MakeTmp(hdr.transform, "Title", "CREATE BATTLE", 18f, FontStyles.Bold, ColorPalette.TextBright);
             title.characterSpacing = 3f;
             title.alignment = TextAlignmentOptions.Center;
-            SetRect(title.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 1f), new Vector2(0.5f, 0.5f),
-                new Vector2(0f, -4f), new Vector2(-120f, 0f));
-
-            var close = NewGo("Close", hdr.transform, typeof(Image), typeof(Button));
-            close.GetComponent<Image>().color = ColorPalette.Surface;
-            var closeBorder = close.AddComponent<Outline>();
-            closeBorder.effectColor = ColorPalette.Border; closeBorder.effectDistance = new Vector2(1f, -1f);
-            SetRect((RectTransform)close.transform, new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(1f, 0.5f),
-                new Vector2(-SidePad, -2f), new Vector2(36f, 36f));
-            var closeLbl = MakeTmp(close.transform, "Lbl", "×", 24f, FontStyles.Bold, ColorPalette.TextBright);
-            closeLbl.alignment = TextAlignmentOptions.Center;
-            Stretch(closeLbl.rectTransform);
-            var closeBtn = close.GetComponent<Button>();
-            closeBtn.transition = Selectable.Transition.None;
-            closeBtn.onClick.AddListener(() => OnBack?.Invoke());
+            var titleRt = title.rectTransform;
+            titleRt.anchorMin = new Vector2(0f, 0f);
+            titleRt.anchorMax = new Vector2(1f, 1f);
+            titleRt.pivot     = new Vector2(0.5f, 0.5f);
+            titleRt.offsetMin = new Vector2(60f, 0f);
+            titleRt.offsetMax = new Vector2(-SidePad, -4f);
 
             var back = NewGo("Back", hdr.transform, typeof(Image), typeof(Button));
             back.GetComponent<Image>().color = ColorPalette.Surface;
             var backBorder = back.AddComponent<Outline>();
             backBorder.effectColor = ColorPalette.Border; backBorder.effectDistance = new Vector2(1f, -1f);
             SetRect((RectTransform)back.transform, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(0f, 0.5f),
-                new Vector2(SidePad, -2f), new Vector2(70f, 36f));
-            var backLbl = MakeTmp(back.transform, "Lbl", "‹ BACK", 13f, FontStyles.Bold, ColorPalette.TextBright);
-            backLbl.alignment = TextAlignmentOptions.Center;
-            backLbl.characterSpacing = 1f;
+                new Vector2(SidePad, -2f), new Vector2(40f, 40f));
+            var backLbl = MakeTmp(back.transform, "Lbl", "", 20f, FontStyles.Bold, ColorPalette.TextBright);
             Stretch(backLbl.rectTransform);
+            StyleCircleBack(back.GetComponent<Image>(), backLbl, 40f);
             var backBtn = back.GetComponent<Button>();
             backBtn.transition = Selectable.Transition.None;
             backBtn.onClick.AddListener(() => OnBack?.Invoke());
         }
 
-        // ── Case grid — content-sized grid inside the shared body scroll ────────────
+        // ── Case grid — bounded frame (~GridVisibleRows tall) that scrolls its own
+        // content independently, so the case list never pushes the selected panel,
+        // mode pills and CREATE button far down the shared body scroll.
         void BuildGridSection(Transform parent)
         {
-            var label = MakeTmp(parent, "GridLabel", "SELECT CASES  (UP TO 5)", 11f, FontStyles.Bold, ColorPalette.ActiveRed);
-            label.characterSpacing = 4f;
-            label.alignment = TextAlignmentOptions.MidlineLeft;
-            label.gameObject.AddComponent<LayoutElement>().minHeight = GridLabelH;
+            var frameGo = NewGo("GridFrame", parent, typeof(ScrollRect), typeof(Image), typeof(LayoutElement));
+            frameGo.GetComponent<Image>().color = Color.clear;
+            _gridFrameLe = frameGo.GetComponent<LayoutElement>();
 
-            var gridGo = NewGo("Grid", parent, typeof(GridLayoutGroup), typeof(ContentSizeFitter));
+            var viewport = NewGo("Viewport", frameGo.transform, typeof(RectMask2D), typeof(Image));
+            viewport.GetComponent<Image>().color = Color.clear;
+            Stretch(viewport);
+
+            var gridGo = NewGo("Grid", viewport.transform, typeof(GridLayoutGroup), typeof(ContentSizeFitter));
+            var gRt = (RectTransform)gridGo.transform;
+            gRt.anchorMin = new Vector2(0f, 1f);
+            gRt.anchorMax = new Vector2(1f, 1f);
+            gRt.pivot     = new Vector2(0.5f, 1f);
+            gRt.anchoredPosition = Vector2.zero;
+            gRt.sizeDelta = Vector2.zero;
+
             var grid = gridGo.GetComponent<GridLayoutGroup>();
             grid.cellSize        = new Vector2(84f, 84f * CaseAspect);
             grid.spacing         = new Vector2(CaseGap, CaseGap);
@@ -256,10 +280,19 @@ namespace ValoCase.UI.Screens
             grid.childAlignment  = TextAnchor.UpperCenter;
             grid.padding         = new RectOffset(0, 0, 0, 6);
             _caseGrid = grid;
+            _gridFrameLe.preferredHeight = GridVisibleRows * grid.cellSize.y + (GridVisibleRows - 1f) * CaseGap;
 
             var fitter = gridGo.GetComponent<ContentSizeFitter>();
             fitter.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
             fitter.verticalFit   = ContentSizeFitter.FitMode.PreferredSize;
+
+            var sr = frameGo.GetComponent<ScrollRect>();
+            sr.content           = gRt;
+            sr.viewport          = (RectTransform)viewport.transform;
+            sr.horizontal        = false;
+            sr.vertical          = true;
+            sr.movementType      = ScrollRect.MovementType.Clamped;
+            sr.scrollSensitivity = 24f;
 
             for (int i = 0; i < _cases.Count; i++)
                 BuildCaseCard(gridGo.transform, i);
@@ -281,8 +314,9 @@ namespace ValoCase.UI.Screens
 
         // Derives cell size from the root (screen) width — reliable inside
         // OnRectTransformDimensionsChange, unlike the grid's own mid-layout rect.
-        // Four columns always fit the visible width; the gap, then the cell, shrink
-        // on narrow screens, and the cell is capped so cards stay compact on wide ones.
+        // Prefer 4 columns so each weapon's four cases form one row; only drop to 3 on
+        // screens too narrow to keep 4 cards readable. Gap shrinks before the cell does,
+        // and the cell is capped so rows stay tidy (not huge) on wide screens.
         bool RefitGridCells()
         {
             if (_caseGrid == null) return false;
@@ -292,19 +326,41 @@ namespace ValoCase.UI.Screens
             float innerW = rootW - SidePad * 2f;
             if (innerW < CaseCols) return false;
 
-            float gap = CaseGap;
-            float cellW = Mathf.Floor((innerW - gap * (CaseCols - 1)) / CaseCols);
-            if (cellW < MaxCaseCellW)
+            // Try the target 4 columns; fall back to 3 only when 4 can't stay readable.
+            int cols = CaseCols;
+            if (!FitColumns(innerW, CaseCols, out float gap, out float cellW) || cellW < MinCaseCellW)
             {
-                gap = MinCaseGap;
-                cellW = Mathf.Floor((innerW - gap * (CaseCols - 1)) / CaseCols);
+                if (FitColumns(innerW, MinCaseCols, out float gap3, out float cellW3) && cellW3 >= 1f)
+                {
+                    cols  = MinCaseCols;
+                    gap   = gap3;
+                    cellW = cellW3;
+                }
             }
             if (cellW < 1f) return false;
             cellW = Mathf.Min(cellW, MaxCaseCellW);
 
+            float cellH = Mathf.Floor(cellW * CaseAspect);
+            _caseGrid.constraintCount = cols;
             _caseGrid.spacing  = new Vector2(gap, gap);
-            _caseGrid.cellSize = new Vector2(cellW, Mathf.Floor(cellW * CaseAspect));
+            _caseGrid.cellSize = new Vector2(cellW, cellH);
+            if (_gridFrameLe != null)
+                _gridFrameLe.preferredHeight = GridVisibleRows * cellH + (GridVisibleRows - 1f) * gap;
             return true;
+        }
+
+        // Computes the gap (full, tightening to the minimum) and the resulting cell width
+        // for a given column count across the available inner width.
+        static bool FitColumns(float innerW, int cols, out float gap, out float cellW)
+        {
+            gap = CaseGap;
+            cellW = Mathf.Floor((innerW - gap * (cols - 1)) / cols);
+            if (cellW < MaxCaseCellW)   // tighten the gap before letting cells shrink further
+            {
+                gap = MinCaseGap;
+                cellW = Mathf.Floor((innerW - gap * (cols - 1)) / cols);
+            }
+            return cellW >= 1f;
         }
 
         void OnRectTransformDimensionsChange()
@@ -331,25 +387,28 @@ namespace ValoCase.UI.Screens
                 var iRt = icon.rectTransform;
                 iRt.anchorMin = new Vector2(0f, 0f);
                 iRt.anchorMax = new Vector2(1f, 1f);
-                iRt.offsetMin = new Vector2(6f, 58f);
-                iRt.offsetMax = new Vector2(-6f, -6f);
+                iRt.offsetMin = new Vector2(8f, 72f);
+                iRt.offsetMax = new Vector2(-8f, -8f);
             }
 
-            var name = MakeTmp(cardGo.transform, "Name", opt.Name, 9.5f, FontStyles.Bold, ColorPalette.TextBright);
+            var name = MakeTmp(cardGo.transform, "Name", opt.Name, 15f, FontStyles.Bold, ColorPalette.TextBright);
             name.alignment = TextAlignmentOptions.Top;
             name.enableWordWrapping = true;
+            name.enableAutoSizing = true;
+            name.fontSizeMin = 11f;
+            name.fontSizeMax = 15f;
             SetRect(name.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(0.5f, 0f),
-                new Vector2(0f, 28f), new Vector2(-10f, 30f));
+                new Vector2(0f, 30f), new Vector2(-12f, 36f));
 
-            var price = MakeTmp(cardGo.transform, "Price", opt.Price.ToString("N0") + " VP", 10f, FontStyles.Bold, ColorPalette.GoldAccent);
+            var price = MakeTmp(cardGo.transform, "Price", opt.Price.ToString("N0") + " VP", 14.5f, FontStyles.Bold, ColorPalette.GoldAccent);
             price.alignment = TextAlignmentOptions.Center;
             SetRect(price.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(0.5f, 0f),
-                new Vector2(0f, 8f), new Vector2(-8f, 16f));
+                new Vector2(0f, 8f), new Vector2(-8f, 20f));
 
             var badge = MakeAngled("Badge", cardGo.transform, ColorPalette.ActiveRed, 3f, raycast: false);
             SetRect(badge.rectTransform, new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(1f, 1f),
-                new Vector2(-4f, -4f), new Vector2(26f, 18f));
-            var badgeLbl = MakeTmp(badge.transform, "Lbl", "x1", 10f, FontStyles.Bold, Color.white);
+                new Vector2(-5f, -5f), new Vector2(32f, 22f));
+            var badgeLbl = MakeTmp(badge.transform, "Lbl", "x1", 12f, FontStyles.Bold, Color.white);
             badgeLbl.alignment = TextAlignmentOptions.Center;
             badgeLbl.raycastTarget = false;
             Stretch(badgeLbl.rectTransform);
@@ -382,14 +441,37 @@ namespace ValoCase.UI.Screens
         // ── Selected cases — content-sized list inside the shared body scroll ───────
         void BuildSelectedSection(Transform parent)
         {
-            var label = MakeTmp(parent, "SelectedLabel", "SELECTED", 11f, FontStyles.Bold, ColorPalette.ActiveRed);
+            var panelGo = NewGo("SelectedPanel", parent,
+                typeof(Image), typeof(VerticalLayoutGroup), typeof(ContentSizeFitter));
+            panelGo.GetComponent<Image>().color = ColorPalette.WithAlpha(ColorPalette.Surface, 0.30f);
+
+            // A tap anywhere inside this panel (rows, name, icon, gaps, the SELECTED
+            // header) must be consumed here so it never bubbles up to the body's
+            // empty-space dismiss button. Real controls inside keep their own clicks.
+            var blocker = panelGo.AddComponent<Button>();
+            blocker.transition = Selectable.Transition.None;
+
+            var pBorder = panelGo.AddComponent<Outline>();
+            pBorder.effectColor = ColorPalette.Border; pBorder.effectDistance = new Vector2(1f, -1f);
+
+            var pv = panelGo.GetComponent<VerticalLayoutGroup>();
+            pv.padding                 = new RectOffset(10, 10, 8, 10);
+            pv.spacing                 = 6f;
+            pv.childForceExpandWidth   = true;
+            pv.childForceExpandHeight  = false;
+            pv.childControlWidth       = true;
+            pv.childControlHeight      = true;
+            panelGo.GetComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+            var label = MakeTmp(panelGo.transform, "SelectedLabel", "SELECTED", 12f, FontStyles.Bold, ColorPalette.ActiveRed);
             label.characterSpacing = 4f;
             label.alignment = TextAlignmentOptions.MidlineLeft;
+            label.raycastTarget = false;
             label.gameObject.AddComponent<LayoutElement>().minHeight = SelLabelH;
 
             // Bounded frame: height is set from the row count (capped at MaxSelectedH),
             // so the section is compact and scrolls only when the rows exceed the cap.
-            var frameGo = NewGo("SelectedFrame", parent, typeof(ScrollRect), typeof(Image), typeof(LayoutElement));
+            var frameGo = NewGo("SelectedFrame", panelGo.transform, typeof(ScrollRect), typeof(Image), typeof(LayoutElement));
             frameGo.GetComponent<Image>().color = Color.clear;
             _selectedFrameLe = frameGo.GetComponent<LayoutElement>();
 
@@ -413,12 +495,16 @@ namespace ValoCase.UI.Screens
             listGo.GetComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
             _selectedRoot = lRt;
 
+            // The frame masks the rows but never scrolls them itself — the rows always fit
+            // (MaxSelectedH holds every selectable case). Disabled so its drag handling can
+            // never swallow a swipe meant for the body scroll, leaving CREATE unreachable.
             var sr = frameGo.GetComponent<ScrollRect>();
             sr.content      = lRt;
             sr.viewport     = (RectTransform)viewport.transform;
             sr.horizontal   = false;
-            sr.vertical     = true;
+            sr.vertical     = false;
             sr.movementType = ScrollRect.MovementType.Clamped;
+            sr.enabled      = false;
         }
 
         void RebuildSelectedRows()
@@ -458,8 +544,8 @@ namespace ValoCase.UI.Screens
             rowLe.minHeight = rowLe.preferredHeight = SelRowH;
 
             var rh = row.GetComponent<HorizontalLayoutGroup>();
-            rh.padding                 = new RectOffset(8, 8, 6, 6);
-            rh.spacing                 = 8f;
+            rh.padding                 = new RectOffset(10, 10, 8, 8);
+            rh.spacing                 = 10f;
             rh.childAlignment          = TextAnchor.MiddleLeft;
             rh.childForceExpandWidth   = false;
             rh.childForceExpandHeight  = true;
@@ -471,7 +557,7 @@ namespace ValoCase.UI.Screens
                 var icon = MakeImage("Icon", row.transform, Color.white);
                 icon.sprite = opt.Icon; icon.preserveAspect = true; icon.raycastTarget = false;
                 var iLe = icon.gameObject.AddComponent<LayoutElement>();
-                iLe.minWidth = iLe.preferredWidth = 38f;
+                iLe.minWidth = iLe.preferredWidth = 54f;
             }
 
             var midGo = NewGo("Mid", row.transform, typeof(VerticalLayoutGroup), typeof(LayoutElement));
@@ -482,34 +568,34 @@ namespace ValoCase.UI.Screens
             midV.childForceExpandWidth = true; midV.childForceExpandHeight = false;
             midV.childControlWidth = true; midV.childControlHeight = true;
 
-            var name = MakeTmp(midGo.transform, "Name", opt.Name, 12f, FontStyles.Bold, ColorPalette.TextBright);
+            var name = MakeTmp(midGo.transform, "Name", opt.Name, 18f, FontStyles.Bold, ColorPalette.TextBright);
             name.alignment = TextAlignmentOptions.MidlineLeft;
             name.enableWordWrapping = false; name.overflowMode = TextOverflowModes.Ellipsis;
-            name.gameObject.AddComponent<LayoutElement>().minHeight = 18f;
+            name.gameObject.AddComponent<LayoutElement>().minHeight = 24f;
 
             var lineCost = MakeTmp(midGo.transform, "LineCost", (opt.Price * qty).ToString("N0") + " VP",
-                11f, FontStyles.Bold, ColorPalette.GoldAccent);
+                15f, FontStyles.Bold, ColorPalette.GoldAccent);
             lineCost.alignment = TextAlignmentOptions.MidlineLeft;
-            lineCost.gameObject.AddComponent<LayoutElement>().minHeight = 16f;
+            lineCost.gameObject.AddComponent<LayoutElement>().minHeight = 20f;
 
             int captured = index;
 
             var stepGo = NewGo("Stepper", row.transform, typeof(HorizontalLayoutGroup), typeof(LayoutElement));
             var stepLe = stepGo.GetComponent<LayoutElement>();
-            stepLe.minWidth = stepLe.preferredWidth = 124f;
+            stepLe.minWidth = stepLe.preferredWidth = 158f;
             var sh = stepGo.GetComponent<HorizontalLayoutGroup>();
             sh.padding = new RectOffset(2, 2, 0, 0);
-            sh.spacing = 6f; sh.childAlignment = TextAnchor.MiddleCenter;
+            sh.spacing = 8f; sh.childAlignment = TextAnchor.MiddleCenter;
             sh.childForceExpandWidth = false; sh.childForceExpandHeight = false;
             sh.childControlWidth = true; sh.childControlHeight = true;
 
             MakeMiniStep(stepGo.transform, "−", () => ChangeQty(captured, -1));
 
-            var qLbl = MakeTmp(stepGo.transform, "Q", qty.ToString(), 16f, FontStyles.Bold, ColorPalette.TextBright);
+            var qLbl = MakeTmp(stepGo.transform, "Q", qty.ToString(), 22f, FontStyles.Bold, ColorPalette.TextBright);
             qLbl.alignment = TextAlignmentOptions.Center;
             var qLe = qLbl.gameObject.AddComponent<LayoutElement>();
-            qLe.minWidth = qLe.preferredWidth = 40f;
-            qLe.minHeight = qLe.preferredHeight = 34f;
+            qLe.minWidth = qLe.preferredWidth = 46f;
+            qLe.minHeight = qLe.preferredHeight = 46f;
 
             MakeMiniStep(stepGo.transform, "+", () => ChangeQty(captured, +1));
         }
@@ -517,15 +603,20 @@ namespace ValoCase.UI.Screens
         void MakeMiniStep(Transform parent, string glyph, Action onClick)
         {
             var go = NewGo("Step_" + glyph, parent, typeof(Image), typeof(Button), typeof(LayoutElement));
-            go.GetComponent<Image>().color = ColorPalette.Surface;
+            go.GetComponent<Image>().color = ColorPalette.WithAlpha(ColorPalette.ActiveRed, 0.95f);
             var le = go.GetComponent<LayoutElement>();
-            le.minWidth = le.preferredWidth = 34f;
-            le.minHeight = le.preferredHeight = 34f;
-            var bdr = go.AddComponent<Outline>();
-            bdr.effectColor = ColorPalette.WithAlpha(ColorPalette.ActiveRed, 0.95f);
-            bdr.effectDistance = new Vector2(1.5f, 1.5f);
+            le.minWidth = le.preferredWidth = 46f;
+            le.minHeight = le.preferredHeight = 46f;
 
-            var lbl = MakeTmp(go.transform, "Lbl", glyph, 22f, FontStyles.Bold, ColorPalette.ActiveRed);
+            const float borderW = 3f;
+            var fill = MakeImage("Fill", go.transform, ColorPalette.Surface);
+            var fillRt = fill.rectTransform;
+            fillRt.anchorMin = Vector2.zero;
+            fillRt.anchorMax = Vector2.one;
+            fillRt.offsetMin = new Vector2(borderW, borderW);
+            fillRt.offsetMax = new Vector2(-borderW, -borderW);
+
+            var lbl = MakeTmp(go.transform, "Lbl", glyph, 28f, FontStyles.Bold, ColorPalette.ActiveRed);
             lbl.alignment = TextAlignmentOptions.Center;
             Stretch(lbl.rectTransform);
 
@@ -594,7 +685,7 @@ namespace ValoCase.UI.Screens
 
             if (_cases[index].Locked)
             {
-                GameEvents.RaiseToast($"Bu kasa seviye {_cases[index].RequiredLevel}'de açılır");
+                GameEvents.RaiseToast($"This case unlocks at level {_cases[index].RequiredLevel}");
                 return;
             }
 
@@ -606,7 +697,7 @@ namespace ValoCase.UI.Screens
             {
                 if (_selection.Count >= MaxCases)
                 {
-                    GameEvents.RaiseToast($"En fazla {MaxCases} kasa seçebilirsin");
+                    GameEvents.RaiseToast($"You can select up to {MaxCases} cases");
                     return;
                 }
                 _selection[index] = MinQty;
@@ -651,10 +742,12 @@ namespace ValoCase.UI.Screens
             int cost = CurrentCost();
             if (_ctaLbl != null)
                 _ctaLbl.text = !_anyUnlocked
-                    ? "AÇIK KASA YOK"
+                    ? "NO CASES UNLOCKED"
                     : _selection.Count == 0
                         ? "SELECT A CASE"
                         : "CREATE BATTLE  -  " + cost.ToString("N0") + " VP";
+
+            WireButtonClicks(gameObject);
         }
 
         int CurrentCost()
@@ -672,13 +765,13 @@ namespace ValoCase.UI.Screens
 
             if (!_anyUnlocked)
             {
-                GameEvents.RaiseToast("Açık kasa yok — seviye atla");
+                GameEvents.RaiseToast("No cases unlocked — level up");
                 return;
             }
 
             if (_selection.Count == 0)
             {
-                GameEvents.RaiseToast("Lütfen en az bir kasa seç");
+                GameEvents.RaiseToast("Please select at least one case");
                 return;
             }
 
@@ -691,7 +784,7 @@ namespace ValoCase.UI.Screens
                 // Revalidate live against current progression before the POST.
                 if (!CaseUnlocked(opt.CaseId))
                 {
-                    GameEvents.RaiseToast($"Bu kasa seviye {PlayerProgression.RequiredLevelForCaseId(opt.CaseId)}'de açılır");
+                    GameEvents.RaiseToast($"This case unlocks at level {PlayerProgression.RequiredLevelForCaseId(opt.CaseId)}");
                     return;
                 }
                 selections.Add(new BattleCaseSelection(opt.CaseId, opt.Name, qty, opt.Price));
@@ -738,9 +831,64 @@ namespace ValoCase.UI.Screens
             if (_cases.Count == 0)
                 _cases.Add(new CaseOption("vandal_basic", "Basic Vandal Case", 500, null, false, 1));
 
+            ApplyCategoryOrder();
+
             _anyUnlocked = false;
             foreach (var opt in _cases)
                 if (!opt.Locked) { _anyUnlocked = true; break; }
+        }
+
+        // Stable reorder so the grid reads Classic → Ghost → Bulldog → Vandal → Melee, and
+        // within each weapon the four cases read Basic → Protocol → Radiant → Arcane. Cases
+        // with an unknown tier trail their category; unknown categories trail the whole list.
+        void ApplyCategoryOrder()
+        {
+            if (_cases.Count < 2) return;
+
+            var ordered = new List<CaseOption>(_cases.Count);
+            var taken   = new bool[_cases.Count];
+
+            for (int cat = 0; cat < CategoryOrder.Length; cat++)
+            {
+                for (int tier = 0; tier < TierOrder.Length; tier++)
+                    for (int i = 0; i < _cases.Count; i++)
+                        if (!taken[i] && CategoryRank(_cases[i].CaseId) == cat && TierRank(_cases[i].CaseId) == tier)
+                        { ordered.Add(_cases[i]); taken[i] = true; }
+
+                // Same-category cases with an unrecognised tier keep their catalog order.
+                for (int i = 0; i < _cases.Count; i++)
+                    if (!taken[i] && CategoryRank(_cases[i].CaseId) == cat)
+                    { ordered.Add(_cases[i]); taken[i] = true; }
+            }
+
+            // Unknown categories trail at the end, preserving catalog order.
+            for (int i = 0; i < _cases.Count; i++)
+                if (!taken[i]) ordered.Add(_cases[i]);
+
+            _cases.Clear();
+            _cases.AddRange(ordered);
+        }
+
+        static int CategoryRank(string caseId)
+        {
+            if (!string.IsNullOrEmpty(caseId))
+                for (int i = 0; i < CategoryOrder.Length; i++)
+                    if (caseId.StartsWith(CategoryOrder[i], StringComparison.OrdinalIgnoreCase))
+                        return i;
+            return CategoryOrder.Length;
+        }
+
+        static int TierRank(string caseId)
+        {
+            if (!string.IsNullOrEmpty(caseId))
+            {
+                int us = caseId.IndexOf('_');
+                string tier = (us >= 0 && us < caseId.Length - 1) ? caseId.Substring(us + 1) : caseId;
+                for (int i = 0; i < TierOrder.Length; i++)
+                    if (tier.Equals(TierOrder[i], StringComparison.OrdinalIgnoreCase))
+                        return i;
+            }
+            return TierOrder.Length;
         }
 
         // The creator can only ever send a case the backend account has unlocked; in

@@ -186,6 +186,8 @@ namespace ValoCase.Editor
             glg.spacing      = new Vector2(8, 8);
             glg.padding      = new RectOffset(8, 8, 8, 8);
             glg.childAlignment = TextAnchor.UpperLeft;
+            glg.constraint      = GridLayoutGroup.Constraint.FixedColumnCount;
+            glg.constraintCount = 3;
 
             var csf = gridGo.GetComponent<ContentSizeFitter>();
             csf.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;

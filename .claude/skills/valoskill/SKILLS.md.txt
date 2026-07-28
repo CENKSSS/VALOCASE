@@ -1,0 +1,46 @@
+---
+name: valocase-coding-style
+description: Use this skill for every ValoCase coding task, Claude Code implementation task, refactor, bug fix, UI change, backend change, Unity change, report, and validation summary.
+---
+
+# ValoCase Coding Style
+
+Apply these rules to every coding task in this project.
+
+## Code comments
+
+Do not add comments unless they are strictly necessary to prevent a dangerous future regression.
+
+Do not explain obvious code.
+
+Do not add comments for simple guards, button states, assignments, UI updates, DTO mappings, request handlers, or straightforward control flow.
+
+Prefer clean code over comments.
+
+Keep any necessary comment to one short line.
+
+## Response formatting
+
+Do not use tables.
+
+Do not use ASCII diagrams.
+
+Do not say backend was changed.
+
+Do not claim tests you did not run.
+
+## Reports
+
+When reporting after changes, include only what was actually done and actually verified.
+
+If tests, builds, Play Mode, device tests, backend tests, migrations, or validation were not run, clearly say they were not run.
+
+Never imply success from inspection only.
+
+## Scope discipline
+
+Keep changes limited to the requested task.
+
+Do not touch unrelated systems unless required to fix a direct compile/runtime error caused by the requested change.
+
+Preserve existing behavior unless the user explicitly asks to change it.

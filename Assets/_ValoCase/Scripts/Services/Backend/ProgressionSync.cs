@@ -31,13 +31,23 @@ namespace ValoCase.Services.Backend
 
         static void ApplySnapshot(ProgressionResponse p, bool showXpToast)
         {
+            int prevLevel = PlayerProgression.Level;
+
             PlayerProgression.Apply(p.level, p.currentLevelXp, p.xpRequiredForNextLevel,
                                     p.totalXp, p.unlockedCategories);
 
+            // leveledUp is a case-open-only backend field, so both notifications fire only
+            // on the open that caused the transition — never repeated on wallet/resync.
             if (p.leveledUp)
+            {
                 GameEvents.RaiseToast($"Seviye atladın! Lv. {PlayerProgression.Level}");
+                if (PlayerProgression.CrossedNewUnlockLevel(prevLevel, PlayerProgression.Level))
+                    GameEvents.RaiseToast("Yeni kasa kilidi açıldı!");
+            }
             else if (showXpToast && p.xpGranted > 0)
+            {
                 GameEvents.RaiseToast($"+{p.xpGranted} XP");
+            }
         }
     }
 }

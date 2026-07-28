@@ -6,6 +6,7 @@ namespace ValoCase.Core
     public static class GameEvents
     {
         public static event Action<int, int> OnVpChanged;
+        public static event Action<int> OnDiamondChanged;
         public static event Action<SkinDefinitionSO> OnSkinObtained;
         public static event Action<SkinDefinitionSO, int> OnSkinSold;
         public static event Action<CaseDefinitionSO, SkinDefinitionSO> OnCaseOpened;
@@ -15,10 +16,13 @@ namespace ValoCase.Core
         public static event Action OnShopRotated;
         public static event Action<string> OnToastRequested;
         public static event Action<bool> OnMissionNotificationChanged;
+        public static event Action OnConnectivityLost;
+        public static event Action OnServerError;
 
         public static bool MissionNotificationActive { get; private set; }
 
         public static void RaiseVpChanged(int previous, int current) => OnVpChanged?.Invoke(previous, current);
+        public static void RaiseDiamondChanged(int current) => OnDiamondChanged?.Invoke(current);
         public static void RaiseSkinObtained(SkinDefinitionSO skin) => OnSkinObtained?.Invoke(skin);
         public static void RaiseSkinSold(SkinDefinitionSO skin, int vpGained) => OnSkinSold?.Invoke(skin, vpGained);
         public static void RaiseCaseOpened(CaseDefinitionSO caseDef, SkinDefinitionSO skin) => OnCaseOpened?.Invoke(caseDef, skin);
@@ -27,6 +31,8 @@ namespace ValoCase.Core
         public static void RaiseDailyRewardClaimed() => OnDailyRewardClaimed?.Invoke();
         public static void RaiseShopRotated() => OnShopRotated?.Invoke();
         public static void RaiseToast(string message) => OnToastRequested?.Invoke(message);
+        public static void RaiseConnectivityLost() => OnConnectivityLost?.Invoke();
+        public static void RaiseServerError() => OnServerError?.Invoke();
 
         public static void RaiseMissionNotification(bool active)
         {
@@ -37,6 +43,7 @@ namespace ValoCase.Core
         public static void ClearAll()
         {
             OnVpChanged = null;
+            OnDiamondChanged = null;
             OnSkinObtained = null;
             OnSkinSold = null;
             OnCaseOpened = null;
@@ -46,6 +53,8 @@ namespace ValoCase.Core
             OnShopRotated = null;
             OnToastRequested = null;
             OnMissionNotificationChanged = null;
+            OnConnectivityLost = null;
+            OnServerError = null;
             MissionNotificationActive = false;
         }
     }

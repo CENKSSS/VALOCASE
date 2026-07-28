@@ -89,6 +89,7 @@ namespace ValoCase.UI
 
             labelText = Text(name + "Label", img.transform, label, fontSize, textColor, FontStyles.Bold);
             Stretch(labelText.rectTransform, 16, 16, 0, 0);
+            UIBuild.WireButtonClick(btn);
             return btn;
         }
     }

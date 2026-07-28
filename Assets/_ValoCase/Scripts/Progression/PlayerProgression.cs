@@ -16,6 +16,30 @@ namespace ValoCase.Progression
     public static class PlayerProgression
     {
         public const int DefaultXpPerLevel = 20;
+        public const int MaxLevel = 15;
+
+        // Cumulative total XP required to REACH each level (index = level). Mirrors the
+        // backend threshold table; used ONLY as a display fallback when the backend omits
+        // the per-level XP breakdown. Never authorizes unlocks.
+        static readonly int[] LevelTotalXp =
+        {
+            0,    // [0] unused
+            0,    // Lv 1
+            40,   // Lv 2
+            95,   // Lv 3
+            160,  // Lv 4
+            250,  // Lv 5
+            350,  // Lv 6
+            465,  // Lv 7
+            610,  // Lv 8
+            775,  // Lv 9
+            860,  // Lv 10
+            945,  // Lv 11
+            1050, // Lv 12
+            1155, // Lv 13
+            1250, // Lv 14
+            1350, // Lv 15
+        };
 
         public static int Level { get; private set; } = 1;
         public static int CurrentLevelXp { get; private set; }
@@ -43,21 +67,66 @@ namespace ValoCase.Progression
         // so "vandal_basic", "protocol_melee", and "melee_arcane" all resolve correctly.
         static readonly string[] CategoryKeys = { "classic", "ghost", "bulldog", "vandal", "melee" };
 
-        public static float Fill01 =>
-            XpRequiredForNextLevel > 0 ? Mathf.Clamp01((float)CurrentLevelXp / XpRequiredForNextLevel) : 0f;
+        public static bool IsMaxLevel => Level >= MaxLevel;
+
+        public static float Fill01
+        {
+            get
+            {
+                if (IsMaxLevel) return 1f;
+                return XpRequiredForNextLevel > 0
+                    ? Mathf.Clamp01((float)CurrentLevelXp / XpRequiredForNextLevel) : 0f;
+            }
+        }
 
         /// <summary>Overwrites the cache with a backend-reported snapshot. Primitive
         /// arguments keep this layer free of any backend-DTO dependency.</summary>
         public static void Apply(int level, int currentLevelXp, int xpRequiredForNextLevel,
                                  int totalXp, string[] unlockedCategories)
         {
-            Level                  = level > 0 ? level : 1;
-            CurrentLevelXp         = Mathf.Max(0, currentLevelXp);
-            XpRequiredForNextLevel = xpRequiredForNextLevel > 0 ? xpRequiredForNextLevel : DefaultXpPerLevel;
-            TotalXp                = Mathf.Max(0, totalXp);
+            Level   = level > 0 ? level : 1;
+            TotalXp = Mathf.Max(0, totalXp);
+
+            if (xpRequiredForNextLevel > 0)
+            {
+                CurrentLevelXp         = Mathf.Max(0, currentLevelXp);
+                XpRequiredForNextLevel = xpRequiredForNextLevel;
+            }
+            else
+            {
+                ApplyTableFallback(currentLevelXp);   // backend omitted per-level breakdown
+            }
+
             if (unlockedCategories != null) UnlockedCategories = unlockedCategories;
             HasBackendSnapshot     = true;
             OnChanged?.Invoke();
+        }
+
+        static void ApplyTableFallback(int backendCurrentLevelXp)
+        {
+            if (IsMaxLevel)
+            {
+                CurrentLevelXp         = Mathf.Max(0, TotalXp - LevelTotalXp[MaxLevel]);
+                XpRequiredForNextLevel = 0;
+                return;
+            }
+
+            int lvl     = Mathf.Clamp(Level, 1, MaxLevel - 1);
+            int floorXp = LevelTotalXp[lvl];
+            XpRequiredForNextLevel = Mathf.Max(1, LevelTotalXp[lvl + 1] - floorXp);
+            CurrentLevelXp = TotalXp > 0
+                ? Mathf.Clamp(TotalXp - floorXp, 0, XpRequiredForNextLevel)
+                : Mathf.Max(0, backendCurrentLevelXp);
+        }
+
+        // Display-only: true when a level transition crossed a new category-unlock tier
+        // (3/7/9/15). Level 1 (Classic) never counts — play starts already at level 1.
+        public static bool CrossedNewUnlockLevel(int previousLevel, int newLevel)
+        {
+            if (newLevel <= previousLevel) return false;
+            foreach (var kv in UnlockLevels)
+                if (kv.Value > previousLevel && kv.Value <= newLevel) return true;
+            return false;
         }
 
         public static int GetCurrentLevel() => Level;
@@ -86,16 +155,16 @@ namespace ValoCase.Progression
         {
             if (string.IsNullOrEmpty(category)) return true;
 
-            // When the backend sends an explicit unlocked-category list, it is authoritative.
-            if (UnlockedCategories != null && UnlockedCategories.Count > 0)
-            {
+            // Cumulative authored rule: every tier at or below the player's level is unlocked.
+            if (Level >= GetUnlockLevelForCategory(category)) return true;
+
+            // A backend list may grant an extra unlock, but it can never re-lock a tier the
+            // level rule already opened — the list can be partial or arrive a frame late.
+            if (UnlockedCategories != null)
                 foreach (var c in UnlockedCategories)
                     if (string.Equals(c, category, StringComparison.OrdinalIgnoreCase)) return true;
-                return false;
-            }
 
-            // Otherwise fall back to the cached level vs the required unlock level.
-            return Level >= GetUnlockLevelForCategory(category);
+            return false;
         }
 
         public static bool IsCaseUnlocked(string caseId) => IsCategoryUnlocked(CategoryForCaseId(caseId));

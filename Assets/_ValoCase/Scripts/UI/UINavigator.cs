@@ -9,6 +9,25 @@ namespace ValoCase.UI
         [SerializeField] List<UIScreenBase> screens = new();
         [SerializeField] ScreenType defaultScreen = ScreenType.Shop;
 
+        // Bottom-nav left→right order. Tapping a tab further right slides forward
+        // (current exits left, target enters from right); further left slides back.
+        static readonly ScreenType[] NavOrder =
+        {
+            ScreenType.Shop,            // Cases tab → Shop screen
+            ScreenType.Tools,
+            ScreenType.Inventory,
+            ScreenType.Upgrade,
+            ScreenType.CaseBattleLobby, // Battle
+            ScreenType.Market,
+        };
+
+        static int NavIndex(ScreenType t)
+        {
+            for (int i = 0; i < NavOrder.Length; i++)
+                if (NavOrder[i] == t) return i;
+            return -1;
+        }
+
         readonly Dictionary<ScreenType, UIScreenBase> _map = new();
         UIScreenBase _current;
 
@@ -58,9 +77,18 @@ namespace ValoCase.UI
             // transition (outgoing hide + incoming show) to instant.
             if (next.OpensInstantly) instant = true;
 
+            int dir = 0;
+            if (!instant && _current != null)
+            {
+                int from = NavIndex(CurrentScreen);
+                int to   = NavIndex(type);
+                if (from >= 0 && to >= 0 && from != to) dir = to > from ? 1 : -1;
+            }
+
             if (_current != null)
             {
                 if (instant) _current.HideImmediate();
+                else if (dir != 0) _current.SlideOut(dir);
                 else _current.HideAnimated();
             }
 
@@ -69,6 +97,7 @@ namespace ValoCase.UI
             CurrentScreen = type;
 
             if (instant) _current.ShowImmediate();
+            else if (dir != 0) _current.SlideIn(dir);
             else _current.ShowAnimated();
 
             OnNavigated?.Invoke(type);

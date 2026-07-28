@@ -57,7 +57,10 @@
       "Bash(grep -iv '\\\\.png$')",
       "Bash([ -d \"$DS\" ])",
       "Bash(grep -iv '\\\\.meta$')",
-      "PowerShell(Select-String -Path \"C:\\\\Users\\\\cenk_\\\\ValoCase\\\\Assets\\\\_ValoCase\\\\Scripts\\\\UI\\\\Screens\\\\CaseOpeningScreen.cs\" -Pattern \"GlowRt|_openBtnGlow\" | ForEach-Object { \"$\\($_.LineNumber\\): $\\($_.Line.Trim\\(\\)\\)\" })"
+      "PowerShell(Select-String -Path \"C:\\\\Users\\\\cenk_\\\\ValoCase\\\\Assets\\\\_ValoCase\\\\Scripts\\\\UI\\\\Screens\\\\CaseOpeningScreen.cs\" -Pattern \"GlowRt|_openBtnGlow\" | ForEach-Object { \"$\\($_.LineNumber\\): $\\($_.Line.Trim\\(\\)\\)\" })",
+      "mcp__UnityMCP__manage_build",
+      "Bash(java -version)",
+      "Bash(git status *)"
     ]
   }
 }

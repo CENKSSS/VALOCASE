@@ -15,27 +15,28 @@ namespace ValoCase.Services.Ads
         public const string EarnVp2x      = "EARN_VP_2X";
         public const string UpgradePlus5  = "UPGRADE_PLUS_5";
         public const string MarketVp2500  = "MARKET_VP_2500";
+        public const string Diamond1      = "DIAMOND_1";
     }
 
-    // Maps a backend unavailableReason code to a clean player-facing Turkish label. Never
+    // Maps a backend unavailableReason code to a clean player-facing label. Never
     // shows the raw code; an unknown/empty reason falls back to a generic message.
     public static class AdRewardMessages
     {
         public static string MapUnavailable(string reason)
         {
-            if (string.IsNullOrEmpty(reason)) return "Şu anda kullanılamıyor.";
+            if (string.IsNullOrEmpty(reason)) return "Not available right now.";
             switch (reason.ToUpperInvariant())
             {
-                case "COOLDOWN":                   return "Biraz bekle, tekrar hazır olacak.";
-                case "ALREADY_ACTIVE":             return "Bonus zaten aktif.";
+                case "COOLDOWN":                   return "On cooldown, ready again soon.";
+                case "ALREADY_ACTIVE":             return "Bonus already active.";
                 case "ALREADY_USED":
-                case "ALREADY_USED_FOR_CONTEXT":   return "Bu yükseltme için kullanıldı.";
-                case "EARN_VP_NO_ACTIVE_SESSION":  return "2X bonus icin reklam izle.";
-                case "AUTH_PENDING":               return "Kimlik dogrulaniyor...";
+                case "ALREADY_USED_FOR_CONTEXT":   return "Already used for this upgrade.";
+                case "EARN_VP_NO_ACTIVE_SESSION":  return "Watch an ad for the 2X bonus.";
+                case "AUTH_PENDING":               return "Signing in...";
                 case "NO_CONTEXT":
                 case "INVALID_CONTEXT":
-                case "NO_SELECTION":               return "Önce skin ve hedef seç.";
-                default:                           return "Şu anda kullanılamıyor.";
+                case "NO_SELECTION":               return "Select a skin and target first.";
+                default:                           return "Not available right now.";
             }
         }
     }

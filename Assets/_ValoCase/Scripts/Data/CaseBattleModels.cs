@@ -62,6 +62,7 @@ namespace ValoCase.Data
         public LobbyStatus        Status = LobbyStatus.Waiting;
         public SkinRarity         Rarity = SkinRarity.Select;
         public int               WagerVP;
+        public bool              IsEventLobby;
 
         public int MaxPlayers => (int)PlayerCount;
 

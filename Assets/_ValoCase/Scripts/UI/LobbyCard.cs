@@ -70,6 +70,7 @@ namespace ValoCase.UI
             var cardBtn = bg.gameObject.AddComponent<Button>();
             cardBtn.transition = Selectable.Transition.None;
             cardBtn.onClick.AddListener(OnJoinPressed);
+            WireButtonClick(cardBtn);
 
             var casesCell = MakeCell("CasesCell", CasesA, CostA, Color.clear);
             var costCell = MakeCell("CostCell", CostA, PlayersA, Color.clear);
@@ -162,8 +163,9 @@ namespace ValoCase.UI
         {
             var center = MakeCenterBox(cell, "CostCenter", 0.5f, 76f, 48f);
 
-            var cost = MakeTmp(center, "Cost", data.WagerVP.ToString("N0"),
-                15f, FontStyles.Bold, RefForeground);
+            bool free = data.IsEventLobby || data.WagerVP <= 0;
+            var cost = MakeTmp(center, "Cost", free ? "FREE" : data.WagerVP.ToString("N0"),
+                18f, FontStyles.Bold, free ? RefGreen : RefForeground);
             cost.alignment = TextAlignmentOptions.Center;
             SetRect(cost.rectTransform,
                 new Vector2(0f, 0.5f), new Vector2(1f, 0.5f), new Vector2(0.5f, 0.5f),
@@ -174,7 +176,7 @@ namespace ValoCase.UI
         {
             var center = MakeCenterBox(cell, "PlayersCenter", 0.5f, 54f, 48f);
             var lbl = MakeTmp(center, "Players", $"{data.CurrentPlayers}/{data.MaxPlayers}",
-                19f, FontStyles.Bold, RefForeground);
+                23f, FontStyles.Bold, RefForeground);
             lbl.alignment = TextAlignmentOptions.Center;
             Stretch(lbl.rectTransform);
         }
@@ -204,6 +206,7 @@ namespace ValoCase.UI
             var btn = _joinBg.gameObject.AddComponent<Button>();
             btn.transition = Selectable.Transition.None;
             btn.onClick.AddListener(OnJoinPressed);
+            WireButtonClick(btn);
 
             string text = _locked ? "LOCKED" : (full ? "VIEW" : "JOIN");
             var lbl = MakeTmp(_joinBg.transform, "Lbl", text,

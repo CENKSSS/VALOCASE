@@ -54,7 +54,7 @@ namespace ValoCase.UI.Screens
         void Awake()
         {
             if (backButton != null)
-                backButton.onClick.AddListener(() => navigator?.Navigate(ScreenType.MainMenu));
+                backButton.onClick.AddListener(() => navigator?.Navigate(ScreenType.Shop));
         }
 
         protected override void OnShown()

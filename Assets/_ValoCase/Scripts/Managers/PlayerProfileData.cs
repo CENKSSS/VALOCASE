@@ -29,6 +29,18 @@ namespace ValoCase.Profile
         public static Sprite Avatar    => _avatar;
         public static string AvatarKey => _avatarKey;   // e.g. "Jett", "Reyna"
 
+        // Raw pref, not the runtime fallback — AvatarKey defaults to the first avatar
+        // even when the user never picked one, so it cannot detect a real choice.
+        public static bool HasSavedAvatarSelection =>
+            !string.IsNullOrEmpty(PlayerPrefs.GetString(PrefAvatarKey, ""));
+
+        public static void ClearSavedProfile()
+        {
+            PlayerPrefs.DeleteKey(PrefUsername);
+            PlayerPrefs.DeleteKey(PrefAvatarKey);
+            PlayerPrefs.Save();
+        }
+
         // ── Event ─────────────────────────────────────────────────────────────
         public static event Action OnProfileChanged;
 

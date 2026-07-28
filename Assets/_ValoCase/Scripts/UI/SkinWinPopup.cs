@@ -72,6 +72,7 @@ namespace ValoCase.UI
             //  • Runtime fallback path → wired after RuntimeBuildPopup() finishes
             if (confirmButton != null)
                 confirmButton.onClick.AddListener(OnConfirmClicked);
+            UIBuild.WireButtonClick(confirmButton);
 
             gameObject.SetActive(false);
         }
@@ -287,6 +288,7 @@ namespace ValoCase.UI
             // Register confirm listener AFTER wiring (Awake's listener add was skipped because confirmButton was null)
             confirmBtn.onClick.RemoveAllListeners();
             confirmBtn.onClick.AddListener(comp.OnConfirmClicked);
+            UIBuild.WireButtonClick(confirmBtn);
 
             Debug.Log("[DEBUG][POPUP] RuntimeBuildPopup complete — all fields wired");
             return comp;
@@ -317,6 +319,7 @@ namespace ValoCase.UI
                 btn.transition = Selectable.Transition.None;
                 btn.onClick.RemoveListener(OnConfirmClicked);
                 btn.onClick.AddListener(OnConfirmClicked);
+                UIBuild.WireButtonClick(btn);
             }
         }
 

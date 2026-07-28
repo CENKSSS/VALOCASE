@@ -18,6 +18,11 @@ namespace ValoCase.UI.Screens
 {
     public sealed class CaseOpeningScreen : UIScreenBase
     {
+        // OnShown (which builds the case list and selects the tapped case) runs only at
+        // the END of an animated fade-in, so the screen would fade in empty before its
+        // content popped. Opening instantly builds content before the screen is shown.
+        public override bool OpensInstantly => true;
+
         [Header("Navigation")]
         [SerializeField] UINavigator navigator;
         [SerializeField] Button backButton;
@@ -81,6 +86,8 @@ namespace ValoCase.UI.Screens
         int _quantity = 1;
         TextMeshProUGUI _qtyLabel;
         RectTransform _qtySelector;
+        Button _qtyMinusBtn;
+        Button _qtyPlusBtn;
         bool _multiOpenActive;
         const int MaxQuantity = 5;
 
@@ -104,19 +111,8 @@ namespace ValoCase.UI.Screens
 
         void Awake()
         {
-            Debug.Log("[OPEN_BTN_DEBUG] Awake");
-            Debug.Log("[OPEN_BTN_DEBUG] openButton null=" + (openButton == null));
-            Debug.Log("[OPEN_BTN_DEBUG] flow null=" + (flow == null));
-            Debug.Log("[OPEN_BTN_DEBUG] navigator null=" + (navigator == null));
-
             if (backButton != null) backButton.onClick.AddListener(OnBack);
-            if (openButton != null)
-            {
-                openButton.onClick.AddListener(OpenSelected);
-                Debug.Log("[OPEN_BTN_DEBUG] listener added to openButton");
-                // Separate RAW listener — proves whether the click reaches the button at all.
-                openButton.onClick.AddListener(() => Debug.Log("[OPEN_BTN_DEBUG] RAW BUTTON CLICK RECEIVED"));
-            }
+            if (openButton != null) openButton.onClick.AddListener(OpenSelected);
             GameEvents.OnCaseOpened += OnCaseOpened;
             EnsureBackButton();
         }
@@ -144,6 +140,7 @@ namespace ValoCase.UI.Screens
             ApplyCaseOpeningMobileLayout();
             EnsureOpenButtonClickable();
             BuildCaseList();
+            EnsureHeroControlsClickable();
             RefreshWallet();
             if (walletLabel != null) walletLabel.gameObject.SetActive(false);
             ShowSpinOverlay(false);
@@ -152,19 +149,13 @@ namespace ValoCase.UI.Screens
             // Hide the CaseTabs selector strip — case is already chosen from Shop.
             HideCaseTabsSelector();
 
-            // Hierarchy dump + stray-image scan (debug only, no side-effects).
-            DebugCaseOpeningHierarchy();
             HideTopStraySkinImages();
 
             // Re-assert top sibling every time the screen is shown so no panel can cover the button.
             if (_runtimeBackBtn != null)
                 _runtimeBackBtn.transform.SetAsLastSibling();
 
-            Debug.Log("[OPEN_BTN_DEBUG] OnShown");
-            Debug.Log("[OPEN_BTN_DEBUG] selected=" + (_selected != null ? _selected.DisplayName : "NULL"));
-            Debug.Log("[OPEN_BTN_DEBUG] openButton active=" + (openButton != null && openButton.gameObject.activeInHierarchy));
-            Debug.Log("[OPEN_BTN_DEBUG] openButton interactable=" + (openButton != null && openButton.interactable));
-            DebugOpenButtonRaycast();
+            RefreshOpenButton();
         }
 
         // Centers the OPEN CASE button under the case icon and parks the price
@@ -280,17 +271,17 @@ namespace ValoCase.UI.Screens
             _qtySelector.anchorMin = new Vector2(0.5f, 1f);
             _qtySelector.anchorMax = new Vector2(0.5f, 1f);
             _qtySelector.pivot     = new Vector2(0.5f, 1f);
-            _qtySelector.sizeDelta = new Vector2(108f, 72f);
+            _qtySelector.sizeDelta = new Vector2(148f, 72f);
 
             var hlg = go.AddComponent<HorizontalLayoutGroup>();
-            hlg.spacing = 4f;
+            hlg.spacing = 6f;
             hlg.childControlWidth      = false;
             hlg.childControlHeight     = false;
             hlg.childForceExpandWidth  = false;
             hlg.childForceExpandHeight = false;
             hlg.childAlignment = TextAnchor.MiddleCenter;
 
-            MakeQtyButton(go.transform, "−", -1);
+            _qtyMinusBtn = MakeQtyButton(go.transform, "−", -1);
 
             var lblGo = new GameObject("QtyValue", typeof(RectTransform));
             lblGo.transform.SetParent(go.transform, false);
@@ -304,27 +295,46 @@ namespace ValoCase.UI.Screens
             _qtyLabel.color         = new Color(0.96f, 0.96f, 0.96f, 1f);
             _qtyLabel.raycastTarget = false;
 
-            MakeQtyButton(go.transform, "+", 1);
+            _qtyPlusBtn = MakeQtyButton(go.transform, "+", 1);
+            RefreshQuantityButtons();
         }
 
-        void MakeQtyButton(Transform parent, string glyph, int delta)
+        Button MakeQtyButton(Transform parent, string glyph, int delta)
         {
             var go = new GameObject("Qty" + (delta < 0 ? "Minus" : "Plus"),
                 typeof(RectTransform), typeof(Image), typeof(Button));
             go.transform.SetParent(parent, false);
             var rt = go.GetComponent<RectTransform>();
-            rt.sizeDelta = new Vector2(44f, 44f);
+            rt.sizeDelta = new Vector2(50f, 50f);
             var le = go.AddComponent<LayoutElement>();
-            le.preferredWidth  = 44f;
-            le.preferredHeight = 44f;
+            le.preferredWidth  = 50f;
+            le.preferredHeight = 50f;
 
             var img = go.GetComponent<Image>();
-            img.color = new Color(0.10f, 0.03f, 0.06f, 1f);
-            var outline = go.AddComponent<Outline>();
-            outline.effectColor    = new Color(1f, 0.275f, 0.333f, 0.9f);
-            outline.effectDistance = new Vector2(1f, -1f);
+            img.color = new Color(1f, 0.275f, 0.333f, 0.9f);
+            img.raycastTarget = true;
+
+            const float borderW = 3f;
+            var fill = new GameObject("Fill", typeof(RectTransform), typeof(Image));
+            fill.transform.SetParent(go.transform, false);
+            var fillRt = (RectTransform)fill.transform;
+            fillRt.anchorMin = Vector2.zero;
+            fillRt.anchorMax = Vector2.one;
+            fillRt.offsetMin = new Vector2(borderW, borderW);
+            fillRt.offsetMax = new Vector2(-borderW, -borderW);
+            var fillImg = fill.GetComponent<Image>();
+            fillImg.color         = new Color(0.10f, 0.03f, 0.06f, 1f);
+            fillImg.raycastTarget = false;
 
             var btn = go.GetComponent<Button>();
+            btn.targetGraphic = img;
+            var colors = btn.colors;
+            colors.normalColor      = Color.white;
+            colors.highlightedColor = Color.white;
+            colors.pressedColor     = new Color(0.8f, 0.8f, 0.8f, 1f);
+            colors.disabledColor    = new Color(0.35f, 0.35f, 0.4f, 0.6f);
+            colors.fadeDuration     = 0.08f;
+            btn.colors = colors;
             btn.onClick.AddListener(() => ChangeQuantity(delta));
 
             var lblGo = new GameObject("Label", typeof(RectTransform));
@@ -341,15 +351,48 @@ namespace ValoCase.UI.Screens
             lbl.alignment     = TextAlignmentOptions.Center;
             lbl.color         = new Color(0.96f, 0.96f, 0.96f, 1f);
             lbl.raycastTarget = false;
+
+            return btn;
         }
 
         void ChangeQuantity(int delta)
         {
             if (_multiOpenActive) return;
-            _quantity = Mathf.Clamp(_quantity + delta, 1, MaxQuantity);
+            int next = Mathf.Clamp(_quantity + delta, 1, MaxQuantity);
+            if (delta > 0 && !CanAfford(next)) next = _quantity;   // never step past what the wallet allows
+            if (next == _quantity) return;
+            _quantity = next;
             if (_qtyLabel != null) _qtyLabel.text = _quantity.ToString();
             UpdateOpenButtonTexts();
             RefreshOpenButton();
+        }
+
+        int WalletBalance() => GameContext.Instance?.Vp?.Balance ?? 0;
+
+        bool CanAfford(int qty) => WalletBalance() >= SelectedUnitPrice() * qty;
+
+        // Highest quantity the wallet can pay for, within [1, MaxQuantity]. A zero/unknown
+        // price (detail not loaded yet) imposes no cap so the stepper stays usable.
+        int MaxAffordableQuantity()
+        {
+            int unit = SelectedUnitPrice();
+            if (unit <= 0) return MaxQuantity;
+            return Mathf.Clamp(WalletBalance() / unit, 1, MaxQuantity);
+        }
+
+        void ClampQuantityToAffordable()
+        {
+            int clamped = Mathf.Clamp(_quantity, 1, MaxAffordableQuantity());
+            if (clamped == _quantity) return;
+            _quantity = clamped;
+            if (_qtyLabel != null) _qtyLabel.text = _quantity.ToString();
+            UpdateOpenButtonTexts();
+        }
+
+        void RefreshQuantityButtons()
+        {
+            if (_qtyMinusBtn != null) _qtyMinusBtn.interactable = !_multiOpenActive && _quantity > 1;
+            if (_qtyPlusBtn  != null) _qtyPlusBtn.interactable  = !_multiOpenActive && _quantity < MaxAffordableQuantity();
         }
 
         // Built-in EventTrigger press feedback — never interferes with onClick.
@@ -376,7 +419,7 @@ namespace ValoCase.UI.Screens
         {
             if (_openSubLabel == null) return;
             var total = SelectedUnitPrice() * _quantity;
-            _openSubLabel.text = $"{total:N0} VP HARCANACAK";
+            _openSubLabel.text = $"{total:N0} VP TOTAL";
         }
 
         protected override void OnHidden()
@@ -439,26 +482,18 @@ namespace ValoCase.UI.Screens
             if (skipButton != null) skipButton.gameObject.SetActive(false);
         }
 
-        // Always creates a fresh visible runtime back button on the screen root.
-        // Uses _backBtnCreated so it only builds once per MonoBehaviour lifetime.
-        // Does NOT check the Inspector backButton field — that may be invisible/misconfigured.
+        // Presents a single back control matching the other screens (top-left circle
+        // arrow, same size/colors as EarnVpScreen). Any prefab-baked back button is
+        // hidden so there is never a duplicate. Built once per MonoBehaviour lifetime.
         void EnsureBackButton()
         {
-            Debug.Log("[CASE_OPENING_BACK] EnsureBackButton called");
-
             if (_backBtnCreated) return;
             _backBtnCreated = true;
 
-            // Keep a single back control: restyle the existing top button into a clean
-            // arrow. Only build a runtime one if the serialized button is missing.
-            if (backButton != null)
-            {
-                StyleAsBackArrow(backButton);
-                return;
-            }
+            if (backButton != null) backButton.gameObject.SetActive(false);
 
             var go = new GameObject("BackButton_Runtime",
-                typeof(RectTransform), typeof(Image), typeof(Button));
+                typeof(RectTransform), typeof(Image), typeof(Button), typeof(Outline));
             go.transform.SetParent(transform, false);
             _runtimeBackBtn = go;
 
@@ -466,57 +501,39 @@ namespace ValoCase.UI.Screens
             rt.anchorMin        = new Vector2(0f, 1f);
             rt.anchorMax        = new Vector2(0f, 1f);
             rt.pivot            = new Vector2(0f, 1f);
-            rt.anchoredPosition = new Vector2(16f, -56f);
-            rt.sizeDelta        = new Vector2(52f, 52f);
+            rt.anchoredPosition = new Vector2(28f, -88f);
+            rt.sizeDelta        = new Vector2(40f, 40f);
 
             var img = go.GetComponent<Image>();
-            img.color = new Color(0.05f, 0.08f, 0.16f, 1f);
+            img.color = new Color(0.040f, 0.065f, 0.125f, 1f);
 
-            var outline = go.AddComponent<Outline>();
-            outline.effectColor    = new Color(1f, 0.122f, 0.224f, 0.85f);
+            var outline = go.GetComponent<Outline>();
+            outline.effectColor    = new Color(1f, 0.122f, 0.224f, 0.8f);
             outline.effectDistance = new Vector2(1.5f, -1.5f);
 
             var btn = go.GetComponent<Button>();
-            var bc  = btn.colors;
-            bc.normalColor      = Color.white;
-            bc.highlightedColor = new Color(1f, 0.85f, 0.85f, 1f);
-            bc.pressedColor     = new Color(0.75f, 0.50f, 0.50f, 1f);
-            btn.colors = bc;
+            btn.transition = Selectable.Transition.None;
             btn.onClick.AddListener(OnBack);
             backButton = btn;
 
-            var lblGo = new GameObject("Label", typeof(RectTransform));
+            var lblGo = new GameObject("Lbl", typeof(RectTransform));
             lblGo.transform.SetParent(go.transform, false);
-            var lblRt = lblGo.GetComponent<RectTransform>();
-            lblRt.anchorMin = Vector2.zero;
-            lblRt.anchorMax = Vector2.one;
-            lblRt.offsetMin = Vector2.zero;
-            lblRt.offsetMax = Vector2.zero;
             var lbl = lblGo.AddComponent<TextMeshProUGUI>();
-            lbl.text               = "←";
-            lbl.fontSize           = 30f;
+            lbl.text               = "";
             lbl.fontStyle          = FontStyles.Bold;
             lbl.alignment          = TextAlignmentOptions.Center;
             lbl.color              = new Color(0.925f, 0.910f, 0.882f, 1f);
             lbl.enableWordWrapping = false;
             lbl.raycastTarget      = false;
 
+            UIBuild.StyleCircleBack(img, lbl, 40f);
+            var lblRt = lbl.rectTransform;
+            lblRt.anchorMin = Vector2.zero;
+            lblRt.anchorMax = Vector2.one;
+            lblRt.offsetMin = Vector2.zero;
+            lblRt.offsetMax = Vector2.zero;
+
             go.transform.SetAsLastSibling();
-        }
-
-        void StyleAsBackArrow(Button btn)
-        {
-            var rt = (RectTransform)btn.transform;
-            rt.sizeDelta = new Vector2(52f, rt.sizeDelta.y);
-
-            var lbl = btn.GetComponentInChildren<TextMeshProUGUI>(true);
-            if (lbl != null)
-            {
-                lbl.text = "←";
-                lbl.fontSize = 30f;
-                lbl.alignment = TextAlignmentOptions.Center;
-                lbl.characterSpacing = 0f;
-            }
         }
 
         void ConvertToTamam()
@@ -526,7 +543,7 @@ namespace ValoCase.UI.Screens
             PrepareButtonOnce(); // idempotent safety net
 
             var label = skipButton.GetComponentInChildren<TextMeshProUGUI>(true);
-            if (label != null) { label.text = "TAMAM"; label.enabled = true; }
+            if (label != null) { label.text = "DONE"; label.enabled = true; }
 
             var img = skipButton.GetComponent<Image>();
             if (img != null) img.enabled = true;
@@ -709,6 +726,8 @@ namespace ValoCase.UI.Screens
         {
             if (openButton == null) return;
 
+            ClampQuantityToAffordable();
+
             bool sessionBusy = (flow != null && flow.SessionActive) || _multiOpenActive;
             bool lockedByDetail = DetailLocksSelected(out var requiredLevel, out var lockReason);
             bool canOpenCase = CanOpenSelectedCase();
@@ -716,7 +735,9 @@ namespace ValoCase.UI.Screens
             int  total       = SelectedUnitPrice() * _quantity;
             bool affordable  = balance >= total;
 
-            bool openable = _selected != null && !sessionBusy && canOpenCase && affordable;
+            // Affordability does NOT disable the button: the tap must still register so
+            // OpenSelected can surface the "Not enough VP" message instead of failing silently.
+            bool openable = _selected != null && !sessionBusy && canOpenCase;
             openButton.interactable = openable;
 
             var btnLabel = _openMainLabel != null
@@ -725,13 +746,15 @@ namespace ValoCase.UI.Screens
             if (btnLabel != null)
             {
                 if (lockedByDetail || (_selected != null && !canOpenCase))
-                    btnLabel.text = lockReason == "CASE_INACTIVE" ? "KULLANILAMIYOR"
-                                  : requiredLevel > 0 ? $"SEVİYE {requiredLevel}" : "KİLİTLİ";
+                    btnLabel.text = lockReason == "CASE_INACTIVE" ? "UNAVAILABLE"
+                                  : requiredLevel > 0 ? $"LEVEL {requiredLevel}" : "LOCKED";
                 else if (_selected != null && !sessionBusy && !affordable)
-                    btnLabel.text = "YETERSİZ VP";
+                    btnLabel.text = "NOT ENOUGH VP";
                 else
                     btnLabel.text = "OPEN CASE";
             }
+
+            RefreshQuantityButtons();
         }
 
         // ── Drop List ─────────────────────────────────────────────────────────
@@ -798,56 +821,6 @@ namespace ValoCase.UI.Screens
                 Debug.Log("[CASE_TABS] CaseTabs not found in parent chain — fallback: caseListRoot hidden");
                 if (caseListRoot.gameObject.activeSelf) caseListRoot.gameObject.SetActive(false);
             }
-        }
-
-        // ── Runtime hierarchy dump ───────────────────────────────────────────
-        // Call once in OnShown — reveals every object so we can track stray images.
-        void DebugCaseOpeningHierarchy()
-        {
-            Debug.Log("[CASE_DEBUG] caseListRoot="    + (caseListRoot    != null ? caseListRoot.name    : "NULL"));
-            Debug.Log("[CASE_DEBUG] dropListRoot="    + (dropListRoot    != null ? dropListRoot.name    : "NULL"));
-            Debug.Log("[CASE_DEBUG] caseDisplayPanel="+ (caseDisplayPanel!= null ? caseDisplayPanel.name: "NULL"));
-            Debug.Log("[CASE_DEBUG] spinOverlay="     + (spinOverlay     != null ? spinOverlay.name     : "NULL"));
-
-            DumpTransform(transform, "CaseOpening");
-        }
-
-        static void DumpTransform(Transform t, string path)
-        {
-            if (t == null) return;
-
-            var rt  = t as RectTransform;
-            var img = t.GetComponent<Image>();
-            var tmp = t.GetComponent<TextMeshProUGUI>();
-
-            var sb = new System.Text.StringBuilder();
-            sb.Append("[CASE_HIERARCHY] path=").Append(path);
-            sb.Append(" active=").Append(t.gameObject.activeSelf);
-            sb.Append(" activeH=").Append(t.gameObject.activeInHierarchy);
-            sb.Append(" sibling=").Append(t.GetSiblingIndex());
-            if (rt != null)
-            {
-                sb.Append(" pos=(").Append(rt.anchoredPosition.x.ToString("F0")).Append(",").Append(rt.anchoredPosition.y.ToString("F0")).Append(")");
-                sb.Append(" size=(").Append(rt.sizeDelta.x.ToString("F0")).Append(",").Append(rt.sizeDelta.y.ToString("F0")).Append(")");
-                sb.Append(" ancMin=(").Append(rt.anchorMin.x.ToString("F2")).Append(",").Append(rt.anchorMin.y.ToString("F2")).Append(")");
-                sb.Append(" ancMax=(").Append(rt.anchorMax.x.ToString("F2")).Append(",").Append(rt.anchorMax.y.ToString("F2")).Append(")");
-            }
-            if (img != null)
-            {
-                sb.Append(" image=true");
-                sb.Append(" sprite=").Append(img.sprite != null ? img.sprite.name : "null");
-                sb.Append(" imgEnabled=").Append(img.enabled);
-                sb.Append(" imgColor=(").Append(img.color.r.ToString("F2")).Append(",").Append(img.color.g.ToString("F2")).Append(",").Append(img.color.b.ToString("F2")).Append(",").Append(img.color.a.ToString("F2")).Append(")");
-                sb.Append(" raycast=").Append(img.raycastTarget);
-            }
-            if (tmp != null)
-            {
-                sb.Append(" tmp=true text=").Append(tmp.text.Length > 30 ? tmp.text.Substring(0, 30) : tmp.text);
-            }
-            Debug.Log(sb.ToString());
-
-            for (int i = 0; i < t.childCount; i++)
-                DumpTransform(t.GetChild(i), path + "/" + t.GetChild(i).name);
         }
 
         // ── Stray skin-preview hide ──────────────────────────────────────────
@@ -966,7 +939,7 @@ namespace ValoCase.UI.Screens
             Debug.Log("[CASE_RARITY_TABLE] rows before=" + oldChildCount);
 
             // Height tracks the rarity count so added rarities never overflow the panel.
-            int rarityRowCount = k_RarityOrder.Length;
+            int rarityRowCount = k_RarityOrder.Length + 1;
             float tableHeight = 30f + rarityRowCount * 46f + 28f + 8f * rarityRowCount;
 
             if (containerTf == null)
@@ -983,11 +956,22 @@ namespace ValoCase.UI.Screens
                 var bg = cGo.GetComponent<Image>();
                 bg.sprite        = RoundedSprite();
                 bg.type          = Image.Type.Sliced;
-                bg.color         = PanelDark;
+                bg.color         = new Color(NeonCyan.r, NeonCyan.g, NeonCyan.b, 0.35f);
                 bg.raycastTarget = false;
-                var tblOutline = cGo.AddComponent<Outline>();
-                tblOutline.effectColor    = new Color(NeonCyan.r, NeonCyan.g, NeonCyan.b, 0.35f);
-                tblOutline.effectDistance = new Vector2(1f, -1f);
+
+                const float tableBorderW = 3f;
+                var tableFill = new GameObject("Fill", typeof(RectTransform), typeof(Image));
+                tableFill.transform.SetParent(cGo.transform, false);
+                var tableFillRt = (RectTransform)tableFill.transform;
+                tableFillRt.anchorMin = Vector2.zero;
+                tableFillRt.anchorMax = Vector2.one;
+                tableFillRt.offsetMin = new Vector2(tableBorderW, tableBorderW);
+                tableFillRt.offsetMax = new Vector2(-tableBorderW, -tableBorderW);
+                var tableFillImg = tableFill.GetComponent<Image>();
+                tableFillImg.color         = PanelDark;
+                tableFillImg.raycastTarget = false;
+                tableFill.AddComponent<LayoutElement>().ignoreLayout = true;
+
                 var vlg = cGo.AddComponent<VerticalLayoutGroup>();
                 vlg.childControlWidth      = true;
                 vlg.childForceExpandWidth  = true;
@@ -1011,13 +995,18 @@ namespace ValoCase.UI.Screens
                 new Vector2(((RectTransform)containerTf).sizeDelta.x, tableHeight);
 
             // ── Title ─────────────────────────────────────────────────────────
-            MakeRateTableRow(containerTf, "Title", "KASA ORANLARI", "",
+            MakeRateTableRow(containerTf, "Title", "CASE ODDS", "",
                              Color.white, Color.white, isTitle: true, height: 30f);
 
-            // ── 5 Rarity rows (always created, never skipped) ─────────────────
+            // ── Rarity rows (always created, never skipped) ───────────────────
+            MakeRarityOddsRow(containerTf, "Row_Charm", CharmSymbolSprite(),
+                              k_CharmName, k_CharmColor, CharmRateFor(caseDef), height: 46f);
             for (int i = 0; i < k_RarityOrder.Length; i++)
-                MakeRarityOddsRow(containerTf, "Row_" + i, k_RarityOrder[i],
+            {
+                var icon = RaritySymbolLoader.TryGet(k_RarityOrder[i], out var sym) ? sym : null;
+                MakeRarityOddsRow(containerTf, "Row_" + i, icon,
                                   k_RarityNames[i], k_RarityColors[i], rates[i], height: 46f);
+            }
 
             int newChildCount = containerTf.childCount;
             Debug.Log("[CASE_RARITY_TABLE] rows after=" + newChildCount);
@@ -1126,7 +1115,7 @@ namespace ValoCase.UI.Screens
 
         // Premium odds row: rarity icon, name, progress bar (track + colored fill),
         // and percentage. Fill width is the live rate; no hardcoded values.
-        void MakeRarityOddsRow(Transform parent, string rowName, SkinRarity rarity,
+        void MakeRarityOddsRow(Transform parent, string rowName, Sprite icon,
                                string displayName, Color color, float percent, float height)
         {
             var row = new GameObject(rowName, typeof(RectTransform));
@@ -1147,9 +1136,9 @@ namespace ValoCase.UI.Screens
             var iconImg = iconGo.GetComponent<Image>();
             iconImg.raycastTarget  = false;
             iconImg.preserveAspect = true;
-            if (RaritySymbolLoader.TryGet(rarity, out var symbol) && symbol != null)
+            if (icon != null)
             {
-                iconImg.sprite = symbol;
+                iconImg.sprite = icon;
                 iconImg.color  = Color.white;
             }
             else
@@ -1336,14 +1325,15 @@ namespace ValoCase.UI.Screens
             if (!PlayerProgression.IsCaseUnlocked(_selected.CaseId))
             {
                 int req = PlayerProgression.RequiredLevelForCaseId(_selected.CaseId);
-                GameEvents.RaiseToast($"Seviye {req}'te açılır");
+                GameEvents.RaiseToast($"Unlocks at level {req}");
                 return;
             }
 
             var ctx = GameContext.Instance;
             int total = SelectedUnitPrice() * _quantity;
             int balance = ctx?.Vp?.Balance ?? 0;
-            if (!CanOpenSelectedCase() || balance < total) { RefreshOpenButton(); return; }
+            if (balance < total) { GameEvents.RaiseToast("Not enough VP"); RefreshOpenButton(); return; }
+            if (!CanOpenSelectedCase()) { RefreshOpenButton(); return; }
             if (ctx?.BackendEnabled != true && ctx?.CaseOpening?.CanOpen(_selected) != true) { RefreshOpenButton(); return; }
 
             // All quantities (including 1) spin inside the rates-panel area.
@@ -1427,6 +1417,12 @@ namespace ValoCase.UI.Screens
         // the winner is always unambiguously the card under the triangle.
         const float MultiMarkerJitterFraction = 0.8f;
 
+        // Red pointer sits at the row/viewport center. Ratio tuned so the tick lands on the
+        // visible separator under the pointer; 0.5 is math-centered but reads ~0.35 early.
+        const float PointerLocalX        = 0f;
+        const float TickPhaseOffsetRatio = 0.15f;
+        const float TickPhaseOffset      = MultiItemWidth * TickPhaseOffsetRatio;
+
         void StartMultiOpen(int qty)
         {
             if (_multiOpenActive) return;
@@ -1496,7 +1492,9 @@ namespace ValoCase.UI.Screens
             BuildMultiRows(winners);
             PositionReelPanelToRates(n);
             ShowMultiReelPanel(true);
+            ValoCase.Audio.SoundManager.Instance?.PlayCaseOpen();
             yield return AnimateMultiRows();
+            ValoCase.Audio.SoundManager.Instance?.StopCaseOpen();
 
             // Unsold rewards are granted via the existing inventory flow up front; the
             // review's SELL then removes a unit via the existing economy. A sold reward
@@ -1615,7 +1613,7 @@ namespace ValoCase.UI.Screens
                     // A 403 locked-category error carries the exact unlock level — show it
                     // instead of the generic forbidden message, and do not spend/animate.
                     var msg = (error != null && error.IsLockedCategory)
-                        ? $"Seviye {error.RequiredLevel}'te açılır"
+                        ? $"Unlocks at level {error.RequiredLevel}"
                         : BackendErrorMapper.Map(error);
                     if (!string.IsNullOrEmpty(msg)) GameEvents.RaiseToast(msg);
                     break;
@@ -1742,8 +1740,30 @@ namespace ValoCase.UI.Screens
                 }
                 _multiRows.Add(row);
 
+                BuildRowFrame(rowGo.transform);
                 BuildRowMarker(rowGo.transform);
             }
+        }
+
+        // Outer 4-sided reel border. Sibling of the masked Viewport (never a child), so
+        // RectMask2D can't clip it; added after the Viewport so it draws over the items.
+        void BuildRowFrame(Transform rowParent)
+        {
+            var go = new GameObject("RowFrame", typeof(RectTransform));
+            go.transform.SetParent(rowParent, false);
+            var rt = (RectTransform)go.transform;
+            rt.anchorMin = Vector2.zero;
+            rt.anchorMax = Vector2.one;
+            rt.offsetMin = Vector2.zero;
+            rt.offsetMax = Vector2.zero;
+
+            const float thickness = 4f;
+            // Matches ReelItemView.SlotBorder so the frame reads as the same separator gray.
+            var color = new Color(1f, 1f, 1f, 0.20f);
+            MakeFrameBar(rt, "Top",    new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f), thickness, color, horizontal: true);
+            MakeFrameBar(rt, "Bottom", new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(0.5f, 0f), thickness, color, horizontal: true);
+            MakeFrameBar(rt, "Left",   new Vector2(0f, 0f), new Vector2(0f, 1f), new Vector2(0f, 0.5f), thickness, color, horizontal: false);
+            MakeFrameBar(rt, "Right",  new Vector2(1f, 0f), new Vector2(1f, 1f), new Vector2(1f, 0.5f), thickness, color, horizontal: false);
         }
 
         // Per-row marker matching the single-case triangle: top-center of its row,
@@ -1769,6 +1789,7 @@ namespace ValoCase.UI.Screens
             float dur    = GameConstants.CaseSpinDurationSeconds;
             float target = -(_multiWinnerIndex * MultiItemWidth);
             float t = 0f;
+            int prevBoundary = int.MinValue;
             while (t < dur)
             {
                 t += Time.unscaledDeltaTime;
@@ -1780,6 +1801,17 @@ namespace ValoCase.UI.Screens
                 foreach (var row in _multiRows)
                     if (row.content != null)
                         row.content.anchoredPosition = new Vector2(x, 0f);
+
+                // One tick per separator crossing the fixed pointer. No throttle, so the
+                // slow end phase always ticks on the boundary; a fast frame that skips
+                // several boundaries still fires once (early phase precision is not critical).
+                int boundary = Mathf.FloorToInt((PointerLocalX - x + TickPhaseOffset) / MultiItemWidth);
+                if (prevBoundary == int.MinValue) prevBoundary = boundary;
+                else if (boundary != prevBoundary)
+                {
+                    ValoCase.Audio.SoundManager.Instance?.PlayTick();
+                    prevBoundary = boundary;
+                }
                 yield return null;
             }
             float finalX = target + _multiLandingJitter;
@@ -1923,6 +1955,8 @@ namespace ValoCase.UI.Screens
             review.sellButton = sellButton;
             sellButton.onClick.AddListener(() => SellReviewCard(review));
             cardBtn.onClick.AddListener(() => SellReviewCard(review));
+            UIBuild.WireButtonClick(sellButton);
+            UIBuild.WireButtonClick(cardBtn);
 
             var overlay = new GameObject("SoldOverlay", typeof(RectTransform), typeof(Image));
             overlay.transform.SetParent(card.transform, false);
@@ -2047,6 +2081,7 @@ namespace ValoCase.UI.Screens
             go.GetComponent<Image>().color = bg;
             var btn = go.GetComponent<Button>();
             btn.onClick.AddListener(() => onClick());
+            UIBuild.WireButtonClick(btn);
             MakeStretchText(go.transform, label, 18f, FontStyles.Bold, Color.white);
             return btn;
         }
@@ -2285,7 +2320,7 @@ namespace ValoCase.UI.Screens
                 selectedCaseLabel.text = skin.SkinName.ToUpperInvariant();
 
             if (priceLabel != null)
-                priceLabel.text = "BU SKİNİ KAZANDIN!";
+                priceLabel.text = "YOU WON THIS SKIN!";
 
             if (openButton != null) openButton.gameObject.SetActive(false);
         }
@@ -2429,49 +2464,6 @@ namespace ValoCase.UI.Screens
                 RefreshOpenButton();
         }
 
-        // ── OPEN button click diagnostics (debug only) ──────────────────────
-        void DebugOpenButtonRaycast()
-        {
-            if (openButton == null) { Debug.Log("[OPEN_BTN_DEBUG] openButton NULL in raycast debug"); return; }
-
-            var rt = openButton.GetComponent<RectTransform>();
-            if (rt != null)
-            {
-                var corners = new Vector3[4];
-                rt.GetWorldCorners(corners);
-                Debug.Log("[OPEN_BTN_DEBUG] world corners BL=" + corners[0] + " TL=" + corners[1] +
-                          " TR=" + corners[2] + " BR=" + corners[3]);
-            }
-
-            var img = openButton.GetComponent<Image>();
-            if (img != null) Debug.Log("[OPEN_BTN_DEBUG] image raycastTarget=" + img.raycastTarget);
-
-            foreach (var tmp in openButton.GetComponentsInChildren<TextMeshProUGUI>(true))
-                Debug.Log("[OPEN_BTN_DEBUG] child tmp=" + tmp.name + " raycastTarget=" + tmp.raycastTarget);
-
-            // Walk the parent chain logging every CanvasGroup that could gate input.
-            var t = openButton.transform;
-            while (t != null)
-            {
-                var cg = t.GetComponent<CanvasGroup>();
-                if (cg != null)
-                    Debug.Log("[OPEN_BTN_DEBUG] parent canvasGroup=" + cg.name +
-                              " interactable=" + cg.interactable +
-                              " blocksRaycasts=" + cg.blocksRaycasts +
-                              " alpha=" + cg.alpha);
-                t = t.parent;
-            }
-
-            var raycaster = GetComponentInParent<GraphicRaycaster>();
-            Debug.Log("[OPEN_BTN_DEBUG] graphicRaycaster=" + (raycaster != null ? raycaster.name : "NULL"));
-
-            // Dump every Graphic under this screen so we can spot a raycastTarget=true
-            // panel/image sitting on top of the button.
-            foreach (var g in GetComponentsInChildren<Graphic>(true))
-                Debug.Log("[OPEN_BTN_RAYCAST] graphic=" + g.name +
-                          " raycast=" + g.raycastTarget +
-                          " active=" + g.gameObject.activeInHierarchy);
-        }
 
         // ── Mobile UI redesign helpers (revertible block) ────────────────────
 
@@ -2503,6 +2495,30 @@ namespace ValoCase.UI.Screens
             Debug.Log("[CASE_OPEN_BTN] raycast blockers disabled");
         }
 
+        // The prefab's DropScroll is a raycast-enabled ScrollRect sitting over the lower
+        // hero area (y ≤ -496), and it is a later sibling than the open button + quantity
+        // stepper — so its background swallows taps meant for those controls. BuildRateTable
+        // hides it, but returns early for any case whose local DropTable is null before the
+        // backend detail loads, leaving it active and blocking the stepper. Hiding it here
+        // unconditionally (and raising the stepper) keeps the −/＋ clickable for every case.
+        void EnsureHeroControlsClickable()
+        {
+            if (caseDisplayPanel != null)
+            {
+                var drop = caseDisplayPanel.transform.Find("DropScroll");
+                if (drop != null && drop.gameObject.activeSelf) drop.gameObject.SetActive(false);
+
+                var header = caseDisplayPanel.transform.Find("ContainsHeader");
+                if (header != null && header.gameObject.activeSelf) header.gameObject.SetActive(false);
+            }
+
+            if (_qtySelector != null) _qtySelector.SetAsLastSibling();
+            if (openButton != null) openButton.transform.SetAsLastSibling();
+
+            if (_qtyMinusBtn != null && _qtyMinusBtn.targetGraphic != null) _qtyMinusBtn.targetGraphic.raycastTarget = true;
+            if (_qtyPlusBtn  != null && _qtyPlusBtn.targetGraphic  != null) _qtyPlusBtn.targetGraphic.raycastTarget  = true;
+        }
+
         // Pins every background surface in CaseOpening to the same flat color as
         // the CASES/Shop screen. No gradients, no pulse — just static navy/black.
         // Runs every OnShown so Unity can never reset it.
@@ -2526,6 +2542,46 @@ namespace ValoCase.UI.Screens
             new Color(1.00f, 0.63f, 0.00f, 1f), // Ultra    — gold
             new Color(1.00f, 0.82f, 0.29f, 1f), // Melee    — bright gold
         };
+
+        const string k_CharmName = "CHARM";
+        static readonly Color k_CharmColor = new Color(0.45f, 0.78f, 0.62f, 1f);
+
+        const string k_CharmSymbolPath = "Art/UI/Semboller/Charm";
+
+        static Sprite _charmSymbol;
+        static Sprite CharmSymbolSprite()
+        {
+            if (_charmSymbol != null) return _charmSymbol;
+            _charmSymbol = Resources.Load<Sprite>(k_CharmSymbolPath);
+            return _charmSymbol != null ? _charmSymbol : CharmPlaceholderSprite();
+        }
+
+        static Sprite _charmPlaceholder;
+        static Sprite CharmPlaceholderSprite()
+        {
+            if (_charmPlaceholder != null) return _charmPlaceholder;
+            var tex = new Texture2D(4, 4, TextureFormat.RGBA32, false);
+            var px = new Color32[16];
+            for (int i = 0; i < px.Length; i++) px[i] = new Color32(0, 0, 0, 255);
+            tex.SetPixels32(px);
+            tex.Apply();
+            _charmPlaceholder = Sprite.Create(tex, new Rect(0, 0, 4, 4), new Vector2(0.5f, 0.5f), 100f);
+            return _charmPlaceholder;
+        }
+
+        float CharmRateFor(CaseDefinitionSO caseDef)
+        {
+            if (_detail == null || caseDef == null || _detailCaseId != caseDef.CaseId || _detail.drops == null)
+                return 0f;
+            float sum = 0f;
+            foreach (var d in _detail.drops)
+            {
+                if (d == null || string.IsNullOrEmpty(d.rarity)) continue;
+                if (string.Equals(d.rarity, "Charm", StringComparison.OrdinalIgnoreCase))
+                    sum += d.dropChance;
+            }
+            return sum * 100f;
+        }
 
         void ApplyDarkBackground()
         {
@@ -2559,6 +2615,7 @@ namespace ValoCase.UI.Screens
                 if (img == caseIconDisplay) continue;                     // case/skin icon
                 if (img == caseThemeBg) continue;                        // rarity wash overlay
                 if (openButton      != null && img.transform.IsChildOf(openButton.transform))      continue;
+                if (_qtySelector    != null && img.transform.IsChildOf(_qtySelector.transform))    continue;
                 if (_runtimeBackBtn != null && img.transform.IsChildOf(_runtimeBackBtn.transform)) continue;
                 if (_spinFocusFrame != null && img.transform.IsChildOf(_spinFocusFrame.transform)) continue;
                 if (skipButton      != null && img.transform.IsChildOf(skipButton.transform))      continue;
@@ -2661,7 +2718,7 @@ namespace ValoCase.UI.Screens
             if (_vpBadgeBg != null)
                 ((RectTransform)_vpBadgeBg.transform).anchoredPosition = new Vector2(0f, -494f);
 
-            // Button (300 wide) + quantity stepper (108 wide) sit on one row, centered
+            // Button (300 wide) + quantity stepper (148 wide) sit on one row, centered
             // as a group, so the selector is directly beside the open button.
             if (openButton != null)
             {
@@ -2669,7 +2726,7 @@ namespace ValoCase.UI.Screens
                 if (rt != null) rt.anchoredPosition = new Vector2(-60f, -548f);
             }
             if (_qtySelector != null)
-                _qtySelector.anchoredPosition = new Vector2(156f, -548f);
+                _qtySelector.anchoredPosition = new Vector2(176f, -548f);
 
             if (caseDisplayPanel != null)
             {
@@ -2775,6 +2832,22 @@ namespace ValoCase.UI.Screens
 
             _spinFocusFrame = go;
             go.SetActive(false);
+        }
+
+        static void MakeFrameBar(RectTransform parent, string name, Vector2 anchorMin, Vector2 anchorMax,
+            Vector2 pivot, float thickness, Color color, bool horizontal)
+        {
+            var go = new GameObject(name, typeof(RectTransform), typeof(Image));
+            go.transform.SetParent(parent, false);
+            var rt = (RectTransform)go.transform;
+            rt.anchorMin        = anchorMin;
+            rt.anchorMax        = anchorMax;
+            rt.pivot            = pivot;
+            rt.anchoredPosition = Vector2.zero;
+            rt.sizeDelta        = horizontal ? new Vector2(0f, thickness) : new Vector2(thickness, 0f);
+            var img = go.GetComponent<Image>();
+            img.color         = color;
+            img.raycastTarget = false;
         }
 
         // One small downward red triangle at top-center, fixed, pointing at the

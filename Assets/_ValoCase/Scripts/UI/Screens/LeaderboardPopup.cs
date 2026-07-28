@@ -87,19 +87,24 @@ namespace ValoCase.UI.Screens
             var backBorder = backBg.gameObject.AddComponent<Outline>();
             backBorder.effectColor    = ColorPalette.Border;
             backBorder.effectDistance = new Vector2(1f, -1f);
-            var backArrow = MakeTmp(backBg.transform, "Arrow", "<", 26f, FontStyles.Bold, ColorPalette.TextBright);
+            var backArrow = MakeTmp(backBg.transform, "Arrow", "", 26f, FontStyles.Bold, ColorPalette.TextBright);
             backArrow.alignment = TextAlignmentOptions.Center;
             SetRect(backArrow.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 1f), new Vector2(0.5f, 0.5f),
                 new Vector2(1f, 1f), Vector2.zero);
+            StyleCircleBack(backBg, backArrow, 40f);
             var backBtn = backBg.gameObject.AddComponent<Button>();
             backBtn.transition = Selectable.Transition.None;
             backBtn.onClick.AddListener(Hide);
+            WireButtonClick(backBtn);
 
-            var title = MakeTmp(panel.transform, "Title", "LEADERBOARD", 27f, FontStyles.Bold, ColorPalette.TextBright);
+            var title = MakeTmp(panel.transform, "Title", "LEADERBOARD", 32f, FontStyles.Bold, ColorPalette.TextBright);
             title.characterSpacing = 3f;
             title.alignment = TextAlignmentOptions.Center;
+            title.enableAutoSizing = true;
+            title.fontSizeMin = 24f;
+            title.fontSizeMax = 32f;
             SetRect(title.rectTransform, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
-                new Vector2(0f, -18f), new Vector2(-104f, 36f));
+                new Vector2(0f, -16f), new Vector2(-104f, 42f));
 
             BuildTabs(panel.transform);
             BuildScroll(panel.transform);
@@ -112,7 +117,7 @@ namespace ValoCase.UI.Screens
             var rowGo = NewGo("Tabs", panel, typeof(HorizontalLayoutGroup));
             var rowRt = (RectTransform)rowGo.transform;
             SetRect(rowRt, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
-                new Vector2(0f, -64f), new Vector2(-24f, 34f));
+                new Vector2(0f, -62f), new Vector2(-20f, 40f));
             var hlg = rowGo.GetComponent<HorizontalLayoutGroup>();
             hlg.spacing               = 6f;
             hlg.childForceExpandWidth  = true;
@@ -129,14 +134,23 @@ namespace ValoCase.UI.Screens
                 border.effectColor    = ColorPalette.Border;
                 border.effectDistance = new Vector2(1f, -1f);
 
-                var lbl = MakeTmp(bg.transform, "Lbl", TabLabels[i], 13.5f, FontStyles.Bold, ColorPalette.TextDim);
+                var lbl = MakeTmp(bg.transform, "Lbl", TabLabels[i], 16f, FontStyles.Bold, ColorPalette.TextDim);
                 lbl.alignment = TextAlignmentOptions.Center;
-                lbl.characterSpacing = 1f;
-                Stretch(lbl.rectTransform);
+                lbl.characterSpacing = 0f;
+                lbl.enableWordWrapping = false;
+                lbl.enableAutoSizing = true;
+                lbl.fontSizeMin = 12f;
+                lbl.fontSizeMax = 16f;
+                var lblRt = lbl.rectTransform;
+                lblRt.anchorMin = Vector2.zero;
+                lblRt.anchorMax = Vector2.one;
+                lblRt.offsetMin = new Vector2(4f, 0f);
+                lblRt.offsetMax = new Vector2(-4f, 0f);
 
                 var btn = bg.gameObject.AddComponent<Button>();
                 btn.transition = Selectable.Transition.None;
                 btn.onClick.AddListener(() => SelectTab(captured));
+                WireButtonClick(btn);
 
                 _tabBgs[i]  = bg;
                 _tabLbls[i] = lbl;
@@ -187,25 +201,26 @@ namespace ValoCase.UI.Screens
             stRt.offsetMin = new Vector2(10f, 86f);
             stRt.offsetMax = new Vector2(-10f, -104f);
 
-            _stateLbl = MakeTmp(_stateGo.transform, "Lbl", "", 13f, FontStyles.Bold, ColorPalette.TextDim);
+            _stateLbl = MakeTmp(_stateGo.transform, "Lbl", "", 15.5f, FontStyles.Bold, ColorPalette.TextDim);
             _stateLbl.alignment = TextAlignmentOptions.Center;
             _stateLbl.enableWordWrapping = true;
             _stateLbl.characterSpacing = 2f;
             SetRect(_stateLbl.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
-                new Vector2(0f, 16f), new Vector2(280f, 60f));
+                new Vector2(0f, 16f), new Vector2(300f, 68f));
 
             var retryBg = MakeImage("Retry", _stateGo.transform, ColorPalette.Surface, raycast: true);
             SetRect(retryBg.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
-                new Vector2(0f, -28f), new Vector2(132f, 38f));
+                new Vector2(0f, -30f), new Vector2(146f, 42f));
             var retryBorder = retryBg.gameObject.AddComponent<Outline>();
             retryBorder.effectColor    = ColorPalette.WithAlpha(ColorPalette.ActiveRed, 0.7f);
             retryBorder.effectDistance = new Vector2(1f, -1f);
-            var retryLbl = MakeTmp(retryBg.transform, "Lbl", "TEKRAR DENE", 12f, FontStyles.Bold, ColorPalette.TextBright);
+            var retryLbl = MakeTmp(retryBg.transform, "Lbl", "TEKRAR DENE", 13.5f, FontStyles.Bold, ColorPalette.TextBright);
             retryLbl.alignment = TextAlignmentOptions.Center;
             Stretch(retryLbl.rectTransform);
             var retryButton = retryBg.gameObject.AddComponent<Button>();
             retryButton.transition = Selectable.Transition.None;
             retryButton.onClick.AddListener(() => FetchTab(_activeTab));
+            WireButtonClick(retryButton);
             _retryBtn = retryBg.gameObject;
 
             _stateGo.SetActive(false);
@@ -219,7 +234,7 @@ namespace ValoCase.UI.Screens
             yRt.anchorMax = new Vector2(1f, 0f);
             yRt.pivot     = new Vector2(0.5f, 0f);
             yRt.anchoredPosition = new Vector2(0f, 12f);
-            yRt.sizeDelta = new Vector2(-20f, 62f);
+            yRt.sizeDelta = new Vector2(-20f, 68f);
             var yBorder = _youPanel.AddComponent<Outline>();
             yBorder.effectColor    = ColorPalette.WithAlpha(ColorPalette.ActiveRed, 0.85f);
             yBorder.effectDistance = new Vector2(1.5f, -1.5f);
@@ -228,32 +243,33 @@ namespace ValoCase.UI.Screens
             SetRect(accent.rectTransform, new Vector2(0f, 0f), new Vector2(0f, 1f), new Vector2(0f, 0.5f),
                 new Vector2(0f, 0f), new Vector2(3.5f, 0f));
 
-            var tag = MakeTmp(_youPanel.transform, "Tag", "YOU", 12f, FontStyles.Bold, ColorPalette.ActiveRed);
+            var tag = MakeTmp(_youPanel.transform, "Tag", "YOU", 13.5f, FontStyles.Bold, ColorPalette.ActiveRed);
             tag.alignment = TextAlignmentOptions.TopLeft;
             tag.characterSpacing = 2f;
             SetRect(tag.rectTransform, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f),
-                new Vector2(14f, -7f), new Vector2(64f, 16f));
+                new Vector2(14f, -7f), new Vector2(70f, 18f));
 
-            _youRank = MakeTmp(_youPanel.transform, "Rank", "-", 19f, FontStyles.Bold, ColorPalette.GoldAccent);
+            _youRank = MakeTmp(_youPanel.transform, "Rank", "-", 21f, FontStyles.Bold, ColorPalette.GoldAccent);
             _youRank.alignment = TextAlignmentOptions.MidlineLeft;
             SetRect(_youRank.rectTransform, new Vector2(0f, 0f), new Vector2(0f, 1f), new Vector2(0f, 0.5f),
-                new Vector2(14f, -4f), new Vector2(72f, 0f));
+                new Vector2(14f, -4f), new Vector2(78f, 0f));
 
-            _youName = MakeTmp(_youPanel.transform, "Name", "-", 17.5f, FontStyles.Bold, ColorPalette.TextBright);
+            _youName = MakeTmp(_youPanel.transform, "Name", "-", 19f, FontStyles.Bold, ColorPalette.TextBright);
             _youName.alignment = TextAlignmentOptions.MidlineLeft;
+            _youName.enableWordWrapping = false; _youName.overflowMode = TextOverflowModes.Ellipsis;
             var nRt = _youName.rectTransform;
             nRt.anchorMin = new Vector2(0f, 0f); nRt.anchorMax = new Vector2(1f, 1f);
-            nRt.offsetMin = new Vector2(90f, 0f); nRt.offsetMax = new Vector2(-100f, -2f);
+            nRt.offsetMin = new Vector2(98f, 0f); nRt.offsetMax = new Vector2(-116f, -2f);
 
-            _youValue = MakeTmp(_youPanel.transform, "Value", "-", 18.5f, FontStyles.Bold, ColorPalette.GoldAccent);
+            _youValue = MakeTmp(_youPanel.transform, "Value", "-", 20.5f, FontStyles.Bold, ColorPalette.GoldAccent);
             _youValue.alignment = TextAlignmentOptions.MidlineRight;
             SetRect(_youValue.rectTransform, new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(1f, 0.5f),
-                new Vector2(-14f, 10f), new Vector2(100f, 24f));
+                new Vector2(-14f, 11f), new Vector2(112f, 26f));
 
-            _youSecondary = MakeTmp(_youPanel.transform, "Secondary", "", 13f, FontStyles.Normal, ColorPalette.TextDim);
+            _youSecondary = MakeTmp(_youPanel.transform, "Secondary", "", 14.5f, FontStyles.Normal, ColorPalette.TextDim);
             _youSecondary.alignment = TextAlignmentOptions.MidlineRight;
             SetRect(_youSecondary.rectTransform, new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(1f, 0.5f),
-                new Vector2(-14f, -10f), new Vector2(122f, 18f));
+                new Vector2(-14f, -11f), new Vector2(130f, 18f));
 
             _youPanel.SetActive(false);
         }
@@ -355,15 +371,15 @@ namespace ValoCase.UI.Screens
         {
             var row = MakeImage("Row", _listContent, isMe ? ColorPalette.Surface : ColorPalette.CardBg);
             var le = row.gameObject.AddComponent<LayoutElement>();
-            le.minHeight = le.preferredHeight = 54f;
+            le.minHeight = le.preferredHeight = 60f;
             var border = row.gameObject.AddComponent<Outline>();
             border.effectColor    = ColorPalette.Border;
             border.effectDistance = new Vector2(1f, -1f);
 
-            var rank = MakeTmp(row.transform, "Rank", rankText, 18f, FontStyles.Bold, rankColor);
+            var rank = MakeTmp(row.transform, "Rank", rankText, 20.5f, FontStyles.Bold, rankColor);
             rank.alignment = TextAlignmentOptions.Center;
             SetRect(rank.rectTransform, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(0f, 0.5f),
-                new Vector2(8f, 0f), new Vector2(36f, 26f));
+                new Vector2(8f, 0f), new Vector2(42f, 28f));
 
             var avatar = MakeImage("Avatar", row.transform, ColorPalette.Surface);
             var avatarSprite = ProfileManager.ResolveAvatarSprite(avatarKey);
@@ -373,25 +389,26 @@ namespace ValoCase.UI.Screens
             SetRect(avatar.rectTransform, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(0f, 0.5f),
                 new Vector2(46f, 0f), new Vector2(38f, 38f));
 
-            var nm = MakeTmp(row.transform, "Name", string.IsNullOrEmpty(name) ? "—" : name, 17.5f, FontStyles.Bold, ColorPalette.TextBright);
+            var nm = MakeTmp(row.transform, "Name", string.IsNullOrEmpty(name) ? "—" : name, 19f, FontStyles.Bold, ColorPalette.TextBright);
             nm.alignment = TextAlignmentOptions.MidlineLeft;
+            nm.enableWordWrapping = false; nm.overflowMode = TextOverflowModes.Ellipsis;
             var nmRt = nm.rectTransform;
             nmRt.anchorMin = new Vector2(0f, 0f); nmRt.anchorMax = new Vector2(1f, 1f);
-            nmRt.offsetMin = new Vector2(92f, 0f); nmRt.offsetMax = new Vector2(-100f, 0f);
+            nmRt.offsetMin = new Vector2(92f, 0f); nmRt.offsetMax = new Vector2(-116f, 0f);
 
             bool hasSecondary = !string.IsNullOrEmpty(secondary);
 
-            var val = MakeTmp(row.transform, "Value", mainVal, 18.5f, FontStyles.Bold, ColorPalette.TextBright);
+            var val = MakeTmp(row.transform, "Value", mainVal, 20.5f, FontStyles.Bold, ColorPalette.TextBright);
             val.alignment = TextAlignmentOptions.MidlineRight;
             SetRect(val.rectTransform, new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(1f, 0.5f),
-                new Vector2(-12f, hasSecondary ? 9f : 0f), new Vector2(94f, 24f));
+                new Vector2(-12f, hasSecondary ? 9f : 0f), new Vector2(112f, 26f));
 
             if (hasSecondary)
             {
-                var sec = MakeTmp(row.transform, "Secondary", secondary, 13f, FontStyles.Normal, ColorPalette.TextDim);
+                var sec = MakeTmp(row.transform, "Secondary", secondary, 14.5f, FontStyles.Normal, ColorPalette.TextDim);
                 sec.alignment = TextAlignmentOptions.MidlineRight;
                 SetRect(sec.rectTransform, new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(1f, 0.5f),
-                    new Vector2(-12f, -10f), new Vector2(112f, 18f));
+                    new Vector2(-12f, -11f), new Vector2(120f, 18f));
             }
 
             _rowGos.Add(row.gameObject);

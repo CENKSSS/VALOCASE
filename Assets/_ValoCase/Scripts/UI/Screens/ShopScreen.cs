@@ -315,6 +315,9 @@ namespace ValoCase.UI.Screens
             var vpGo = new GameObject("Viewport", typeof(RectTransform));
             vpGo.transform.SetParent(scrollGo.transform, false);
             vpGo.AddComponent<RectMask2D>();
+            // Transparent raycast target so a drag anywhere in the scroll area (gaps,
+            // headers, padding) is caught — not only drags that start on a card.
+            vpGo.AddComponent<Image>().color = Color.clear;
             var vpRt = vpGo.GetComponent<RectTransform>();
             vpRt.anchorMin = Vector2.zero;
             vpRt.anchorMax = Vector2.one;

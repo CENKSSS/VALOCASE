@@ -10,10 +10,10 @@ using ValoCase.Systems;
 namespace ValoCase.UI.Screens
 {
     /// <summary>
-    /// Tools hub screen — links to VP Kazan, Çark, and Görevler.
+    /// Tools hub screen — links to Earn VP, Wheel, and Missions.
     ///
-    /// VP KAZAN row navigates to the existing EarnVpScreen.
-    /// ÇARK and GÖREVLER show a Coming Soon overlay (dismissible).
+    /// EARN VP row navigates to the existing EarnVpScreen.
+    /// WHEEL shows a Coming Soon overlay; MISSIONS opens the MissionsScreen panel.
     /// All UI built procedurally in BuildOnce() — no Inspector setup needed.
     /// </summary>
     public sealed class ToolsScreen : UIScreenBase
@@ -216,20 +216,20 @@ namespace ValoCase.UI.Screens
             BuildDailyRewardCard(content.transform);
 
             // ── Three rows ────────────────────────────────────────────────────
-            BuildRow(content.transform, "VP KAZAN", AccentVP, () =>
+            BuildRow(content.transform, "EARN VP", AccentVP, () =>
             {
                 navigator?.Navigate(ScreenType.EarnVp);
             });
 
-            BuildRow(content.transform, "CARK", AccentWhl, () =>
+            BuildRow(content.transform, "WHEEL", AccentWhl, () =>
             {
-                ShowComingSoon("CARK");
+                ShowComingSoon("WHEEL");
             });
 
-            var missionsRow = BuildRow(content.transform, "GOREVLER", AccentMsn, () =>
+            var missionsRow = BuildRow(content.transform, "MISSIONS", AccentMsn, () =>
             {
                 // Build the panel on demand (no longer depends on prior injection), then
-                // open it. In backend mode we never fall back to Coming Soon for Görevler.
+                // open it. In backend mode we never fall back to Coming Soon for Missions.
                 if (EnsureMissionsPanel() && _missionsPanel != null)
                 {
                     _missionsPanel.Show();
@@ -238,9 +238,9 @@ namespace ValoCase.UI.Screens
 
                 bool backend = GameContext.Instance != null && GameContext.Instance.BackendEnabled;
                 if (backend)
-                    Debug.LogError("[ToolsScreen] Görevler could not open: MissionsScreen unavailable in backend mode.");
+                    Debug.LogError("[ToolsScreen] Missions could not open: MissionsScreen unavailable in backend mode.");
                 else
-                    ShowComingSoon("GOREVLER");
+                    ShowComingSoon("MISSIONS");
             });
 
             _missionsDot = BuildNotificationDot(missionsRow.transform);
@@ -251,7 +251,7 @@ namespace ValoCase.UI.Screens
             // Coming Soon overlay (hidden until needed)
             BuildComingSoonPanel(rt);
 
-            // Missions overlay panel (full-screen, shown on GOREVLER tap)
+            // Missions overlay panel (full-screen, shown on MISSIONS tap)
             EnsureMissionsPanel();
         }
 
@@ -552,11 +552,11 @@ namespace ValoCase.UI.Screens
                 if (_dailyStatusLbl != null)
                 {
                     if (!_dailyStatusLoaded || _dailyStatus == null)
-                        _dailyStatusLbl.text = "Yükleniyor…";
+                        _dailyStatusLbl.text = "Loading…";
                     else if (_dailyStatus.claimable)
-                        _dailyStatusLbl.text = "Şimdi alınabilir";
+                        _dailyStatusLbl.text = "Available now";
                     else
-                        _dailyStatusLbl.text = $"Sonraki: {CooldownText(_dailyNextClaimRealtime - Time.unscaledTimeAsDouble)}";
+                        _dailyStatusLbl.text = $"Next: {CooldownText(_dailyNextClaimRealtime - Time.unscaledTimeAsDouble)}";
                 }
                 return;
             }
@@ -567,7 +567,7 @@ namespace ValoCase.UI.Screens
             SetClaimVisual(can);
             if (_dailyStatusLbl != null)
                 _dailyStatusLbl.text = daily == null ? "" :
-                    (can ? "Şimdi alınabilir" : $"Sonraki: {daily.TimeUntilNextClaim:hh\\:mm\\:ss}");
+                    (can ? "Available now" : $"Next: {daily.TimeUntilNextClaim:hh\\:mm\\:ss}");
         }
 
         static readonly Color DailyBtnActive   = new Color(0.902f, 0.816f, 0.435f, 1f);   // AccentVP gold
@@ -610,7 +610,7 @@ namespace ValoCase.UI.Screens
                             if (res != null) _dailyStatus.currentStreak = res.currentStreak;
                         }
                         int reward = res != null ? res.rewardVp : 0;
-                        GameEvents.RaiseToast($"Günlük ödül: +{reward:N0} VP");
+                        GameEvents.RaiseToast($"Daily reward: +{reward:N0} VP");
                         FetchDailyStatus();
                         UpdateDailyUi();
                     },
@@ -628,7 +628,7 @@ namespace ValoCase.UI.Screens
             {
                 ctx.Statistics?.RecordVpEarned(local);
                 ctx.Save?.Save();
-                GameEvents.RaiseToast($"Günlük ödül: +{local:N0} VP");
+                GameEvents.RaiseToast($"Daily reward: +{local:N0} VP");
             }
             UpdateDailyUi();
         }

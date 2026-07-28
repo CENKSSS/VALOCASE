@@ -85,6 +85,7 @@ namespace ValoCase.UI
 
             Debug.Log("[BOTTOM_NAV] navigator=" + (navigator != null ? navigator.name : "NULL"));
             if (navigator == null) return;
+            FreeLobbyEventBanner.Ensure(transform.parent, navigator);
             // Sync to whatever the navigator already navigated to in its Awake
             _active = navigator.CurrentScreen;
             navigator.OnNavigated += HandleNavigated;
@@ -242,6 +243,7 @@ namespace ValoCase.UI
             var btn = go.GetComponent<Button>();
             btn.transition = Selectable.Transition.None;
             btn.onClick.AddListener(() => TabClicked(captured));
+            UIBuild.WireButtonClick(btn);
 
             // Active top bar (2 px, anchored to tab top)
             var barRt = NewRT("Bar", tabRt,

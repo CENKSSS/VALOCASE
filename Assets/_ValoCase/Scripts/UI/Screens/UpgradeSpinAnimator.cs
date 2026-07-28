@@ -23,6 +23,8 @@ namespace ValoCase.UI.Screens
         RectTransform _needlePivot;
         Image         _successArc;
         bool          _initialized;
+        bool          _fillClockwise = true;
+        float         _currentChance;
         Color         _chanceColor = ColHigh;
 
         // ── Colors ────────────────────────────────────────────────────────────
@@ -57,14 +59,14 @@ namespace ValoCase.UI.Screens
             if (_initialized || centerPanel == null) return;
             _initialized = true;
 
-            // Ring sprite is generated at ~1.5× the display resolution (256 px texture
-            // for a 176 px widget) so the radial arc renders with smooth anti-aliased
-            // edges. The band is deliberately thin for a premium, elegant ring.
+            // Ring sprite is generated at ~1.1× the display resolution (256 px texture
+            // for a 224 px widget) so the radial arc renders with smooth anti-aliased
+            // edges. Band thickness scales with the diameter, so it stays proportional.
             const int   texOuterR = 128;                            // texture outer radius px
             const int   texInnerR = 108;                            // texture inner radius px (thin band)
-            const float arcSize   = 176f;                           // display diameter
+            const float arcSize   = 224f;                           // display diameter (enlarged)
             const float markerR   = arcSize * 0.5f + 9f;            // marker center, just outside the ring
-            const float holeSize  = arcSize * texInnerR / texOuterR; // ≈ 149 px inner hole
+            const float holeSize  = arcSize * texInnerR / texOuterR; // ≈ 189 px inner hole
 
             // Position: same anchor as chanceLabel so the % text is centred in the ring hole.
             Vector2 arcPos = chanceLabel != null
@@ -81,6 +83,7 @@ namespace ValoCase.UI.Screens
             // ── Success arc ───────────────────────────────────────────────────
             var arcGo = BuildArcImage("SuccessArc", centerPanel, arcSize, arcPos, ring,
                                       _chanceColor, fillAmount: 0f, out _successArc);
+            _successArc.fillClockwise = _fillClockwise;
 
             // ── Hole backdrop disc — dark contrast plate behind the % text ────
             var discGo = new GameObject("ChanceDisc", typeof(RectTransform), typeof(Image));
@@ -131,17 +134,48 @@ namespace ValoCase.UI.Screens
             }
         }
 
-        /// <summary>Updates the success arc fill (0–1) and its banded color.</summary>
+        /// <summary>Updates the success arc fill (0–1), its banded color and orientation.</summary>
         public void SetChance(float chance)
         {
             float c = Mathf.Clamp01(chance);
+            _currentChance = c;
             _chanceColor = GetChanceColor(c);
             if (_successArc != null)
             {
                 _successArc.fillAmount = c;
                 _successArc.color      = _chanceColor;
+                ApplySuccessArcOrientation();
             }
         }
+
+        /// <summary>
+        /// Visual-only: flips the success-arc to the opposite side (right ↔ left). The same
+        /// percentage and color are kept. Does not touch chance math or any gameplay logic.
+        /// </summary>
+        public void SetFillClockwise(bool clockwise)
+        {
+            _fillClockwise = clockwise;
+            ApplySuccessArcOrientation();
+        }
+
+        // Centers the success wedge on the side axis so it reads as a balanced 12→6
+        // half-side fill: clockwise fill centers on 3-o'clock (right), counter-clockwise on
+        // 9-o'clock (left). Rotating the symmetric ring sprite only moves the visible wedge.
+        void ApplySuccessArcOrientation()
+        {
+            if (_successArc == null) return;
+            _successArc.fillClockwise = _fillClockwise;
+            float a = _currentChance * 360f;                       // wedge angle
+            float z = _fillClockwise ? (a * 0.5f - 90f)            // center on right (clock 90)
+                                     : (90f - a * 0.5f);           // center on left  (clock 270)
+            _successArc.rectTransform.localEulerAngles = new Vector3(0f, 0f, z);
+        }
+
+        // The marker ALWAYS spins clockwise (euler-z decreasing). Only the landing TARGET
+        // depends on direction/centering: ComputeLandingClock returns the clock angle of the
+        // result inside (success) or outside (fail) the visible centered wedge; the marker
+        // euler-z for clock angle φ is -φ, and the spin reaches it by rotating clockwise.
+        float LandingMod(float chance, bool success) => -ComputeLandingClock(chance, success);
 
         /// <summary>Snaps needle to 12-o'clock.</summary>
         public void ResetNeedle()
@@ -160,9 +194,10 @@ namespace ValoCase.UI.Screens
                 yield break;
             }
 
-            // Land at euler-z ≡ ComputeLandingZ (negative = clockwise, matching the
-            // clockwise green fill), after several full clockwise revolutions.
-            float targetZ     = ComputeLandingZ(chance, success);
+            // Marker ALWAYS spins clockwise (negative euler-z), several full revolutions,
+            // landing on a target that is mirrored for the arc direction so it stops inside
+            // the visible colored wedge regardless of the toggle state.
+            float targetZ     = LandingMod(chance, success);
             int   revolutions = UnityEngine.Random.Range(5, 8);
             float endZ        = -(revolutions * 360f) + targetZ;
 
@@ -215,7 +250,7 @@ namespace ValoCase.UI.Screens
                 yield break;
             }
 
-            const float speed   = 720f;  // steady angular velocity, deg/sec (CW)
+            const float speed   = 720f;  // steady angular velocity, deg/sec (clockwise)
             const float spinUp   = 0.35f; // brief ramp so the start feels natural
             float angle = 0f;
 
@@ -234,11 +269,12 @@ namespace ValoCase.UI.Screens
                 yield return null;
             }
 
-            // Decelerate from the current angle onto the result zone. The final angle
-            // must be ≡ ComputeLandingZ (mod 360) and at least a few more revolutions CW.
+            // Decelerate from the current angle onto the result zone, still clockwise. The
+            // landing target is mirrored for the arc direction so the marker stops inside
+            // the visible colored wedge while always approaching it clockwise.
             SetChance(_resultChance);
-            float landingMod = ComputeLandingZ(_resultChance, _resultSuccess);
-            float candidate  = angle - 1080f;  // ≥ 3 extra revolutions
+            float landingMod = LandingMod(_resultChance, _resultSuccess);
+            float candidate  = angle - 1080f;  // ≥ 3 extra clockwise revolutions
             float final      = candidate - Mathf.Repeat(candidate - landingMod, 360f);
 
             const float decel = 2.4f;
@@ -336,50 +372,42 @@ namespace ValoCase.UI.Screens
 
         // ── Landing math: SINGLE SOURCE OF TRUTH (do not flip signs casually) ──────
         // CONVENTION, derived once so AnimateSpin and SpinUntilResolved can never drift:
-        //   • The success arc is a Radial360 Image with fillOrigin = Top and
-        //     fillClockwise = true, fillAmount = chance. So the GREEN success wedge
-        //     sweeps CLOCKWISE from 12-o'clock and spans [0 .. chance*360] degrees;
-        //     the remaining [chance*360 .. 360] is the dark fail wedge.
-        //   • The marker rides _needlePivot. Unity UI z-rotation is COUNTER-clockwise
-        //     for positive z, so a NEGATIVE euler-z moves the marker CLOCKWISE. A
-        //     landing angle of L degrees clockwise-from-top is therefore reached by
-        //     setting euler-z = -L  (that is exactly ComputeLandingZ).
-        //   • ComputeLandingAngle returns L inside the success wedge on success and
-        //     inside the fail wedge on failure (10% pad off each edge), so the marker
-        //     visually lands in the matching colour for every chance.
-        // VALIDATION:
-        //   chance 0.8 → success L∈[28.8,259.2] (within the 288° green); fail
-        //                L∈[295.2,352.8] (within the remaining 72° dark).
-        //   chance 0.2 → success L∈[7.2,64.8]   (within the 72° green);  fail
-        //                L∈[100.8,331.2] (within the remaining 288° dark).
-        // Both animation paths MUST stop at euler-z ≡ ComputeLandingZ(chance, success).
-        public static float ComputeLandingZ(float chance, bool success)
-            => -ComputeLandingAngle(chance, success);
-
-        /// <summary>
-        /// Landing angle (degrees CW from 12-o'clock) inside the correct zone,
-        /// padded 10 % from edges so the needle never touches a boundary.
-        /// </summary>
-        static float ComputeLandingAngle(float chance, bool success)
+        //   • The success wedge is a chance*360° arc CENTERED on the side axis — clock 90°
+        //     (3-o'clock, right) when filling clockwise, clock 270° (9-o'clock, left) when
+        //     counter-clockwise. So it reads as a balanced 12→6 half-side fill that flips
+        //     sides on toggle (see ApplySuccessArcOrientation).
+        //   • ComputeLandingClock returns the clock angle (deg clockwise from 12) of the
+        //     result: inside the centered wedge on success, in its complement on failure
+        //     (10% pad off each edge).
+        //   • The marker rides _needlePivot and ALWAYS spins clockwise (euler-z decreasing).
+        //     Unity UI z-rotation is CCW-positive, so a marker at clock angle φ has euler-z
+        //     = -φ (= LandingMod). The marker reaches it by rotating clockwise only — it
+        //     never spins counter-clockwise — yet stops inside the visible wedge for both
+        //     sides. Success/fail itself is decided upstream (backend/local); direction and
+        //     centering are purely presentational.
+        // VALIDATION (clockwise fill, center 90°):
+        //   chance 0.28 → wedge clock∈[39.6,140.4]; success lands inside, fail outside.
+        //   Reversed fill mirrors the wedge + landing to center 270° (same size, left side).
+        float ComputeLandingClock(float chance, bool success)
         {
-            float successEnd = Mathf.Clamp01(chance) * 360f;
+            float a      = Mathf.Clamp01(chance) * 360f;        // wedge angle
+            float center = _fillClockwise ? 90f : 270f;         // right vs left side
+            float half   = a * 0.5f;
 
             if (success)
             {
-                float pad = successEnd * 0.10f;
-                float lo  = pad;
-                float hi  = successEnd - pad;
-                return hi > lo ? UnityEngine.Random.Range(lo, hi) : successEnd * 0.5f;
+                float pad = half * 0.10f;
+                float lo  = center - half + pad;
+                float hi  = center + half - pad;
+                return hi > lo ? UnityEngine.Random.Range(lo, hi) : center;
             }
             else
             {
-                float failStart = successEnd;
-                float pad       = (360f - failStart) * 0.10f;
-                float lo        = failStart + pad;
-                float hi        = 360f - pad;
-                return hi > lo
-                    ? UnityEngine.Random.Range(lo, hi)
-                    : failStart + (360f - failStart) * 0.5f;
+                float failSpan = 360f - a;
+                float pad      = failSpan * 0.10f;
+                float lo       = center + half + pad;
+                float hi       = center + (360f - half) - pad;
+                return hi > lo ? UnityEngine.Random.Range(lo, hi) : center + 180f;
             }
         }
 

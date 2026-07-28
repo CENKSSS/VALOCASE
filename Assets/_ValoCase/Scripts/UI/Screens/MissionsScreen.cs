@@ -53,7 +53,7 @@ namespace ValoCase.UI.Screens
         float         _cellW;
         float         _cellH;
 
-        const float MsnTopPad     = 136f;
+        const float MsnTopPad     = 100f;
         // Bottom nav clearance is owned by the bounded Screens host, so this is just a
         // small content margin — not a second full navbar reservation.
         const float MsnBotPad     = 24f;
@@ -336,13 +336,13 @@ namespace ValoCase.UI.Screens
             hLine.GetComponent<Image>().raycastTarget = false;
 
             var titleTmp = MakeTmp(hdrGo.transform, "Title", "DAILY MISSIONS",
-                17f, FontStyles.Bold, TextBright);
+                19f, FontStyles.Bold, TextBright);
             titleTmp.characterSpacing = 4f;
             titleTmp.alignment        = TextAlignmentOptions.Center;
             titleTmp.raycastTarget    = false;
             var tRt = titleTmp.rectTransform;
             tRt.anchorMin = Vector2.zero; tRt.anchorMax = Vector2.one;
-            tRt.offsetMin = new Vector2(0f, 22f); tRt.offsetMax = Vector2.zero;
+            tRt.offsetMin = Vector2.zero; tRt.offsetMax = Vector2.zero;
 
 
             // ── Back button ───────────────────────────────────────────────────
@@ -351,13 +351,14 @@ namespace ValoCase.UI.Screens
             bRt.anchorMin        = new Vector2(0f, 1f);
             bRt.anchorMax        = new Vector2(0f, 1f);
             bRt.pivot            = new Vector2(0f, 1f);
-            bRt.anchoredPosition = new Vector2(18f, -72f);
-            bRt.sizeDelta        = new Vector2(80f, 32f);
+            bRt.anchoredPosition = new Vector2(18f, -30f);
+            bRt.sizeDelta        = new Vector2(40f, 40f);
             backGo.GetComponent<Image>().color = new Color(0.031f, 0.055f, 0.102f, 0.97f);
             var bol = backGo.GetComponent<Outline>();
             bol.effectColor    = new Color(1f, 0.122f, 0.224f, 0.80f);
             bol.effectDistance = new Vector2(1.5f, -1.5f);
-            var backLbl = MakeTmp(backGo.transform, "Lbl", "BACK", 11f, FontStyles.Bold, Color.white);
+            var backLbl = MakeTmp(backGo.transform, "Lbl", "", 20f, FontStyles.Bold, Color.white);
+            UIBuild.StyleCircleBack(backGo.GetComponent<Image>(), backLbl, 40f);
             backLbl.alignment     = TextAlignmentOptions.Center;
             backLbl.raycastTarget = false;
             var blRt = backLbl.rectTransform;
@@ -366,6 +367,7 @@ namespace ValoCase.UI.Screens
             var backBtn = backGo.GetComponent<Button>();
             backBtn.transition = Selectable.Transition.None;
             backBtn.onClick.AddListener(Hide);
+            UIBuild.WireButtonClick(backBtn);
 
             // ── ScrollRect + RectMask2D viewport ──────────────────────────────
             var scrollGo = NewGo("Scroll", rt, typeof(ScrollRect), typeof(Image));
@@ -564,6 +566,7 @@ namespace ValoCase.UI.Screens
 
             int cap = index;
             btn.onClick.AddListener(() => OnClaimClicked(cap));
+            UIBuild.WireButtonClick(btn);
 
             _cards[index] = new CardRefs
             {

@@ -81,13 +81,13 @@ namespace ValoCase.Systems
 
             if (caseDef == null || caseCount <= 0)
             {
-                OnBattleFailed?.Invoke("Geçersiz kasa veya round sayısı.");
+                OnBattleFailed?.Invoke("Invalid case or round count.");
                 return false;
             }
 
             if (_vp == null || _rng == null)
             {
-                OnBattleFailed?.Invoke("Servisler hazır değil.");
+                OnBattleFailed?.Invoke("Services not ready.");
                 return false;
             }
 
@@ -95,13 +95,13 @@ namespace ValoCase.Systems
 
             if (!_vp.CanAfford(totalCost))
             {
-                OnBattleFailed?.Invoke($"Yetersiz VP. Gereken: {totalCost}");
+                OnBattleFailed?.Invoke($"Not enough VP. Required: {totalCost}");
                 return false;
             }
 
             if (!_vp.TrySpend(totalCost))
             {
-                OnBattleFailed?.Invoke("VP harcama başarısız.");
+                OnBattleFailed?.Invoke("VP spend failed.");
                 return false;
             }
 

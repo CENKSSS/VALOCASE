@@ -10,31 +10,13 @@ namespace ValoCase.CaseOpening
         public static List<SkinDefinitionSO> BuildReelStrip(CaseDefinitionSO caseDef, SkinDefinitionSO winner, int totalItems, int winnerIndex)
         {
             var strip = new List<SkinDefinitionSO>(totalItems);
-            var drops = caseDef.DropTable.PossibleDrops;
-            var pool = new List<SkinDefinitionSO>();
-            foreach (var d in drops)
-            {
-                if (d.skin != null) pool.Add(d.skin);
-            }
-
+            var pool = BuildPool(caseDef);
             if (pool.Count == 0) pool.Add(winner);
 
-            for (var i = 0; i < totalItems; i++)
-            {
-                if (i == winnerIndex)
-                {
-                    strip.Add(winner);
-                    continue;
-                }
+            var weights = caseDef?.DropTable?.RarityWeights;
 
-                // Bias filler toward common rarities for visual authenticity
-                var roll = Random.value;
-                SkinDefinitionSO pick;
-                if (roll < 0.55f) pick = PickByRarity(pool, SkinRarity.Select) ?? pool[Random.Range(0, pool.Count)];
-                else if (roll < 0.8f) pick = PickByRarity(pool, SkinRarity.Deluxe) ?? pool[Random.Range(0, pool.Count)];
-                else pick = pool[Random.Range(0, pool.Count)];
-                strip.Add(pick);
-            }
+            for (var i = 0; i < totalItems; i++)
+                strip.Add(i == winnerIndex ? winner : PickWeighted(pool, weights));
 
             return strip;
         }
@@ -52,21 +34,60 @@ namespace ValoCase.CaseOpening
             return pool;
         }
 
-        // Picks one filler skin from a prebuilt pool, biased toward common rarities
-        // for the same visual cadence the determined strip uses. Returns null only
-        // when the pool is empty.
-        public static SkinDefinitionSO PickFiller(List<SkinDefinitionSO> pool)
+        // Picks one filler skin from a prebuilt pool. The case's authored rarity weights
+        // drive the distribution so the visual reel matches real drop odds. Returns null
+        // only when the pool is empty.
+        public static SkinDefinitionSO PickFiller(List<SkinDefinitionSO> pool, IReadOnlyList<RarityWeightEntry> rarityWeights)
         {
             if (pool == null || pool.Count == 0) return null;
-            var roll = Random.value;
-            if (roll < 0.55f) return PickByRarity(pool, SkinRarity.Select) ?? pool[Random.Range(0, pool.Count)];
-            if (roll < 0.8f)  return PickByRarity(pool, SkinRarity.Deluxe) ?? pool[Random.Range(0, pool.Count)];
+            return PickWeighted(pool, rarityWeights);
+        }
+
+        // Chooses a rarity by its authored weight (only rarities actually present in the
+        // pool count), then a random skin of that rarity. Without usable weights it falls
+        // back to a uniform pick over the pool. This keeps the reel visual close to the
+        // backend roll odds instead of over-showing rarities that happen to have many
+        // distinct skins (e.g. a ~1% Melee tier no longer floods the strip).
+        static SkinDefinitionSO PickWeighted(List<SkinDefinitionSO> pool, IReadOnlyList<RarityWeightEntry> rarityWeights)
+        {
+            if (pool == null || pool.Count == 0) return null;
+
+            if (rarityWeights != null && rarityWeights.Count > 0)
+            {
+                float total = 0f;
+                foreach (var w in rarityWeights)
+                    if (w != null && w.weightPercent > 0f && HasRarity(pool, w.rarity))
+                        total += w.weightPercent;
+
+                if (total > 0f)
+                {
+                    var r = Random.value * total;
+                    foreach (var w in rarityWeights)
+                    {
+                        if (w == null || w.weightPercent <= 0f || !HasRarity(pool, w.rarity)) continue;
+                        r -= w.weightPercent;
+                        if (r <= 0f)
+                        {
+                            var pick = PickByRarity(pool, w.rarity);
+                            if (pick != null) return pick;
+                        }
+                    }
+                }
+            }
+
             return pool[Random.Range(0, pool.Count)];
+        }
+
+        static bool HasRarity(List<SkinDefinitionSO> pool, SkinRarity rarity)
+        {
+            foreach (var s in pool)
+                if (s != null && s.Rarity == rarity) return true;
+            return false;
         }
 
         static SkinDefinitionSO PickByRarity(List<SkinDefinitionSO> pool, SkinRarity rarity)
         {
-            var matches = pool.FindAll(s => s.Rarity == rarity);
+            var matches = pool.FindAll(s => s != null && s.Rarity == rarity);
             if (matches.Count == 0) return null;
             return matches[Random.Range(0, matches.Count)];
         }

@@ -47,7 +47,7 @@ namespace ValoCase.UI.Screens
         static readonly Color TierGreen  = new Color(0.290f, 0.890f, 0.545f, 1f);
 
         // ── Economy constants ─────────────────────────────────────────────────
-        const float BaseReward      = 1.6f;
+        const float BaseReward      = 3.4f;
         const float MultStep        = 0.02f;
         const float MultMax         = 3.0f;
         const float ComboResetDelay = 3.0f;   // seconds of inactivity before the combo counter resets (visual only)
@@ -1136,16 +1136,16 @@ namespace ValoCase.UI.Screens
             backRt.anchorMax        = new Vector2(0f, 1f);
             backRt.pivot            = new Vector2(0f, 1f);
             backRt.anchoredPosition = new Vector2(28f, -88f);
-            backRt.sizeDelta        = new Vector2(96f, 36f);
+            backRt.sizeDelta        = new Vector2(40f, 40f);
 
             backBtn.GetComponent<Image>().color = BgCard;
             var backOl = backBtn.GetComponent<Outline>();
             backOl.effectColor    = new Color(Accent.r, Accent.g, Accent.b, 0.8f);
             backOl.effectDistance = new Vector2(1.5f, -1.5f);
 
-            var backLbl = CreateTmp(backBtn.transform, "Lbl", "BACK",
-                12f, FontStyles.Bold, TextAlignmentOptions.Center, TextMain);
-            backLbl.characterSpacing = 2f;
+            var backLbl = CreateTmp(backBtn.transform, "Lbl", "",
+                20f, FontStyles.Bold, TextAlignmentOptions.Center, TextMain);
+            UIBuild.StyleCircleBack(backBtn.GetComponent<Image>(), backLbl, 40f);
             var bRt = backLbl.rectTransform;
             bRt.anchorMin = Vector2.zero; bRt.anchorMax = Vector2.one;
             bRt.offsetMin = bRt.offsetMax = Vector2.zero;
@@ -1178,8 +1178,9 @@ namespace ValoCase.UI.Screens
             _adButton = btnGo.GetComponent<Button>();
             _adButton.transition = Selectable.Transition.None;
             _adButton.onClick.AddListener(OnAdBonusClicked);
+            UIBuild.WireButtonClick(_adButton);
 
-            _adTitleLabel = CreateTmp(btnRt, "AdTitle", "REKLAM İZLE → 2X VP",
+            _adTitleLabel = CreateTmp(btnRt, "AdTitle", "WATCH AD → 2X VP",
                 19f, FontStyles.Bold, TextAlignmentOptions.Center, AdGold);
             _adTitleLabel.characterSpacing = 2f;
             var tRt = _adTitleLabel.rectTransform;
@@ -1214,26 +1215,26 @@ namespace ValoCase.UI.Screens
 
             if (_adClaimInFlight)
             {
-                SetAdButtonState(false, AdGold, "REKLAM İZLENİYOR...", "");
+                SetAdButtonState(false, AdGold, "WATCHING AD...", "");
                 return;
             }
             if (_adCooldownRemaining > 0.5f)
             {
-                SetAdButtonState(false, TextSub, "REKLAM İZLE → 2X VP", $"Tekrar: {FormatCooldown(_adCooldownRemaining)}");
+                SetAdButtonState(false, TextSub, "WATCH AD → 2X VP", $"Ready in {FormatCooldown(_adCooldownRemaining)}");
                 return;
             }
             if (IsEarnNoActiveSession(_adUnavailableReason))
             {
-                SetAdButtonState(true, AdGold, "2X BONUS ICIN REKLAM IZLE", "Tap oturumu reklamla baslar");
+                SetAdButtonState(true, AdGold, "WATCH AD FOR 2X BONUS", "Ad starts your tap session");
                 return;
             }
             if (!_adAvailable)
             {
-                SetAdButtonState(false, TextSub, "REKLAM İZLE → 2X VP", AdRewardMessages.MapUnavailable(_adUnavailableReason));
+                SetAdButtonState(false, TextSub, "WATCH AD → 2X VP", AdRewardMessages.MapUnavailable(_adUnavailableReason));
                 return;
             }
 
-            SetAdButtonState(true, AdGold, "REKLAM İZLE → 2X VP", "Tap ödülünü 2x yap");
+            SetAdButtonState(true, AdGold, "WATCH AD → 2X VP", "Double your tap rewards");
         }
 
         void SetAdButtonState(bool interactable, Color titleColor, string title, string sub)
@@ -1344,7 +1345,7 @@ namespace ValoCase.UI.Screens
             {
                 _adClaimInFlight = false;
                 RefreshAdBonusBlock();
-                GameEvents.RaiseToast("GeÃ§ersiz oturum.");
+                GameEvents.RaiseToast("Invalid session.");
                 yield break;
             }
 
@@ -1361,7 +1362,7 @@ namespace ValoCase.UI.Screens
                             ? res.earnVp2xRemainingSeconds
                             : res.cooldownRemainingSeconds;
                         _adCountdownTick = 0f;
-                        if (res.earnVp2xActive) GameEvents.RaiseToast("2X VP bonusu aktif");
+                        if (res.earnVp2xActive) GameEvents.RaiseToast("2X VP bonus active");
                     }
                     RefreshAdBonusBlock();
                     RefreshAdBonusStatus();

@@ -325,138 +325,13 @@ namespace ValoCase.Editor
             return SavePrefab(root, UiCanvasPrefabPath);
         }
 
-        static GameObject BuildMainMenuScreen(RectTransform parent, UINavigator navigator)
+        static void StyleEditorCircleBack(Button btn)
         {
-            var screen = CreateScreenPanel(parent, "MainMenuScreen", ScreenType.MainMenu, out var group);
-            var menu = screen.gameObject.AddComponent<MainMenuScreen>();
-
-            // ── Full-screen cover background ──────────────────────────────────
-            // BgContainer clips overflow so the oversized cover image stays inside.
-            var cGo = new GameObject("BgContainer",
-                typeof(RectTransform), typeof(Image), typeof(RectMask2D));
-            var cRt = cGo.GetComponent<RectTransform>();
-            cRt.SetParent(screen, false);
-            cRt.anchorMin = Vector2.zero;
-            cRt.anchorMax = Vector2.one;
-            cRt.offsetMin = Vector2.zero;
-            cRt.offsetMax = Vector2.zero;
-            cGo.GetComponent<Image>().color = new Color(0, 0, 0, 0);   // transparent mask host
-            cRt.SetSiblingIndex(0);   // ← first child → drawn behind all UI elements
-
-            // BgImage — actual background sprite; AspectRatioFitter provides cover scaling.
-            var bGo = new GameObject("BgImage",
-                typeof(RectTransform), typeof(Image), typeof(AspectRatioFitter));
-            var bRt = bGo.GetComponent<RectTransform>();
-            bRt.SetParent(cRt, false);
-            bRt.anchorMin        = new Vector2(0.5f, 0.5f);
-            bRt.anchorMax        = new Vector2(0.5f, 0.5f);
-            bRt.pivot            = new Vector2(0.5f, 0.5f);
-            bRt.anchoredPosition = Vector2.zero;
-            bRt.sizeDelta        = Vector2.zero;   // fitter controls size
-
-            var bgImg = bGo.GetComponent<Image>();
-            bgImg.color          = Color.white;
-            bgImg.raycastTarget  = false;
-            bgImg.preserveAspect = false;   // AspectRatioFitter handles aspect
-
-            var fitter = bGo.GetComponent<AspectRatioFitter>();
-            fitter.aspectMode  = AspectRatioFitter.AspectMode.EnvelopeParent;
-            fitter.aspectRatio = 16f / 9f;   // placeholder; updated at runtime with actual ratio
-
-            // Add the loader component and wire image + fitter references.
-            var bgLoader = screen.gameObject.AddComponent<FullscreenBackground>();
-            var bgSo = new SerializedObject(bgLoader);
-            bgSo.FindProperty("backgroundImage").objectReferenceValue = bgImg;
-            bgSo.FindProperty("aspectFitter").objectReferenceValue    = fitter;
-            bgSo.ApplyModifiedPropertiesWithoutUndo();
-            // ─────────────────────────────────────────────────────────────────
-
-            // ── Bounded, auto-fitting menu cluster ────────────────────────────
-            // MenuRoot fills the already-safe screen; MenuInner holds the fixed
-            // button layout and is scaled down by ContentScaleFitter so the cluster
-            // can never overflow behind the navbars on short/wide aspect ratios.
-            var menuRoot = CreateRect("MenuRoot", screen, Vector2.zero);
-            StretchFull(menuRoot);
-            DestroyImage(menuRoot);
-
-            var menuInner = CreateRect("MenuInner", menuRoot, new Vector2(560f, 1060f));
-            menuInner.anchorMin        = new Vector2(0.5f, 0.5f);
-            menuInner.anchorMax        = new Vector2(0.5f, 0.5f);
-            menuInner.pivot            = new Vector2(0.5f, 0.5f);
-            menuInner.anchoredPosition = Vector2.zero;
-            menuInner.sizeDelta        = new Vector2(560f, 1060f);
-            DestroyImage(menuInner);
-
-            var menuFitter = menuRoot.gameObject.AddComponent<ContentScaleFitter>();
-            SetField(menuFitter, "content", menuInner);
-
-            var openBtn = CreateMenuButton(menuInner, "OpenCaseButton", "OPEN CASE", AccentRed, new Vector2(0, 120), new Vector2(520, 100));
-            var invBtn = CreateMenuButton(menuInner, "InventoryButton", "INVENTORY", Panel, new Vector2(-140, -40), new Vector2(240, 88));
-            var shopBtn = CreateMenuButton(menuInner, "ShopButton", "SHOP", Panel, new Vector2(140, -40), new Vector2(240, 88));
-            var setBtn = CreateMenuButton(menuInner, "SettingsButton", "SETTINGS", Panel, new Vector2(-140, -150), new Vector2(240, 88));
-            var weaponsBtn = CreateMenuButton(menuInner, "WeaponsButton", "SİLAHLAR", Panel, new Vector2(140, -150), new Vector2(240, 88));
-            // Wide UPGRADE / GAMBLE call-to-action between weapons row and daily.
-            var upgradeBtn = CreateMenuButton(menuInner, "UpgradeButton", "YÜKSELT", NeonPurple, new Vector2(0, -250), new Vector2(520, 76));
-            // Redirects to the new Lobby flow (CaseBattleScreen retired).
-            var battleBtn  = CreateMenuButton(menuInner, "CaseBattleButton", "KASA SAVAŞI", NeonGreen, new Vector2(0, -332), new Vector2(520, 76));
-            var dailyBtn  = CreateMenuButton(menuInner, "DailyButton",  "DAILY REWARD", Panel,    new Vector2(0, -414), new Vector2(320, 64));
-            var earnVpBtn = CreateMenuButton(menuInner, "EarnVpButton", "◆ VP KAZAN",  NeonGold, new Vector2(0, -494), new Vector2(520, 64));
-
-            var player = CreateTmp("PlayerName", screen, "Agent", 22, TextAlignmentOptions.Left);
-            player.rectTransform.anchorMin = new Vector2(0, 1);
-            player.rectTransform.anchorMax = new Vector2(0, 1);
-            player.rectTransform.pivot = new Vector2(0, 1);
-            player.rectTransform.anchoredPosition = new Vector2(32, -32);
-            player.rectTransform.sizeDelta = new Vector2(400, 36);
-
-            var online = CreateTmp("Online", screen, "8,000 agents online", 16, TextAlignmentOptions.Left);
-            online.rectTransform.anchorMin = new Vector2(0, 1);
-            online.rectTransform.anchorMax = new Vector2(0, 1);
-            online.rectTransform.pivot = new Vector2(0, 1);
-            online.rectTransform.anchoredPosition = new Vector2(32, -68);
-            online.rectTransform.sizeDelta = new Vector2(500, 28);
-            online.color = new Color(0.75f, 0.8f, 0.85f);
-
-            var stats = CreateTmp("Stats", screen, "Cases: 0 | Skins: 0", 14, TextAlignmentOptions.Center);
-            StretchBottom(stats, 16, 28);
-
-            var sliderGo = CreateRect("Progress", screen, new Vector2(600, 12));
-            StretchBottom(sliderGo, 52, 12);
-            var slider = sliderGo.gameObject.AddComponent<Slider>();
-            slider.minValue = 0;
-            slider.maxValue = 1;
-            slider.value = 0.35f;
-            var bg = CreateRect("Background", sliderGo, Vector2.zero);
-            StretchFull(bg);
-            GetOrAddImage(bg).color = new Color(0, 0, 0, 0.4f);
-            var fillArea = CreateRect("Fill Area", sliderGo, Vector2.zero);
-            StretchFull(fillArea);
-            var fill = CreateRect("Fill", fillArea, Vector2.zero);
-            StretchFull(fill);
-            GetOrAddImage(fill).color = AccentRed;
-            slider.fillRect = fill;
-            slider.targetGraphic = fill.GetComponent<Image>();
-
-            var so = new SerializedObject(menu);
-            so.FindProperty("openCaseButton").objectReferenceValue = openBtn;
-            so.FindProperty("inventoryButton").objectReferenceValue = invBtn;
-            so.FindProperty("shopButton").objectReferenceValue = shopBtn;
-            so.FindProperty("settingsButton").objectReferenceValue = setBtn;
-            so.FindProperty("weaponsButton").objectReferenceValue = weaponsBtn;
-            so.FindProperty("upgradeButton").objectReferenceValue = upgradeBtn;
-            so.FindProperty("caseBattleButton").objectReferenceValue = battleBtn;
-            so.FindProperty("earnVpButton").objectReferenceValue      = earnVpBtn;
-            so.FindProperty("dailyRewardButton").objectReferenceValue = dailyBtn;
-            so.FindProperty("playerNameLabel").objectReferenceValue = player;
-            so.FindProperty("onlineCountLabel").objectReferenceValue = online;
-            so.FindProperty("statsSummaryLabel").objectReferenceValue = stats;
-            so.FindProperty("progressionBar").objectReferenceValue = slider;
-            so.FindProperty("navigator").objectReferenceValue = navigator;
-            so.FindProperty("canvasGroup").objectReferenceValue = group;
-            so.FindProperty("screenType").enumValueIndex = (int)ScreenType.MainMenu;
-            so.ApplyModifiedPropertiesWithoutUndo();
-
-            return screen.gameObject;
+            var img = btn != null ? btn.GetComponent<Image>() : null;
+            if (img == null) return;
+            img.sprite         = AssetDatabase.GetBuiltinExtraResource<Sprite>("UI/Skin/Knob.psd");
+            img.type           = Image.Type.Simple;
+            img.preserveAspect = true;
         }
 
         static RectTransform BuildSimpleScreen<T>(RectTransform parent, string name, ScreenType type, UINavigator navigator, string title)
@@ -467,7 +342,8 @@ namespace ValoCase.Editor
             var header = CreateTmp("Title", screen, title, 36, TextAlignmentOptions.Center);
             ApplyTitleGlow(header, NeonCyan);
             StretchTop(header, 40, 80);
-            var back = CreateMenuButton(screen, "Back", "BACK", Panel, new Vector2(0, -80), new Vector2(200, 72));
+            var back = CreateMenuButton(screen, "Back", "<", Panel, new Vector2(0, -80), new Vector2(56, 56));
+            StyleEditorCircleBack(back);
             var backRt = back.GetComponent<RectTransform>();
             backRt.anchorMin = new Vector2(0.5f, 0);
             backRt.anchorMax = new Vector2(0.5f, 0);
@@ -494,7 +370,8 @@ namespace ValoCase.Editor
             StretchTop(topBar, 0, 72);
             topBar.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0.35f);
 
-            var back = CreateMenuButton(topBar, "Back", "← GERİ", AccentRed, Vector2.zero, new Vector2(160, 52));
+            var back = CreateMenuButton(topBar, "Back", "<", AccentRed, Vector2.zero, new Vector2(52, 52));
+            StyleEditorCircleBack(back);
             var backRt = back.GetComponent<RectTransform>();
             backRt.anchorMin = new Vector2(0, 0.5f);
             backRt.anchorMax = new Vector2(0, 0.5f);
@@ -581,8 +458,9 @@ namespace ValoCase.Editor
             StretchTop(topBar, 0, topBarH);
             topBar.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0.40f);
 
-            var back = CreateMenuButton(topBar, "Back", "← GERİ", AccentRed,
-                Vector2.zero, new Vector2(160, 52));
+            var back = CreateMenuButton(topBar, "Back", "<", AccentRed,
+                Vector2.zero, new Vector2(52, 52));
+            StyleEditorCircleBack(back);
             var backRt = back.GetComponent<RectTransform>();
             backRt.anchorMin        = new Vector2(0, 0.5f);
             backRt.anchorMax        = new Vector2(0, 0.5f);
@@ -646,14 +524,6 @@ namespace ValoCase.Editor
 
             Debug.Log("[MARKET] MarketScreen built by builder");
             return screen;
-        }
-
-        static void WireMainMenu(GameObject main, UINavigator navigator, DailyRewardPopup daily)
-        {
-            var menu = main.GetComponent<MainMenuScreen>();
-            var so = new SerializedObject(menu);
-            so.FindProperty("dailyRewardPopup").objectReferenceValue = daily;
-            so.ApplyModifiedPropertiesWithoutUndo();
         }
 
         static void WireNavigator(UINavigator navigator, params GameObject[] screens)

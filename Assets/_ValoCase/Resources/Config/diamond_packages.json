@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "packages": [
+    {
+      "packageId": "diamonds_100",
+      "amount": 100,
+      "tier": "STARTER",
+      "priceDisplay": "$0.99",
+      "enabled": true
+    },
+    {
+      "packageId": "diamonds_550",
+      "amount": 550,
+      "tier": "POPULAR",
+      "priceDisplay": "$4.99",
+      "enabled": true
+    },
+    {
+      "packageId": "diamonds_1200",
+      "amount": 1200,
+      "tier": "PRO",
+      "priceDisplay": "$9.99",
+      "enabled": true
+    },
+    {
+      "packageId": "diamonds_2500",
+      "amount": 2500,
+      "tier": "BEST VALUE",
+      "priceDisplay": "$19.99",
+      "enabled": true
+    }
+  ]
+}

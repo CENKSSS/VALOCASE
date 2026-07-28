@@ -3,6 +3,7 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
+using ValoCase.Audio;
 using ValoCase.Core;
 using ValoCase.Profile;
 
@@ -44,6 +45,11 @@ namespace ValoCase.UI.Screens
         Outline         _saveBtnOl;
         TextMeshProUGUI _saveBtnLbl;
 
+        // ── Sound mute toggle ─────────────────────────────────────────────────
+        Image           _soundBtnImg;
+        Outline         _soundBtnOl;
+        TextMeshProUGUI _soundBtnLbl;
+
         // ── Palette ───────────────────────────────────────────────────────────
         static readonly Color BgPanel       = new Color(0.031f, 0.055f, 0.102f, 0.97f);
         static readonly Color BgCard        = new Color(0.043f, 0.055f, 0.086f, 1.00f);
@@ -70,7 +76,7 @@ namespace ValoCase.UI.Screens
         {
             if (backButton != null) backButton.gameObject.SetActive(false);
 
-            var previousScreen = (navigator != null) ? navigator.PreviousScreen : ScreenType.MainMenu;
+            var previousScreen = (navigator != null) ? navigator.PreviousScreen : ScreenType.Shop;
             Debug.Log("[SETTINGS] Opened from: " + previousScreen);
 
             // Legacy name input — restore from save data
@@ -84,6 +90,7 @@ namespace ValoCase.UI.Screens
             ProfileManager.EnsureInitialized();
             BuildProfileSectionOnce();
             RefreshProfileSection();
+            RefreshSoundToggle();
 
             // Reset dirty state each time the screen opens — SAVE starts active
             _hasUnsavedChanges = true;
@@ -105,7 +112,7 @@ namespace ValoCase.UI.Screens
         {
             var dest = (navigator != null && navigator.PreviousScreen != ScreenType.Settings)
                 ? navigator.PreviousScreen
-                : ScreenType.MainMenu;
+                : ScreenType.Shop;
             Debug.Log("[SETTINGS] Exit returning to: " + dest);
             navigator?.Navigate(dest);
         }
@@ -240,6 +247,13 @@ namespace ValoCase.UI.Screens
             // ── Avatar grid ───────────────────────────────────────────────────
             BuildAvatarGrid(cRt.transform);
 
+            // ── Sound mute/unmute toggle (below avatars, above actions) ───────
+            BuildSoundToggle(cRt.transform);
+
+            // ── Legal disclaimer / IP notice (opens on demand, no state) ──────
+            BuildLegalButton(cRt.transform);
+            BuildPrivacyPolicyButton(cRt.transform);
+
             var sp1 = new GameObject("Sp1", typeof(RectTransform), typeof(LayoutElement));
             sp1.transform.SetParent(cRt.transform, false);
             sp1.GetComponent<LayoutElement>().minHeight = 8f;
@@ -276,8 +290,61 @@ namespace ValoCase.UI.Screens
             playerNameInput = _displayNameInput;
         }
 
+        // ── Sound mute toggle (full-width, persists via SoundManager) ─────────
+        void BuildSoundToggle(Transform parent)
+        {
+            var btn = BuildActionButton(parent, "SOUND", AccentPink, clickSound: false);
+            btn.gameObject.AddComponent<ClickSoundMarker>();   // toggle plays its own click; block generic wiring
+            btn.GetComponent<LayoutElement>().minHeight = 44f;
+            _soundBtnImg = btn.GetComponent<Image>();
+            _soundBtnOl  = btn.GetComponent<Outline>();
+            _soundBtnLbl = btn.GetComponentInChildren<TextMeshProUGUI>();
+            btn.onClick.AddListener(OnSoundToggleClicked);
+            RefreshSoundToggle();
+        }
+
+        void OnSoundToggleClicked()
+        {
+            var sm = SoundManager.Instance;
+            if (sm != null)
+            {
+                bool willMute = !sm.Muted;
+                if (willMute) sm.PlayButtonClick();   // audible feedback before going silent
+                sm.ToggleMute();
+                if (!willMute) sm.PlayButtonClick();   // audible feedback once unmuted
+            }
+            RefreshSoundToggle();
+        }
+
+        void RefreshSoundToggle()
+        {
+            bool muted = SoundManager.Instance?.Muted ?? false;
+            Color tint = muted ? TextDim : AccentPink;
+            if (_soundBtnLbl != null) _soundBtnLbl.text  = muted ? "SOUND: OFF" : "SOUND: ON";
+            if (_soundBtnLbl != null) _soundBtnLbl.color = tint;
+            if (_soundBtnOl  != null) _soundBtnOl.effectColor = tint;
+        }
+
+        // ── Legal disclaimer button ────────────────────────────────────────────
+        void BuildLegalButton(Transform parent)
+        {
+            var btn = BuildActionButton(parent, "LEGAL DISCLAIMER", TextDim);
+            btn.GetComponent<LayoutElement>().minHeight = 40f;
+            btn.onClick.AddListener(() => LegalDisclaimerPopup.Show((RectTransform)transform));
+        }
+
+        // ── Privacy policy button — opens the hosted policy page externally ───
+        const string PrivacyPolicyUrl = "https://cenksss.github.io/valocase-privacy/";
+
+        void BuildPrivacyPolicyButton(Transform parent)
+        {
+            var btn = BuildActionButton(parent, "PRIVACY POLICY", TextDim);
+            btn.GetComponent<LayoutElement>().minHeight = 40f;
+            btn.onClick.AddListener(() => Application.OpenURL(PrivacyPolicyUrl));
+        }
+
         // ── Full-width action button (LayoutGroup driven) ─────────────────────
-        Button BuildActionButton(Transform parent, string label, Color tint)
+        Button BuildActionButton(Transform parent, string label, Color tint, bool clickSound = true)
         {
             var btnGo = new GameObject($"Btn_{label}",
                 typeof(RectTransform), typeof(Image), typeof(Button),
@@ -296,6 +363,7 @@ namespace ValoCase.UI.Screens
 
             var btn = btnGo.GetComponent<Button>();
             btn.transition = Selectable.Transition.None;
+            if (clickSound) UIBuild.WireButtonClick(btn);
 
             var et = btnGo.AddComponent<EventTrigger>();
             AddPE(et, EventTriggerType.PointerEnter,
@@ -482,6 +550,7 @@ namespace ValoCase.UI.Screens
             string capN = agentName; Sprite capSp = sprite;
             var btn = cell.gameObject.AddComponent<Button>();
             btn.transition = Selectable.Transition.None;
+            UIBuild.WireButtonClick(btn);
             btn.onClick.AddListener(() => OnCellClicked(capN, capSp));
         }
 

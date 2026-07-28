@@ -15,7 +15,7 @@ namespace ValoCase.EditorTools
         const string CaseArtDir = "Assets/_ValoCase/Resources/Art/Cases";
         const string CaseArtResourcePrefix = "Art/Cases/";
 
-        static readonly string[] RarityOrder = { "Select", "Deluxe", "Premium", "Exclusive", "Ultra", "Melee" };
+        static readonly string[] RarityOrder = { "Charm", "Select", "Deluxe", "Premium", "Exclusive", "Ultra", "Melee" };
 
         sealed class SkinRow
         {
@@ -38,8 +38,10 @@ namespace ValoCase.EditorTools
         string _caseSearch = "";
         string _poolSearch = "";
         int _poolWeaponIdx, _poolRarityIdx;
+        int _poolListWeaponIdx, _poolListRarityIdx;
         string _selectedCatalogSkin;
         readonly HashSet<string> _checkedCatalogSkins = new(StringComparer.Ordinal);
+        readonly HashSet<string> _checkedPoolSkins = new(StringComparer.Ordinal);
         int _selectedPoolIdx = -1;
 
         int _randWeaponIdx;
@@ -465,13 +467,34 @@ namespace ValoCase.EditorTools
         {
             using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
-                EditorGUILayout.LabelField($"Current Pool ({c.manualDropPool.Length})", EditorStyles.miniBoldLabel);
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    EditorGUILayout.LabelField($"Current Pool ({c.manualDropPool.Length})", EditorStyles.miniBoldLabel);
+                    EditorGUILayout.LabelField($"Selected: {_checkedPoolSkins.Count}", EditorStyles.miniBoldLabel, GUILayout.Width(90));
+                }
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    _poolListWeaponIdx = EditorGUILayout.Popup(_poolListWeaponIdx, _weaponOptions, GUILayout.Width(110));
+                    _poolListRarityIdx = EditorGUILayout.Popup(_poolListRarityIdx, _rarityFilterOptions, GUILayout.Width(100));
+                }
+
+                var visible = new HashSet<string>(StringComparer.Ordinal);
                 _poolScroll = EditorGUILayout.BeginScrollView(_poolScroll, GUILayout.Height(220));
                 for (int i = 0; i < c.manualDropPool.Length; i++)
                 {
                     var id = c.manualDropPool[i];
+                    if (!PoolItemMatches(id, _poolListWeaponIdx, _poolListRarityIdx)) continue;
+                    visible.Add(id);
                     using (new EditorGUILayout.HorizontalScope())
                     {
+                        bool wasChecked = _checkedPoolSkins.Contains(id);
+                        bool nowChecked = EditorGUILayout.Toggle(wasChecked, GUILayout.Width(18));
+                        if (nowChecked != wasChecked)
+                        {
+                            if (nowChecked) _checkedPoolSkins.Add(id);
+                            else _checkedPoolSkins.Remove(id);
+                        }
+
                         bool known = _skinById.TryGetValue(id, out var s);
                         var label = known ? $"{s.displayName} [{s.rarity} {s.vpValue}]" : $"{id}  (MISSING)";
                         var style = i == _selectedPoolIdx ? EditorStyles.boldLabel : (known ? EditorStyles.label : EditorStyles.miniBoldLabel);
@@ -480,7 +503,28 @@ namespace ValoCase.EditorTools
                     }
                 }
                 EditorGUILayout.EndScrollView();
+
+                int visibleChecked = _checkedPoolSkins.Count(visible.Contains);
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    using (new EditorGUI.DisabledScope(visibleChecked == 0))
+                        if (GUILayout.Button($"Remove Selected → ({visibleChecked})"))
+                            RemoveCheckedFromPool(c, visible);
+                    if (GUILayout.Button("Deselect All", GUILayout.Width(100)))
+                        _checkedPoolSkins.Clear();
+                }
             }
+        }
+
+        bool PoolItemMatches(string id, int weaponIdx, int rarityIdx)
+        {
+            string weapon = weaponIdx > 0 ? _weaponOptions[weaponIdx] : null;
+            string rarity = rarityIdx > 0 ? _rarityFilterOptions[rarityIdx] : null;
+            if (weapon == null && rarity == null) return true;
+            if (!_skinById.TryGetValue(id, out var s)) return false;
+            if (weapon != null && !string.Equals(s.weapon, weapon, StringComparison.OrdinalIgnoreCase)) return false;
+            if (rarity != null && s.rarity != rarity) return false;
+            return true;
         }
 
         void DrawRandomTools(CaseCatalogEntry c)
@@ -502,7 +546,7 @@ namespace ValoCase.EditorTools
                 using (new EditorGUILayout.HorizontalScope())
                 {
                     if (GUILayout.Button("Generate Random Pool")) GenerateRandomPool(c);
-                    if (GUILayout.Button("Clear Pool")) { c.manualDropPool = Array.Empty<string>(); _selectedPoolIdx = -1; _dirty = true; }
+                    if (GUILayout.Button("Clear Pool")) { c.manualDropPool = Array.Empty<string>(); _checkedPoolSkins.Clear(); _selectedPoolIdx = -1; _dirty = true; }
                     if (GUILayout.Button("Validate Pool")) ReportPoolValidation(c);
                 }
             }
@@ -550,8 +594,20 @@ namespace ValoCase.EditorTools
         void RemoveFromPool(CaseCatalogEntry c, string skinId)
         {
             c.manualDropPool = c.manualDropPool.Where(x => x != skinId).ToArray();
+            _checkedPoolSkins.Remove(skinId);
             _selectedPoolIdx = -1;
             _dirty = true;
+        }
+
+        void RemoveCheckedFromPool(CaseCatalogEntry c, HashSet<string> visibleIds)
+        {
+            var toRemove = _checkedPoolSkins.Where(visibleIds.Contains).ToHashSet();
+            if (toRemove.Count == 0) return;
+            c.manualDropPool = c.manualDropPool.Where(id => !toRemove.Contains(id)).ToArray();
+            foreach (var id in toRemove) _checkedPoolSkins.Remove(id);
+            _selectedPoolIdx = -1;
+            _dirty = true;
+            ShowNotification(new GUIContent($"Removed {toRemove.Count} skin(s)"));
         }
 
         void GenerateRandomPool(CaseCatalogEntry c)

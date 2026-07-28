@@ -27,7 +27,9 @@ namespace ValoCase.UI
 
         void Awake()
         {
-            if (button != null) button.onClick.AddListener(() => _onClick?.Invoke(this));
+            if (button == null) return;
+            UIBuild.WireButtonClick(button);
+            button.onClick.AddListener(() => _onClick?.Invoke(this));
         }
 
         public void Bind(OwnedSkinSaveEntry entry, SkinDefinitionSO skin, RarityVisualSO visuals,
@@ -44,6 +46,7 @@ namespace ValoCase.UI
                 icon.sprite = skin.Icon;
                 icon.enabled = skin.Icon != null;
                 icon.preserveAspect = true;
+                ApplyThumbnailScale(icon);
             }
 
             if (title != null) title.text = skin.SkinName;
@@ -90,6 +93,23 @@ namespace ValoCase.UI
                 if (outline != null)
                     outline.effectColor = new Color(v.primaryColor.r, v.primaryColor.g, v.primaryColor.b, 0.75f);
             }
+        }
+
+        // preserveAspect fits each weapon by its own crop, so short sprites (pistols)
+        // read oversized and long sprites (rifles) collapse. Scale the icon by sprite
+        // aspect to even out visual mass; bounded to [0.85, 1.15], reset to 1 when the
+        // sprite is missing. Recomputed on every Bind so pooled reuse never keeps a
+        // stale scale. Mirrors the Upgrade-screen normalization.
+        static void ApplyThumbnailScale(Image icon)
+        {
+            float scale = 1f;
+            var sprite = icon.sprite;
+            if (icon.enabled && sprite != null && sprite.rect.height > 0f)
+            {
+                float t = Mathf.InverseLerp(1.5f, 4.3f, sprite.rect.width / sprite.rect.height);
+                scale = Mathf.Lerp(0.85f, 1.15f, t);
+            }
+            icon.rectTransform.localScale = new Vector3(scale, scale, 1f);
         }
 
         public void OnSpawned() { }

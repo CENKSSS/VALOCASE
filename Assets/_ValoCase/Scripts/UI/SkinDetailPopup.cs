@@ -28,6 +28,16 @@ namespace ValoCase.UI
         {
             if (sellButton != null) sellButton.onClick.AddListener(Sell);
             if (closeButton != null) closeButton.onClick.AddListener(Hide);
+            UIBuild.WireButtonClick(sellButton);
+            UIBuild.WireButtonClick(closeButton);
+
+            var cardImg = (root != null ? root : gameObject).GetComponent<Image>();
+            if (cardImg != null) cardImg.color = new Color(0.015f, 0.03f, 0.05f, 0.98f);
+
+            if (icon != null) icon.rectTransform.anchoredPosition += new Vector2(0f, -46f);
+            if (description != null) description.rectTransform.anchoredPosition += new Vector2(0f, -32f);
+            if (quantity != null) quantity.fontSize = 18f;
+            if (vpValue != null) vpValue.fontSize = 18f;
             // Do not Hide() here: this component lives on the toggled root, so Awake runs
             // during the first Show()'s SetActive(true) and would re-hide the popup.
         }

@@ -30,11 +30,14 @@ namespace ValoCase.UI
         static readonly Color TextBright = new Color(0.925f, 0.910f, 0.882f, 1f);    // #ECE8E1
         static readonly Color XpGreen    = new Color(0.290f, 0.831f, 0.392f, 1f);    // progress fill
         static readonly Color XpTrack    = new Color(1f, 1f, 1f, 0.12f);             // bar background
+        static readonly Color ChipBg      = new Color(0.055f, 0.078f, 0.118f, 1f);   // diamond chip fill
+        static readonly Color ChipBorder  = new Color(0.302f, 0.851f, 1f, 0.45f);    // diamond chip edge
 
         // ── Runtime UI refs ───────────────────────────────────────────────────
         Image           _avatarImg;
         TextMeshProUGUI _usernameLabel;
         TextMeshProUGUI _vpLabel;
+        TextMeshProUGUI _diamondLabel;
         TextMeshProUGUI _levelLabel;
         TextMeshProUGUI _xpLabel;
         RectTransform   _xpFill;
@@ -65,6 +68,7 @@ namespace ValoCase.UI
 
             SyncProfile();
             SyncVp();
+            SyncDiamonds();
             SyncProgression();
         }
 
@@ -73,6 +77,7 @@ namespace ValoCase.UI
             Debug.Log("[TOP_BAR_DEBUG] OnEnable");
             PlayerProfileData.OnProfileChanged += OnProfileChanged;
             GameEvents.OnVpChanged             += OnVpChanged;
+            GameEvents.OnDiamondChanged        += OnDiamondChanged;
             PlayerProgression.OnChanged        += SyncProgression;
         }
 
@@ -80,6 +85,7 @@ namespace ValoCase.UI
         {
             PlayerProfileData.OnProfileChanged -= OnProfileChanged;
             GameEvents.OnVpChanged             -= OnVpChanged;
+            GameEvents.OnDiamondChanged        -= OnDiamondChanged;
             PlayerProgression.OnChanged        -= SyncProgression;
         }
 
@@ -94,6 +100,11 @@ namespace ValoCase.UI
         {
             SyncVp();
             Debug.Log("[TOP_BAR] VP updated");
+        }
+
+        void OnDiamondChanged(int current)
+        {
+            SyncDiamonds();
         }
 
         void OnGearClicked()
@@ -130,22 +141,36 @@ namespace ValoCase.UI
             _vpLabel.text = FormatVp(bal);
         }
 
+        void SyncDiamonds()
+        {
+            if (_diamondLabel == null) return;
+            _diamondLabel.text = $"{GameContext.Instance?.DiamondBalance ?? 0:N0}";
+        }
+
         // Updates the level label, XP text, and green bar fill from the cached
         // backend progression. Safe before any backend data arrives (defaults Lv. 1, 0/20).
         void SyncProgression()
         {
             int lvl = PlayerProgression.Level;
-            int cur = PlayerProgression.CurrentLevelXp;
-            int req = PlayerProgression.XpRequiredForNextLevel > 0
-                ? PlayerProgression.XpRequiredForNextLevel
-                : PlayerProgression.DefaultXpPerLevel;
 
             if (_levelLabel != null) _levelLabel.text = $"Lv. {lvl}";
-            if (_xpLabel != null)    _xpLabel.text    = $"{cur}/{req}";
-            if (_xpFill != null)     _xpFill.anchorMax = new Vector2(PlayerProgression.Fill01, 1f);
+            if (_xpLabel != null)
+            {
+                if (PlayerProgression.IsMaxLevel) _xpLabel.text = "MAX";
+                else
+                {
+                    int cur = PlayerProgression.CurrentLevelXp;
+                    int req = PlayerProgression.XpRequiredForNextLevel > 0
+                        ? PlayerProgression.XpRequiredForNextLevel
+                        : PlayerProgression.DefaultXpPerLevel;
+                    _xpLabel.text = $"{cur}/{req}";
+                }
+            }
+            if (_xpFill != null) _xpFill.anchorMax = new Vector2(PlayerProgression.Fill01, 1f);
         }
 
-        static string FormatVp(int amount) => $"{amount:N0} VP";
+        // Amount only — the "VP" unit is a sibling label next to the coin symbol.
+        static string FormatVp(int amount) => $"{amount:N0}";
 
         /// <summary>Fixed bar height — shared content root insets by this. Single source of truth.</summary>
         public const float Height = 112f;
@@ -186,8 +211,8 @@ namespace ValoCase.UI
             AddCornerMark(panel, top: false, left: true);
             AddCornerMark(panel, top: false, left: false);
 
-            // ── Circular avatar (44 px, masked) ───────────────────────────────
-            var circleSpr = MakeCircleSprite(64);
+            // ── Circular avatar (96 px, masked) ───────────────────────────────
+            var circleSpr = MakeCircleSprite(128);
 
             var maskGo = new GameObject("AvMask",
                 typeof(RectTransform), typeof(Image), typeof(Mask));
@@ -197,7 +222,7 @@ namespace ValoCase.UI
             maskRt.anchorMax        = new Vector2(0f, 0.5f);
             maskRt.pivot            = new Vector2(0f, 0.5f);
             maskRt.anchoredPosition = new Vector2(14f, 0f);
-            maskRt.sizeDelta        = new Vector2(64f, 64f);
+            maskRt.sizeDelta        = new Vector2(96f, 96f);
             var maskImg = maskGo.GetComponent<Image>();
             maskImg.sprite        = circleSpr;
             maskImg.type          = Image.Type.Simple;
@@ -224,14 +249,14 @@ namespace ValoCase.UI
             ringRt.anchorMax        = new Vector2(0f, 0.5f);
             ringRt.pivot            = new Vector2(0f, 0.5f);
             ringRt.anchoredPosition = new Vector2(14f, 0f);
-            ringRt.sizeDelta        = new Vector2(64f, 64f);
+            ringRt.sizeDelta        = new Vector2(96f, 96f);
             var ringImg = ringGo.GetComponent<Image>();
             ringImg.sprite        = circleSpr;
             ringImg.color         = new Color(0f, 0f, 0f, 0f);   // transparent fill
             ringImg.raycastTarget = false;
             var ringOl = ringGo.GetComponent<Outline>();
             ringOl.effectColor    = new Color(1f, 0.122f, 0.224f, 0.50f);
-            ringOl.effectDistance = new Vector2(1.5f, -1.5f);
+            ringOl.effectDistance = new Vector2(2.25f, -2.25f);
 
             // ── Username + Level column (left side) ───────────────────────────
             var colGo = new GameObject("NameCol", typeof(RectTransform));
@@ -240,33 +265,33 @@ namespace ValoCase.UI
             colRt.anchorMin        = new Vector2(0f, 0.5f);
             colRt.anchorMax        = new Vector2(0f, 0.5f);
             colRt.pivot            = new Vector2(0f, 0.5f);
-            colRt.anchoredPosition = new Vector2(88f, 0f);   // 14 pad + 64 avatar + 10 gap
-            colRt.sizeDelta        = new Vector2(240f, 64f);
+            colRt.anchoredPosition = new Vector2(120f, 0f);  // 14 pad + 96 avatar + 10 gap
+            colRt.sizeDelta        = new Vector2(360f, 96f);
 
             var vlg = colGo.AddComponent<VerticalLayoutGroup>();
             vlg.childAlignment         = TextAnchor.MiddleLeft;
-            vlg.spacing                = 2f;
+            vlg.spacing                = 3f;
             vlg.childForceExpandWidth  = true;
             vlg.childForceExpandHeight = false;
-            vlg.padding = new RectOffset(0, 0, 5, 5);
+            vlg.padding = new RectOffset(0, 0, 7, 7);
 
-            _usernameLabel              = MakeTmp(colGo.transform, "Username", "AGENT", 18f, TextBright);
+            _usernameLabel              = MakeTmp(colGo.transform, "Username", "AGENT", 27f, TextBright);
             _usernameLabel.fontStyle    = FontStyles.Bold;
             _usernameLabel.raycastTarget = false;
-            _usernameLabel.gameObject.AddComponent<LayoutElement>().minHeight = 22f;
+            _usernameLabel.gameObject.AddComponent<LayoutElement>().minHeight = 33f;
 
-            _levelLabel              = MakeTmp(colGo.transform, "Level", "Lv. 1", 13f, DimWhite);
+            _levelLabel              = MakeTmp(colGo.transform, "Level", "Lv. 1", 19.5f, DimWhite);
             _levelLabel.fontStyle    = FontStyles.Bold;
             _levelLabel.raycastTarget = false;
-            _levelLabel.gameObject.AddComponent<LayoutElement>().minHeight = 16f;
+            _levelLabel.gameObject.AddComponent<LayoutElement>().minHeight = 24f;
 
             // ── Level XP bar (green fill + centered XP text) ──────────────────
             var barGo = new GameObject("XpBar", typeof(RectTransform), typeof(Image));
             barGo.transform.SetParent(colGo.transform, false);
             var barLe = barGo.AddComponent<LayoutElement>();
-            barLe.minHeight       = 11f;
-            barLe.preferredHeight = 11f;
-            barLe.preferredWidth  = 205f;
+            barLe.minHeight       = 16.5f;
+            barLe.preferredHeight = 16.5f;
+            barLe.preferredWidth  = 307.5f;
             var barImg = barGo.GetComponent<Image>();
             barImg.color         = XpTrack;
             barImg.raycastTarget = false;
@@ -283,7 +308,7 @@ namespace ValoCase.UI
             fillImg.color         = XpGreen;
             fillImg.raycastTarget = false;
 
-            _xpLabel              = MakeTmp(barGo.transform, "XpText", "0/20", 10f, TextBright);
+            _xpLabel              = MakeTmp(barGo.transform, "XpText", "0/20", 15f, TextBright);
             _xpLabel.alignment    = TextAlignmentOptions.Center;
             _xpLabel.fontStyle    = FontStyles.Bold;
             _xpLabel.raycastTarget = false;
@@ -299,33 +324,121 @@ namespace ValoCase.UI
             gearRt.anchorMin        = new Vector2(1f, 0.5f);
             gearRt.anchorMax        = new Vector2(1f, 0.5f);
             gearRt.pivot            = new Vector2(1f, 0.5f);
-            gearRt.anchoredPosition = new Vector2(-10f, 0f);
-            gearRt.sizeDelta        = new Vector2(64f, 64f);
+            gearRt.anchoredPosition = new Vector2(-8f, 0f);
+            gearRt.sizeDelta        = new Vector2(72f, 72f);
             var gearBg = gearGo.GetComponent<Image>();
             gearBg.color = new Color(0f, 0f, 0f, 0f);
             var gearBtn = gearGo.GetComponent<Button>();
             gearBtn.transition = Selectable.Transition.None;
             gearBtn.onClick.AddListener(OnGearClicked);
+            UIBuild.WireButtonClick(gearBtn);
 
-            BuildGearIcon(gearGo.transform, 38f);
+            BuildGearIcon(gearGo.transform, 48f);
 
-            // ── VP balance label (right of gear) ──────────────────────────────
-            var vpGo = new GameObject("VpRow", typeof(RectTransform));
-            vpGo.transform.SetParent(panel, false);
-            var vpRt = (RectTransform)vpGo.transform;
-            vpRt.anchorMin        = new Vector2(1f, 0.5f);
-            vpRt.anchorMax        = new Vector2(1f, 0.5f);
-            vpRt.pivot            = new Vector2(1f, 0.5f);
-            vpRt.anchoredPosition = new Vector2(-82f, 0f);
-            vpRt.sizeDelta        = new Vector2(220f, 40f);
+            // ── Currency row (right of gear): diamond chip + VP ───────────────
+            var rowGo = new GameObject("CurrencyRow",
+                typeof(RectTransform), typeof(HorizontalLayoutGroup), typeof(ContentSizeFitter));
+            rowGo.transform.SetParent(panel, false);
+            var rowRt = (RectTransform)rowGo.transform;
+            rowRt.anchorMin        = new Vector2(1f, 0.5f);
+            rowRt.anchorMax        = new Vector2(1f, 0.5f);
+            rowRt.pivot            = new Vector2(1f, 0.5f);
+            rowRt.anchoredPosition = new Vector2(-82f, 0f);
+            rowRt.sizeDelta        = new Vector2(0f, 66f);
 
-            _vpLabel              = MakeTmp(vpGo.transform, "VpLbl", "0 VP", 18f, TextBright);
-            _vpLabel.alignment    = TextAlignmentOptions.Right;
-            _vpLabel.fontStyle    = FontStyles.Bold;
+            var rowHlg = rowGo.GetComponent<HorizontalLayoutGroup>();
+            rowHlg.childAlignment         = TextAnchor.MiddleRight;
+            rowHlg.spacing                = 15f;
+            rowHlg.childControlWidth      = true;
+            rowHlg.childControlHeight     = true;
+            rowHlg.childForceExpandWidth  = false;
+            rowHlg.childForceExpandHeight = false;
+            rowGo.GetComponent<ContentSizeFitter>().horizontalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+            BuildDiamondChip(rowGo.transform);   // left: premium currency
+
+            BuildVpGroup(rowGo.transform);       // right: amount, coin symbol, "VP"
+        }
+
+        // VP readout laid out as: <amount> <coin symbol> VP — the symbol sits between the
+        // balance and the unit label, so each piece keeps its own tight spacing.
+        void BuildVpGroup(Transform parent)
+        {
+            var vpGo = new GameObject("VpGroup",
+                typeof(RectTransform), typeof(HorizontalLayoutGroup), typeof(LayoutElement));
+            vpGo.transform.SetParent(parent, false);
+
+            var vpLe = vpGo.GetComponent<LayoutElement>();
+            vpLe.minHeight       = 60f;
+            vpLe.preferredHeight = 60f;
+
+            var vpHlg = vpGo.GetComponent<HorizontalLayoutGroup>();
+            vpHlg.spacing                = 9f;
+            vpHlg.childAlignment         = TextAnchor.MiddleRight;
+            vpHlg.childControlWidth      = true;
+            vpHlg.childControlHeight     = true;
+            vpHlg.childForceExpandWidth  = false;
+            vpHlg.childForceExpandHeight = false;
+
+            _vpLabel               = MakeTmp(vpGo.transform, "VpAmount", "0", 27f, TextBright);
+            _vpLabel.alignment     = TextAlignmentOptions.Right;
+            _vpLabel.fontStyle     = FontStyles.Bold;
             _vpLabel.raycastTarget = false;
-            var vpLblRt = _vpLabel.rectTransform;
-            vpLblRt.anchorMin = Vector2.zero; vpLblRt.anchorMax = Vector2.one;
-            vpLblRt.offsetMin = Vector2.zero; vpLblRt.offsetMax = Vector2.zero;
+
+            var coinRt = UIBuild.MakeVpIcon(vpGo.transform, 60f);
+            var coinLe = coinRt.gameObject.AddComponent<LayoutElement>();
+            coinLe.preferredWidth  = 60f;
+            coinLe.preferredHeight = 60f;
+
+            var vpUnit           = MakeTmp(vpGo.transform, "VpUnit", "VP", 27f, TextBright);
+            vpUnit.alignment     = TextAlignmentOptions.Left;
+            vpUnit.fontStyle     = FontStyles.Bold;
+            vpUnit.raycastTarget = false;
+        }
+
+        // Compact premium-currency chip: dark box, faint cyan edge, diamond glyph + count.
+        // Border is a separate inset fill layer (not an Outline effect) — Outline on a
+        // solid-filled Image is unreliable at small sizes and can lose an edge.
+        void BuildDiamondChip(Transform parent)
+        {
+            var chipGo = new GameObject("DiamondChip",
+                typeof(RectTransform), typeof(Image),
+                typeof(HorizontalLayoutGroup), typeof(LayoutElement));
+            chipGo.transform.SetParent(parent, false);
+
+            chipGo.GetComponent<Image>().color = ChipBorder;
+
+            var chipLe = chipGo.GetComponent<LayoutElement>();
+            chipLe.minHeight       = 51f;
+            chipLe.preferredHeight = 51f;
+
+            const float borderW = 4.5f;
+            var chipFill = UIBuild.MakeImage("Fill", chipGo.transform, ChipBg);
+            var chipFillRt = chipFill.rectTransform;
+            chipFillRt.anchorMin = Vector2.zero;
+            chipFillRt.anchorMax = Vector2.one;
+            chipFillRt.offsetMin = new Vector2(borderW, borderW);
+            chipFillRt.offsetMax = new Vector2(-borderW, -borderW);
+            chipFill.gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
+
+            var chipHlg = chipGo.GetComponent<HorizontalLayoutGroup>();
+            chipHlg.padding                = new RectOffset(24, 24, 0, 0);
+            chipHlg.spacing                = 12f;
+            chipHlg.childAlignment         = TextAnchor.MiddleCenter;
+            chipHlg.childControlWidth      = true;
+            chipHlg.childControlHeight     = true;
+            chipHlg.childForceExpandWidth  = false;
+            chipHlg.childForceExpandHeight = false;
+
+            var gemRt = UIBuild.MakeDiamondIcon(chipGo.transform, 24f);
+            var gemLe = gemRt.gameObject.AddComponent<LayoutElement>();
+            gemLe.preferredWidth  = 24f;
+            gemLe.preferredHeight = 24f;
+
+            _diamondLabel           = MakeTmp(chipGo.transform, "Count", "0", 24f, TextBright);
+            _diamondLabel.alignment = TextAlignmentOptions.Left;
+            _diamondLabel.fontStyle = FontStyles.Bold;
+            _diamondLabel.raycastTarget = false;
         }
 
         // ── Corner marks (identical code path to BottomNavBar) ────────────────

@@ -8,6 +8,8 @@ using ValoCase.Save;
 using ValoCase.Services;
 using ValoCase.Services.Ads;
 using ValoCase.Services.Backend;
+using ValoCase.Services.Iap;
+using ValoCase.UI;
 
 namespace ValoCase.Core
 {
@@ -41,6 +43,10 @@ namespace ValoCase.Core
         // Rewarded-ad provider (mock for now; real SDK adapter swaps in here later).
         public IRewardedAdService RewardedAds { get; private set; }
 
+        // USD diamond-purchase provider (mock in dev; production build fails closed until
+        // Google Play Billing is wired in — see IapPurchaseService.cs).
+        public IIapPurchaseService IapPurchases { get; private set; }
+
         // SECURITY: local-authoritative economy is allowed ONLY in the editor or an
         // explicit offline-demo build, and only when the asset opts out of backend.
         // Release/player builds always fail closed — never local rewards/VP.
@@ -69,6 +75,16 @@ namespace ValoCase.Core
         public string BackendBaseUrl => gameConfig != null ? gameConfig.BackendBaseUrl : null;
         public bool HasGuestToken => Backend != null && !string.IsNullOrEmpty(Backend.GuestToken);
         public bool HasGuestAccountId => Save?.Data != null && !string.IsNullOrEmpty(Save.Data.guestAccountId);
+
+        // Premium currency (Diamonds). Backend-authoritative runtime cache — set only from
+        // wallet / guest-register / market / DIAMOND_1 ad responses, never granted locally.
+        public int DiamondBalance { get; private set; }
+
+        public void SetDiamondBalance(int value)
+        {
+            DiamondBalance = value < 0 ? 0 : value;
+            GameEvents.RaiseDiamondChanged(DiamondBalance);
+        }
 
         // Runtime-only per-instance view of the backend inventory (itemId identity that
         // the quantity/skinId save cache aggregates away). Rebuilt on every inventory
@@ -135,7 +151,25 @@ namespace ValoCase.Core
             // Boot profile system — loads FaceCards + restores PlayerPrefs once
             ProfileManager.EnsureInitialized();
 
+            // Device builds must use real AdMob; mock-* tokens are dev-only and never valid in production.
+#if UNITY_ANDROID && !UNITY_EDITOR
+            RewardedAds = AdMobRewardedAdService.Create(transform);
+            Debug.Log("[Ads] Rewarded service selected: AdMob");
+#else
             RewardedAds = MockRewardedAdService.Create(transform);
+            Debug.Log("[Ads] Rewarded service selected: Mock");
+#endif
+
+            // Same fail-closed rule as ads: only Android release builds are "production" for
+            // this purpose. Everything else (editor, dev/standalone testing) gets the mock so
+            // the purchase UI/flow can be exercised before Play Console approval lands.
+#if UNITY_ANDROID && !UNITY_EDITOR
+            IapPurchases = new UnavailableIapPurchaseService();
+            Debug.Log("[Iap] Purchase service selected: Unavailable (production, billing not configured)");
+#else
+            IapPurchases = MockIapPurchaseService.Create(transform);
+            Debug.Log("[Iap] Purchase service selected: Mock (dev)");
+#endif
 
 #if (DEVELOPMENT_BUILD && !UNITY_EDITOR)
             if (gameConfig != null && !gameConfig.UseBackend)
@@ -154,7 +188,12 @@ namespace ValoCase.Core
             if (gameConfig == null) return;
             // Boot the backend client when the asset opts in OR when backend is mandatory
             // (release/player builds), so a misconfigured useBackend=false still connects.
-            if (!gameConfig.UseBackend && CanUseLocalEconomy) return;
+            if (!gameConfig.UseBackend && CanUseLocalEconomy)
+            {
+                // Local mode saves locally, so setup is safe to run right away.
+                FanMadeNoticePopup.TryShow();
+                return;
+            }
             if (Save?.Data == null) return;
 
             Backend = new BackendApiClient(
@@ -190,6 +229,7 @@ namespace ValoCase.Core
                         Save.Data.guestToken = token;
                         Save.Data.guestAccountId = res.accountId;
                         Backend.GuestToken = token;
+                        SetDiamondBalance(res.diamondBalance);
                         Save.Save();
                         AdoptBackendAvatar(res.avatarId);
                         Debug.Log("[BackendAuth] Guest registered and token resolved.");
@@ -213,9 +253,10 @@ namespace ValoCase.Core
                 res =>
                 {
                     Vp?.SetBalance(res.vpBalance);
+                    SetDiamondBalance(res.diamondBalance);
                     ProgressionSync.ApplyFromWallet(res);   // mirror backend level/XP into the UI cache
                     Save.Save();
-                    Debug.Log($"[BackendAuth] Wallet synced — vp={res.vpBalance}");
+                    Debug.Log($"[BackendAuth] Wallet synced — vp={res.vpBalance} diamonds={res.diamondBalance}");
                 },
                 err => Debug.LogWarning("[Backend] Wallet sync failed — keeping cached balance. " + err));
 
@@ -226,6 +267,9 @@ namespace ValoCase.Core
                 err => Debug.LogWarning("[Backend] Inventory sync failed — keeping cached inventory. " + err));
 
             Debug.Log("[Backend] Boot sync complete.");
+
+            // Session can now persist profile choices (guest token is guaranteed here).
+            FanMadeNoticePopup.TryShow();
         }
 
         // Adopt a backend avatarId into the local profile cache, but only when it maps to a
@@ -254,11 +298,12 @@ namespace ValoCase.Core
 
         // Best-effort wallet + inventory re-sync. Used after an ambiguous open
         // (transport timeout that may have committed) or an unresolved skin, so the
-        // local cache reconciles to the authoritative server state.
-        public void RequestBackendResync()
+        // local cache reconciles to the authoritative server state. onDone (optional)
+        // reports whether the wallet fetch — the connectivity proof — succeeded.
+        public void RequestBackendResync(Action<bool> onDone = null)
         {
-            if (!BackendReady) return;
-            StartCoroutine(ResyncWalletAndInventory());
+            if (!BackendReady) { onDone?.Invoke(false); return; }
+            StartCoroutine(ResyncWalletAndInventory(onDone));
         }
 
         public void RefreshInventoryBackend(Action onDone = null, Action<string> onFailed = null)
@@ -277,15 +322,18 @@ namespace ValoCase.Core
             else onFailed?.Invoke(string.IsNullOrEmpty(error) ? "Bağlantı hatası" : error);
         }
 
-        IEnumerator ResyncWalletAndInventory()
+        IEnumerator ResyncWalletAndInventory(Action<bool> onDone = null)
         {
+            bool walletOk = false;
             yield return Backend.GetWallet(
-                res => { Vp?.SetBalance(res.vpBalance); ProgressionSync.ApplyFromWallet(res); Save.Save(); Debug.Log("[Backend] Wallet re-synced — vp=" + res.vpBalance); },
+                res => { walletOk = true; Vp?.SetBalance(res.vpBalance); SetDiamondBalance(res.diamondBalance); ProgressionSync.ApplyFromWallet(res); Save.Save(); Debug.Log("[Backend] Wallet re-synced — vp=" + res.vpBalance); },
                 err => Debug.LogWarning("[Backend] Wallet re-sync failed — keeping cached balance. " + err));
 
             yield return Backend.GetInventory(
                 ApplyInventoryFromBackend,
                 err => Debug.LogWarning("[Backend] Inventory re-sync failed — keeping cached inventory. " + err));
+
+            onDone?.Invoke(walletOk);
         }
 
         // ── Backend selling (server-authoritative) ──────────────────────────────
@@ -763,8 +811,10 @@ namespace ValoCase.Core
                 yield break;
             }
 
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
             Debug.Log($"[Backend] Ad reward armed — type={request.rewardType} earnVp2xActive={res.earnVp2xActive} " +
                       $"upgradePlus5Active={res.upgradePlus5Active} alreadyUsed={res.upgradePlus5AlreadyUsedForCurrentContext}");
+#endif
             onDone?.Invoke(res);
         }
 
@@ -805,10 +855,143 @@ namespace ValoCase.Core
             if (res == null) { onFailed?.Invoke(failMsg); yield break; }
 
             yield return Backend.GetWallet(
-                w => Vp?.SetBalance(w.vpBalance),
+                w => { Vp?.SetBalance(w.vpBalance); SetDiamondBalance(w.diamondBalance); },
                 err => Debug.LogWarning("[Backend] Market VP wallet sync failed — " + err));
             Save?.Save();
             onClaimed?.Invoke(res);
+        }
+
+        // DIAMOND_1 — watch a rewarded ad, then claim. The backend grants exactly +1 diamond;
+        // the wallet is re-synced from the server so the granted diamond is never trusted
+        // locally. No cooldown gating — each completed ad claims one diamond.
+        public void WatchDiamond1Ad(Action<AdRewardClaimResponse> onClaimed, Action<string> onFailed, Action onCancelled = null)
+        {
+            if (!BackendReady) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
+            if (!HasGuestToken) { onFailed?.Invoke("AUTH_PENDING"); return; }
+            if (RewardedAds == null || !RewardedAds.IsReady) { onFailed?.Invoke("Reklam şu anda hazır değil."); return; }
+
+            RewardedAds.Show(AdRewardTypes.Diamond1, (result, token) =>
+            {
+                switch (result)
+                {
+                    case RewardedAdResult.Completed:
+                        StartCoroutine(Diamond1ClaimRoutine(token, onClaimed, onFailed));
+                        break;
+                    case RewardedAdResult.Cancelled: onCancelled?.Invoke(); break;
+                    default: onFailed?.Invoke("Reklam gösterilemedi. Lütfen tekrar dene."); break;
+                }
+            });
+        }
+
+        IEnumerator Diamond1ClaimRoutine(string adToken, Action<AdRewardClaimResponse> onClaimed, Action<string> onFailed)
+        {
+            var request = new AdRewardClaimRequest { rewardType = AdRewardTypes.Diamond1, adToken = adToken };
+            AdRewardClaimResponse res = null;
+            string failMsg = null;
+            yield return ClaimAdRoutine(request, r => res = r, msg => failMsg = msg);
+            if (res == null) { onFailed?.Invoke(failMsg); yield break; }
+
+            yield return Backend.GetWallet(
+                w => { Vp?.SetBalance(w.vpBalance); SetDiamondBalance(w.diamondBalance); },
+                err => Debug.LogWarning("[Backend] Diamond ad wallet sync failed — " + err));
+            Save?.Save();
+            onClaimed?.Invoke(res);
+        }
+
+        // ── Market: diamond → VP exchange (server-authoritative) ────────────────
+        // Catalog is read-only and only refreshes the diamond balance for display; the
+        // client keeps a fixed fallback offer set, so a failed/renamed catalog never
+        // breaks the shop. Purchase deducts diamonds and credits VP on the server; Unity
+        // applies only the authoritative balances the server returns.
+
+        public void RefreshMarketCatalog(Action<MarketCatalogResponse> onDone, Action<string> onFailed)
+        {
+            if (!BackendReady) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
+            StartCoroutine(RefreshMarketCatalogRoutine(onDone, onFailed));
+        }
+
+        IEnumerator RefreshMarketCatalogRoutine(Action<MarketCatalogResponse> onDone, Action<string> onFailed)
+        {
+            MarketCatalogResponse res = null;
+            BackendError error = null;
+            yield return Backend.GetMarketCatalog(r => res = r, e => error = e);
+
+            if (error != null || res == null)
+            {
+                onFailed?.Invoke(BackendErrorMapper.Map(error));
+                yield break;
+            }
+            SetDiamondBalance(res.diamondBalance);
+            onDone?.Invoke(res);
+        }
+
+        public void PurchaseVpWithDiamonds(string offerId, Action<MarketVpPurchaseResponse> onDone, Action<string> onFailed)
+        {
+            if (!BackendReady) { onFailed?.Invoke("Purchase unavailable."); return; }
+            if (string.IsNullOrEmpty(offerId)) { onFailed?.Invoke("Invalid pack."); return; }
+            StartCoroutine(PurchaseVpRoutine(offerId, onDone, onFailed));
+        }
+
+        IEnumerator PurchaseVpRoutine(string offerId, Action<MarketVpPurchaseResponse> onDone, Action<string> onFailed)
+        {
+            MarketVpPurchaseResponse res = null;
+            BackendError error = null;
+            yield return Backend.PurchaseMarketVp(offerId, r => res = r, e => error = e);
+
+            if (error != null || res == null)
+            {
+                Debug.LogWarning("[Backend] Market VP purchase failed — " + (error?.ToString() ?? "null response"));
+                onFailed?.Invoke(MapMarketPurchaseError(error));
+                yield break;
+            }
+
+            // Apply authoritative balances from the confirmed wallet (known field names)
+            // rather than trusting the purchase response body — never spend/grant locally.
+            yield return Backend.GetWallet(
+                w => { Vp?.SetBalance(w.vpBalance); SetDiamondBalance(w.diamondBalance); },
+                err => Debug.LogWarning("[Backend] Market VP purchase wallet sync failed — " + err));
+            Save?.Save();
+            Debug.Log($"[Backend] Market VP purchase OK — offer={offerId}");
+            onDone?.Invoke(res);
+        }
+
+        // ── USD diamond purchase (dev-mock now; real Play Billing later) ────────
+        // Diamonds are granted ONLY here, and only on IapPurchaseResult.Granted — the
+        // purchase provider itself never touches DiamondBalance. In production builds
+        // IapPurchases is UnavailableIapPurchaseService, so this always reports
+        // Unavailable and never credits diamonds there.
+        public void RequestDiamondPurchase(IapPackageEntry package, Action<IapPurchaseResult, string> onResult)
+        {
+            if (IapPurchases == null || package == null)
+            {
+                onResult?.Invoke(IapPurchaseResult.Unavailable, "Purchase system not ready.");
+                return;
+            }
+
+            IapPurchases.Purchase(package, (result, message) =>
+            {
+                if (result == IapPurchaseResult.Granted)
+                {
+                    SetDiamondBalance(DiamondBalance + package.amount);
+                    Save?.Save();
+                }
+                onResult?.Invoke(result, message);
+            });
+        }
+
+        static string MapMarketPurchaseError(BackendError error)
+        {
+            if (IsInsufficientDiamonds(error)) return "Not enough diamonds.";
+            if (error != null && error.IsOffline) return "No internet connection.";
+            return "Purchase failed. Please try again.";
+        }
+
+        static bool IsInsufficientDiamonds(BackendError error)
+        {
+            if (error == null) return false;
+            if (error.HttpStatus == 402 || error.HttpStatus == 409) return true;
+            var raw = error.Message != null ? error.Message.ToLowerInvariant() : string.Empty;
+            return raw.Contains("insufficient") || raw.Contains("diamond") || raw.Contains("elmas") || raw.Contains("yetersiz");
         }
 
         static string DescribeAdPlacements(AdRewardStatusResponse res)

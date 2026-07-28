@@ -83,6 +83,7 @@ namespace ValoCase.Save
     {
         public int version = 1;
         public string playerName = "Agent";
+        public bool profileSetupCompleted;
         public int vpBalance;
         public bool adminVpGrantApplied;   // true after the one-time 500 000 VP grant
 

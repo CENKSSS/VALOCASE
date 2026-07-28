@@ -48,6 +48,7 @@ namespace ValoCase.CaseOpening
         bool _warmupActive;
         Coroutine _warmupRoutine;
         List<SkinDefinitionSO> _fillerPool;
+        IReadOnlyList<RarityWeightEntry> _fillerWeights;
         const float WarmupItemsPerSecond = 9f;   // free-scroll speed during the wait
         const float ResolveSpinDuration  = 3.25f; // decel time once the winner is in
         const int   ResolveTrailingItems = GameConstants.ReelVisibleItemCount;
@@ -64,6 +65,48 @@ namespace ValoCase.CaseOpening
 
         public bool IsSpinning => _isSpinning;
         public bool WarmupActive => _warmupActive;
+
+        int   _tickIndex = int.MinValue;
+        float _lastTickTime;
+        const float TickCooldown = 0.04f;
+
+        void Update()
+        {
+            if (!_isSpinning) { _tickIndex = int.MinValue; return; }
+
+            int idx = CenteredItemIndex();
+            if (idx == int.MinValue || idx == _tickIndex) return;
+
+            if (_tickIndex != int.MinValue && Time.unscaledTime - _lastTickTime >= TickCooldown)
+            {
+                SoundManager.Instance?.PlayTick();
+                _lastTickTime = Time.unscaledTime;
+            }
+            _tickIndex = idx;
+        }
+
+        // Nearest reel card to the center marker, computed from live positions so it
+        // tracks real card-boundary crossings rather than a timer.
+        int CenteredItemIndex()
+        {
+            var viewport = reelContent != null ? reelContent.parent as RectTransform : null;
+            if (viewport == null || _activeItems.Count == 0) return int.MinValue;
+
+            float markerVX = viewport.InverseTransformPoint(
+                centerMarker != null ? centerMarker.position : viewport.position).x;
+
+            int best = int.MinValue;
+            float bestDist = float.MaxValue;
+            for (int i = 0; i < _activeItems.Count; i++)
+            {
+                var it = _activeItems[i];
+                if (it == null) continue;
+                float vx = viewport.InverseTransformPoint(it.RectTransform.position).x;
+                float d = Mathf.Abs(vx - markerVX);
+                if (d < bestDist) { bestDist = d; best = i; }
+            }
+            return best;
+        }
 
         public void BeginSpin(CaseDefinitionSO caseDef, SkinDefinitionSO predeterminedWinner, Action<SkinDefinitionSO> onComplete)
         {
@@ -128,7 +171,7 @@ namespace ValoCase.CaseOpening
                 Debug.LogWarning($"[SPIN] BeginSpin — viewport/items missing, using fallback targetX={_targetX}");
             }
 
-            SoundManager.Instance?.Play(SoundId.CaseSpinLoop);
+            SoundManager.Instance?.PlayCaseOpen();
 
             // Spin slightly past target then snap back for bounce feel
             var overshootX = _targetX - postBounceStrength;
@@ -153,6 +196,7 @@ namespace ValoCase.CaseOpening
             itemWidth = MobileItemWidth;
             if (centerLine != null) centerLine.enabled = false;
             _fillerPool = CaseReelBuilder.BuildPool(caseDef);
+            _fillerWeights = caseDef?.DropTable?.RarityWeights;
             _isSpinning   = true;
             _warmupActive = true;
             _predeterminedWinner = null;
@@ -162,13 +206,13 @@ namespace ValoCase.CaseOpening
             {
                 var view = PoolManager.Instance.GetReelItem();
                 view.transform.SetParent(reelContent, false);
-                view.Bind(CaseReelBuilder.PickFiller(_fillerPool), GameContext.Instance?.RarityVisuals);
+                view.Bind(CaseReelBuilder.PickFiller(_fillerPool, _fillerWeights), GameContext.Instance?.RarityVisuals);
                 view.RectTransform.anchoredPosition = new Vector2(i * itemWidth, 0f);
                 _activeItems.Add(view);
             }
             reelContent.anchoredPosition = Vector2.zero;
 
-            SoundManager.Instance?.Play(SoundId.CaseSpinLoop);
+            SoundManager.Instance?.PlayCaseOpen();
 
             if (_highlightRoutine != null) StopCoroutine(_highlightRoutine);
             _highlightRoutine = StartCoroutine(HighlightCenterItem());
@@ -208,7 +252,7 @@ namespace ValoCase.CaseOpening
                             var ap = it.RectTransform.anchoredPosition;
                             ap.x += stripWidth;
                             it.RectTransform.anchoredPosition = ap;
-                            it.Bind(CaseReelBuilder.PickFiller(_fillerPool), GameContext.Instance?.RarityVisuals);
+                            it.Bind(CaseReelBuilder.PickFiller(_fillerPool, _fillerWeights), GameContext.Instance?.RarityVisuals);
                         }
                     }
                 }
@@ -257,7 +301,7 @@ namespace ValoCase.CaseOpening
             {
                 var v = PoolManager.Instance.GetReelItem();
                 v.transform.SetParent(reelContent, false);
-                v.Bind(CaseReelBuilder.PickFiller(_fillerPool), GameContext.Instance?.RarityVisuals);
+                v.Bind(CaseReelBuilder.PickFiller(_fillerPool, _fillerWeights), GameContext.Instance?.RarityVisuals);
                 v.RectTransform.anchoredPosition = new Vector2(nextX + t * itemWidth, 0f);
                 _activeItems.Add(v);
             }
@@ -373,6 +417,7 @@ namespace ValoCase.CaseOpening
 
             if (winner != null)
             {
+                SoundManager.Instance?.StopCaseOpen();
                 var isUltra = winner.Rarity == SkinRarity.Ultra;
                 SoundManager.Instance?.Play(isUltra ? SoundId.UltraReveal : SoundId.CaseReveal);
                 HapticManager.Instance?.Play(isUltra ? HapticPattern.UltraReveal : HapticPattern.Success);
@@ -385,6 +430,7 @@ namespace ValoCase.CaseOpening
 
         public void ClearReel()
         {
+            SoundManager.Instance?.StopCaseOpen();
             TweenFacade.Kill(_spinTween);
             if (_highlightRoutine != null) { StopCoroutine(_highlightRoutine); _highlightRoutine = null; }
             if (_bounceRoutine != null) { StopCoroutine(_bounceRoutine); _bounceRoutine = null; }
