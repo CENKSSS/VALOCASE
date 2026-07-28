@@ -791,7 +791,8 @@ namespace ValoCase.UI.Screens
                 totalOpens += qty;
             }
 
-            StartCoroutine(UIAnimator.ScalePress(_ctaBg.transform, 0.97f, 0.12f));
+            // Press feedback now comes from ButtonPressFeedback (wired centrally in
+            // UIBuild.WireButtonClick); animating localScale here too would fight it.
 
             var data = new BattleLobbyData
             {

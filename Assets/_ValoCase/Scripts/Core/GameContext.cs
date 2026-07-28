@@ -105,6 +105,8 @@ namespace ValoCase.Core
             Instance = this;
             DontDestroyOnLoad(gameObject);
 
+            ApplyFrameRate();
+
             if (contentDatabase == null)
                 contentDatabase = Resources.Load<ContentDatabaseSO>(GameConstants.ContentDatabaseResourcePath);
             if (gameConfig == null)
@@ -120,6 +122,22 @@ namespace ValoCase.Core
 
             contentDatabase?.BuildLookups();
             InitializeServices();
+        }
+
+        // Without an explicit targetFrameRate, Unity renders mobile builds at a fixed
+        // 30 fps to save battery, regardless of the display's refresh rate — which
+        // doubles touch-to-pixel latency and makes the whole UI feel delayed. 60 is the
+        // sweet spot here: the 30→60 step is clearly felt, 60→120 is not, and 120 would
+        // burn battery for a frame rate this UI cannot hold anyway.
+        // vSyncCount is ignored on Android but drives the editor, so it is cleared too.
+        static void ApplyFrameRate()
+        {
+            QualitySettings.vSyncCount  = 0;
+            Application.targetFrameRate = 60;
+
+            Debug.Log($"[PERF] targetFrameRate={Application.targetFrameRate} " +
+                      $"vSync={QualitySettings.vSyncCount} " +
+                      $"displayHz={Screen.currentResolution.refreshRateRatio.value:0.#}");
         }
 
         void InitializeServices()

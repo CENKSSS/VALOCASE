@@ -913,7 +913,7 @@ namespace ValoCase.UI.Screens
         // ── Flow ───────────────────────────────────────────────────────────────
         void OnCreatePressed()
         {
-            StartCoroutine(UIAnimator.ScalePress(_createBg.transform, 0.97f, 0.12f));
+            // Press feedback comes from ButtonPressFeedback, wired centrally.
             _createPanel.Show();
         }
 

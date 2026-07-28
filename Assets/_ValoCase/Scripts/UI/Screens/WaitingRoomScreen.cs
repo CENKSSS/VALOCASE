@@ -612,8 +612,7 @@ namespace ValoCase.UI.Screens
             switch (_state)
             {
                 case RoomState.Ready:
-                    if (_startBg != null)
-                        StartCoroutine(UIAnimator.ScalePress(_startBg.transform, 0.97f, 0.12f));
+                    // Press feedback comes from ButtonPressFeedback, wired centrally.
                     StartBattle();
                     break;
                 case RoomState.Running:

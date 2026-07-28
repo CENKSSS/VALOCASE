@@ -215,6 +215,7 @@ namespace ValoCase.UI
         {
             if (btn == null || btn.GetComponent<ClickSoundMarker>() != null) return;
             btn.gameObject.AddComponent<ClickSoundMarker>();
+            btn.gameObject.AddComponent<ButtonPressFeedback>();
             btn.onClick.AddListener(() => SoundManager.Instance?.PlayButtonClick());
         }
 
