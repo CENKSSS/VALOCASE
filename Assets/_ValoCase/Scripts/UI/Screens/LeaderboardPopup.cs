@@ -104,7 +104,7 @@ namespace ValoCase.UI.Screens
             title.fontSizeMin = 24f;
             title.fontSizeMax = 32f;
             SetRect(title.rectTransform, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
-                new Vector2(0f, -16f), new Vector2(-104f, 42f));
+                new Vector2(0f, -30f), new Vector2(-104f, 42f));
 
             BuildTabs(panel.transform);
             BuildScroll(panel.transform);
@@ -116,10 +116,12 @@ namespace ValoCase.UI.Screens
         {
             var rowGo = NewGo("Tabs", panel, typeof(HorizontalLayoutGroup));
             var rowRt = (RectTransform)rowGo.transform;
+            // 56 tall so each tab clears the ~44pt minimum touch target with room to
+            // spare; the label below is allowed to wrap so it can stay large.
             SetRect(rowRt, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0.5f, 1f),
-                new Vector2(0f, -62f), new Vector2(-20f, 40f));
+                new Vector2(0f, -76f), new Vector2(-20f, 56f));
             var hlg = rowGo.GetComponent<HorizontalLayoutGroup>();
-            hlg.spacing               = 6f;
+            hlg.spacing               = 8f;
             hlg.childForceExpandWidth  = true;
             hlg.childForceExpandHeight = true;
             hlg.childControlWidth      = true;
@@ -134,18 +136,21 @@ namespace ValoCase.UI.Screens
                 border.effectColor    = ColorPalette.Border;
                 border.effectDistance = new Vector2(1f, -1f);
 
-                var lbl = MakeTmp(bg.transform, "Lbl", TabLabels[i], 16f, FontStyles.Bold, ColorPalette.TextDim);
+                // Wrapping is on so "MOST BATTLES" breaks onto two lines instead of
+                // auto-shrinking to fit one — the text stays readable at 20pt.
+                var lbl = MakeTmp(bg.transform, "Lbl", TabLabels[i], 20f, FontStyles.Bold, ColorPalette.TextDim);
                 lbl.alignment = TextAlignmentOptions.Center;
                 lbl.characterSpacing = 0f;
-                lbl.enableWordWrapping = false;
+                lbl.enableWordWrapping = true;
                 lbl.enableAutoSizing = true;
-                lbl.fontSizeMin = 12f;
-                lbl.fontSizeMax = 16f;
+                lbl.fontSizeMin = 15f;
+                lbl.fontSizeMax = 20f;
+                lbl.lineSpacing = -12f;
                 var lblRt = lbl.rectTransform;
                 lblRt.anchorMin = Vector2.zero;
                 lblRt.anchorMax = Vector2.one;
-                lblRt.offsetMin = new Vector2(4f, 0f);
-                lblRt.offsetMax = new Vector2(-4f, 0f);
+                lblRt.offsetMin = new Vector2(6f, 2f);
+                lblRt.offsetMax = new Vector2(-6f, -2f);
 
                 var btn = bg.gameObject.AddComponent<Button>();
                 btn.transition = Selectable.Transition.None;
@@ -165,7 +170,7 @@ namespace ValoCase.UI.Screens
             sRt.anchorMin = Vector2.zero;
             sRt.anchorMax = Vector2.one;
             sRt.offsetMin = new Vector2(10f, 86f);
-            sRt.offsetMax = new Vector2(-10f, -104f);
+            sRt.offsetMax = new Vector2(-10f, -140f);   // clears the taller tab row
 
             var content = NewGo("Content", scrollGo.transform, typeof(VerticalLayoutGroup), typeof(ContentSizeFitter));
             _listContent = (RectTransform)content.transform;
@@ -199,7 +204,7 @@ namespace ValoCase.UI.Screens
             stRt.anchorMin = Vector2.zero;
             stRt.anchorMax = Vector2.one;
             stRt.offsetMin = new Vector2(10f, 86f);
-            stRt.offsetMax = new Vector2(-10f, -104f);
+            stRt.offsetMax = new Vector2(-10f, -140f);   // matches the scroll inset
 
             _stateLbl = MakeTmp(_stateGo.transform, "Lbl", "", 15.5f, FontStyles.Bold, ColorPalette.TextDim);
             _stateLbl.alignment = TextAlignmentOptions.Center;
