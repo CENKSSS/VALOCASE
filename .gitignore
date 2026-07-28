@@ -9,10 +9,17 @@
 [Mm]emoryCaptures/
 [Rr]ecordings/
 
+# Android/Gradle native build scratch (Unity regenerates it every build)
+.utmp/
+
+# Unity crash-recovery scratch
+[Aa]ssets/_Recovery/
+
 # Unity cache / generated files
 *.csproj
 *.unityproj
 *.sln
+*.slnx
 *.suo
 *.tmp
 *.user
@@ -53,6 +60,17 @@ ks_secrets.txt
 
 # Crash reports
 sysinfo.txt
+
+# Logs and local dumps
+*.log
+build_settings_dump.txt
+
+# Google External Dependency Manager (regenerated on resolve)
+ProjectSettings/AndroidResolverDependencies.xml
+ProjectSettings/GvhProjectSettings.xml
+
+# Agentic QE local state (memory.db, config)
+.agentic-qe/
 
 # Local saves
 # persistentDataPath is device-local by default
