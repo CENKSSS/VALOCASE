@@ -1482,19 +1482,42 @@ namespace ValoCase.UI.Screens
             var spents  = new List<int>();
             bool backend = GameContext.Instance?.BackendEnabled == true;
 
-            if (backend) yield return AcquireBackendWinners(qty, winners, spents);
-            else         AcquireLocalWinners(qty, winners, spents);
+            // Backend opens are one request per case, issued in sequence, so N cases used
+            // to mean N round-trips of dead time before anything moved on screen. The reels
+            // now start immediately on placeholder strips and the requests run alongside
+            // them; each winner card is swapped in long before it can scroll into view.
+            // (Local mode resolves instantly, so it keeps filling the strips up front.)
+            if (!backend)
+            {
+                AcquireLocalWinners(qty, winners, spents);
+                if (winners.Count == 0) { EndMultiOpen(0); yield break; }
+            }
+
+            int rows = backend ? qty : winners.Count;
+
+            HideRateTable();
+            BuildMultiRows(backend ? PlaceholderWinners(qty) : winners);
+            PositionReelPanelToRates(rows);
+            ShowMultiReelPanel(true);
+            ValoCase.Audio.SoundManager.Instance?.PlayCaseOpen();
+
+            // XP/level is applied only after the reveal (see the deferred list below):
+            // applying it here would fill the level bar while the reels are still spinning,
+            // which both advertises the wait and spoils the result.
+            var progressions = new List<OpenCaseResultResponse>();
+            bool fetchDone = !backend;
+            if (backend)
+                StartCoroutine(AcquireBackendWinnersRoutine(qty, winners, spents, progressions,
+                                                            () => fetchDone = true));
+
+            yield return AnimateMultiRows(() => fetchDone, winners);
+            ValoCase.Audio.SoundManager.Instance?.StopCaseOpen();
 
             int n = winners.Count;
             if (n == 0) { EndMultiOpen(0); yield break; }
 
-            HideRateTable();
-            BuildMultiRows(winners);
-            PositionReelPanelToRates(n);
-            ShowMultiReelPanel(true);
-            ValoCase.Audio.SoundManager.Instance?.PlayCaseOpen();
-            yield return AnimateMultiRows();
-            ValoCase.Audio.SoundManager.Instance?.StopCaseOpen();
+            foreach (var p in progressions)
+                ProgressionSync.ApplyFromOpen(p, showXpToast: qty == 1);
 
             // Unsold rewards are granted via the existing inventory flow up front; the
             // review's SELL then removes a unit via the existing economy. A sold reward
@@ -1592,9 +1615,61 @@ namespace ValoCase.UI.Screens
             }
         }
 
-        // Mirrors the single backend open (request → map → authoritative wallet),
-        // gathering each result before the synchronized reveal. Grant happens later.
-        IEnumerator AcquireBackendWinners(int qty, List<SkinDefinitionSO> winners, List<int> spents)
+        // Strips need a card in the winner slot at build time, but the real winners are
+        // still in flight. These stand-ins are swapped out before the slot can scroll
+        // into view, so the player never sees one.
+        List<SkinDefinitionSO> PlaceholderWinners(int qty)
+        {
+            var list = new List<SkinDefinitionSO>(qty);
+            var table = _selected != null ? _selected.DropTable : null;
+            var drops = table != null ? table.PossibleDrops : null;
+
+            for (int i = 0; i < qty; i++)
+            {
+                SkinDefinitionSO pick = null;
+                if (drops != null && drops.Count > 0)
+                    pick = drops[UnityEngine.Random.Range(0, drops.Count)]?.skin;
+                list.Add(pick);
+            }
+            return list;
+        }
+
+        // Swaps the real winner into each row's winner slot once the server answers, and
+        // drops any row whose open never completed.
+        void ApplyWinnersToRows(List<SkinDefinitionSO> winners)
+        {
+            var visuals = GameContext.Instance?.RarityVisuals;
+            for (int i = 0; i < _multiRows.Count; i++)
+            {
+                var row = _multiRows[i];
+                if (row?.root == null) continue;
+
+                if (i >= winners.Count || winners[i] == null)
+                {
+                    row.root.gameObject.SetActive(false);   // this open failed
+                    continue;
+                }
+
+                if (_multiWinnerIndex >= 0 && _multiWinnerIndex < row.items.Count)
+                    row.items[_multiWinnerIndex]?.Bind(winners[i], visuals);
+            }
+        }
+
+        // Mirrors the single backend open (request → map → authoritative wallet).
+        // Runs alongside the spin; onDone always fires so the reel is never left waiting.
+        // Progression is collected rather than applied — the caller applies it after the
+        // reveal so the level bar cannot fill while the reels are still turning.
+        IEnumerator AcquireBackendWinnersRoutine(int qty, List<SkinDefinitionSO> winners,
+                                                 List<int> spents,
+                                                 List<OpenCaseResultResponse> progressions,
+                                                 System.Action onDone)
+        {
+            yield return AcquireBackendWinners(qty, winners, spents, progressions);
+            onDone?.Invoke();
+        }
+
+        IEnumerator AcquireBackendWinners(int qty, List<SkinDefinitionSO> winners, List<int> spents,
+                                          List<OpenCaseResultResponse> progressions = null)
         {
             var ctx = GameContext.Instance;
             if (ctx?.Backend == null || !ctx.BackendReady) yield break;
@@ -1624,7 +1699,9 @@ namespace ValoCase.UI.Screens
                 ctx.ApplyBackendWallet(response.newVpBalance);
                 // Backend confirmed the open — mirror its level/XP into the UI cache.
                 // Per-open "+5 XP" toast only for a single open; level-up always shows.
-                ProgressionSync.ApplyFromOpen(response, showXpToast: qty == 1);
+                // Deferred to after the reveal when the caller collects them instead.
+                if (progressions != null) progressions.Add(response);
+                else ProgressionSync.ApplyFromOpen(response, showXpToast: qty == 1);
                 if (skin == null) { ctx.RequestBackendResync(); break; }
 
                 winners.Add(skin);
@@ -1784,17 +1861,35 @@ namespace ValoCase.UI.Screens
             img.raycastTarget = false;
         }
 
-        IEnumerator AnimateMultiRows()
+        // resultsReady gates the final approach: the reel spins freely from the first
+        // frame, but must not carry a placeholder card into view. Past SafeEased the
+        // winner slot is close enough to the pointer to matter, so the spin holds there
+        // until the server answers — in practice the answer arrives long before, since
+        // the whole spin lasts seconds and the requests overlap it.
+        IEnumerator AnimateMultiRows(System.Func<bool> resultsReady, List<SkinDefinitionSO> winners)
         {
+            const float SafeEased = 0.60f;
+            // Never hang on a stuck request; the fetch reports done on failure too, this
+            // is only a backstop.
+            const float MaxHoldSeconds = 20f;
+
             float dur    = GameConstants.CaseSpinDurationSeconds;
             float target = -(_multiWinnerIndex * MultiItemWidth);
             float t = 0f;
+            float held = 0f;
             int prevBoundary = int.MinValue;
             while (t < dur)
             {
-                t += Time.unscaledDeltaTime;
                 float p = Mathf.Clamp01(t / dur);
                 float eased = 1f - Mathf.Pow(1f - p, 5f);
+
+                bool ready = resultsReady == null || resultsReady() || held >= MaxHoldSeconds;
+                if (!ready && eased > SafeEased)
+                {
+                    eased = SafeEased;          // hold short of the reveal
+                    held += Time.unscaledDeltaTime;
+                }
+                else t += Time.unscaledDeltaTime;
                 // Every row shares the same offset this frame, so all triangles stay in
                 // perfect sync — but the shared landing spot is random each open.
                 float x = Mathf.Lerp(0f, target + _multiLandingJitter, eased);
@@ -1814,6 +1909,11 @@ namespace ValoCase.UI.Screens
                 }
                 yield return null;
             }
+
+            // The real cards go in only now — before this point the winner slot was still
+            // off to the right, so nothing placeholder was ever on screen.
+            if (winners != null) ApplyWinnersToRows(winners);
+
             float finalX = target + _multiLandingJitter;
             foreach (var row in _multiRows)
                 if (row.content != null)
