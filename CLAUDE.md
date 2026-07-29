@@ -1,5 +1,7 @@
 # ValoCase Claude Rules
 
+@VERIFICATION-FIRST.md
+
 ValoCase is a Unity mobile case simulator project.
 
 Primary objective:
