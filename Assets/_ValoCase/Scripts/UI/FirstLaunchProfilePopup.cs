@@ -24,6 +24,11 @@ namespace ValoCase.UI
         static readonly Color CellBg     = new Color(0.086f, 0.106f, 0.137f, 1f);
         static readonly Color Accent     = new Color(1f, 0.275f, 0.333f, 1f);
         static readonly Color AccentDim  = new Color(1f, 0.275f, 0.333f, 0.28f);
+        // Neutral grey for the confirm button before a valid nickname is typed.
+        static readonly Color ConfirmIdle = new Color(0.180f, 0.204f, 0.243f, 1f);
+        // Warning line under the input. Deliberately a brighter red than the brand accent
+        // so it reads as an error rather than decoration.
+        static readonly Color ErrorRed   = new Color(1f, 0.325f, 0.325f, 1f);
         static readonly Color TextMain   = new Color(0.961f, 0.961f, 0.961f, 1f);
         static readonly Color TextDim    = new Color(0.541f, 0.569f, 0.651f, 1f);
         static readonly Color DarkText   = new Color(0.043f, 0.055f, 0.082f, 1f);
@@ -133,11 +138,21 @@ namespace ValoCase.UI
 
             if (ctx.BackendEnabled)
             {
-                ctx.SaveDisplayNameBackend(nickname,
-                    _ => SaveAvatarThenFinish(ctx),
+                // A first-time player has no account yet — boot deliberately skipped
+                // registration so that merely opening the app creates nothing. Create it
+                // now, then name it. Returning players already have a token and go
+                // straight to the rename.
+                ctx.RegisterGuestBackend(
+                    () => ctx.SaveDisplayNameBackend(nickname,
+                        _ => SaveAvatarThenFinish(ctx),
+                        err =>
+                        {
+                            ShowError(string.IsNullOrEmpty(err) ? "Could not save. Please try again." : err);
+                            SetSaving(false);
+                        }),
                     err =>
                     {
-                        ShowError(string.IsNullOrEmpty(err) ? "Could not save. Please try again." : err);
+                        ShowError(string.IsNullOrEmpty(err) ? "Could not connect. Please try again." : err);
                         SetSaving(false);
                     });
                 return;
@@ -184,7 +199,7 @@ namespace ValoCase.UI
             trimmed = (raw ?? string.Empty).Trim();
             error = null;
 
-            if (string.IsNullOrEmpty(trimmed)) { error = "Nickname cannot be empty.";           return false; }
+            if (string.IsNullOrEmpty(trimmed)) { error = "Please enter a nickname.";            return false; }
             if (trimmed.Length < 3)            { error = "Nickname must be at least 3 characters."; return false; }
             if (trimmed.Length > 20)           { error = "Nickname must be at most 20 characters."; return false; }
 
@@ -205,10 +220,31 @@ namespace ValoCase.UI
         void SetSaving(bool saving)
         {
             _saving = saving;
-            if (_confirmBtn != null) _confirmBtn.interactable = !saving;
             if (_confirmLbl != null) _confirmLbl.text = saving ? "SAVING..." : "CONFIRM";
-            if (_confirmImg != null) _confirmImg.color = saving ? AccentDim : Accent;
             if (_nameInput  != null) _nameInput.interactable = !saving;
+            RefreshConfirmState();
+        }
+
+        // The button stays grey until the field holds a usable nickname, so the player can
+        // see the requirement before pressing anything. It remains clickable while grey —
+        // pressing it is how they get told what is wrong.
+        void RefreshConfirmState()
+        {
+            bool ready = !_saving &&
+                         TryValidateNickname(_nameInput != null ? _nameInput.text : null, out _, out _);
+
+            if (_confirmBtn != null) _confirmBtn.interactable = !_saving;
+            if (_confirmImg != null) _confirmImg.color = ready ? Accent : ConfirmIdle;
+            if (_confirmLbl != null && !_saving)
+                _confirmLbl.color = ready ? DarkText : TextDim;
+        }
+
+        // Clears a stale complaint as soon as the name becomes valid, so the red line does
+        // not linger under a field that is now fine.
+        void OnNicknameChanged(string value)
+        {
+            if (TryValidateNickname(value, out _, out _)) ShowError(null);
+            RefreshConfirmState();
         }
 
         // ── UI construction ───────────────────────────────────────────────────
@@ -259,7 +295,7 @@ namespace ValoCase.UI
             BuildAvatarScrollGrid(card.transform);
             PopulateAvatars();
 
-            _errorLbl = UIBuild.MakeTmp(card.transform, "Error", "", 20f, FontStyles.Normal, Accent);
+            _errorLbl = UIBuild.MakeTmp(card.transform, "Error", "", 20f, FontStyles.Bold, ErrorRed);
             _errorLbl.alignment          = TextAlignmentOptions.Center;
             _errorLbl.enableWordWrapping = true;
             var eRt = _errorLbl.rectTransform;
@@ -320,8 +356,10 @@ namespace ValoCase.UI
             _nameInput.characterLimit = 20;
             _nameInput.contentType    = TMP_InputField.ContentType.Standard;
             _nameInput.caretColor     = Accent;
-            _nameInput.text           = "Agent";
-            _nameInput.onValueChanged.AddListener(_ => ShowError(null));
+            // Starts empty on purpose: a pre-filled name let players confirm without ever
+            // choosing one, which is how accounts ended up named "Agent".
+            _nameInput.text           = string.Empty;
+            _nameInput.onValueChanged.AddListener(OnNicknameChanged);
         }
 
         void BuildAvatarScrollGrid(Transform parent)
@@ -480,6 +518,9 @@ namespace ValoCase.UI
             _confirmLbl.alignment        = TextAlignmentOptions.Center;
             _confirmLbl.characterSpacing = 3f;
             UIBuild.Stretch(_confirmLbl.rectTransform);
+
+            // Field starts empty, so the button starts grey.
+            RefreshConfirmState();
         }
     }
 }

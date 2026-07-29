@@ -226,45 +226,21 @@ namespace ValoCase.Core
         {
             Debug.Log("[Backend] Boot sync started — baseUrl=" + gameConfig.BackendBaseUrl);
 
-            // 1) Ensure a guest token.
+            // 1) Ensure a guest token. A first-time player has none: registration is NOT
+            //    done here. It waits until they confirm a nickname, so an app that is
+            //    merely launched and closed — an old build, an automated crawler, a
+            //    mis-tap — leaves no account behind. Every account in the database used to
+            //    come from this point, which is why so many sat at the starting balance
+            //    with no session ever attached.
             if (string.IsNullOrEmpty(Save.Data.guestToken))
             {
-                var registered = false;
-                yield return Backend.RegisterGuest(
-                    res =>
-                    {
-                        var token = res.ResolveToken();
-                        if (string.IsNullOrEmpty(token))
-                        {
-                            // Registration succeeded but no usable token was parsed — do NOT
-                            // persist an empty token (that caused endless re-registration and
-                            // token-less, 0-balance requests). Treat as failure.
-                            Debug.LogError("[BackendAuth] Guest registration returned no usable token " +
-                                           "(check backend JSON field names). Aborting sync.");
-                            return;
-                        }
-                        registered = true;
-                        Save.Data.guestToken = token;
-                        Save.Data.guestAccountId = res.accountId;
-                        Backend.GuestToken = token;
-                        SetDiamondBalance(res.diamondBalance);
-                        Save.Save();
-                        AdoptBackendAvatar(res.avatarId);
-                        Debug.Log("[BackendAuth] Guest registered and token resolved.");
-                    },
-                    err => Debug.LogWarning("[Backend] Guest registration failed — staying on local cache. " + err));
+                Debug.Log("[BackendAuth] No saved token — deferring registration until the nickname is confirmed.");
+                FanMadeNoticePopup.TryShow();
+                yield break;
+            }
 
-                if (!registered)
-                {
-                    Debug.LogWarning("[Backend] No guest token — aborting boot sync (offline/local cache in use).");
-                    yield break;
-                }
-            }
-            else
-            {
-                Backend.GuestToken = Save.Data.guestToken;
-                Debug.Log("[BackendAuth] Reusing saved guest token.");
-            }
+            Backend.GuestToken = Save.Data.guestToken;
+            Debug.Log("[BackendAuth] Reusing saved guest token.");
 
             // 2) Wallet — backend is authoritative; overwrite the local cached balance.
             yield return Backend.GetWallet(
@@ -274,6 +250,8 @@ namespace ValoCase.Core
                     SetDiamondBalance(res.diamondBalance);
                     ProgressionSync.ApplyFromWallet(res);   // mirror backend level/XP into the UI cache
                     Save.Save();
+                    // No-op until the backend starts sending latestVersion.
+                    UpdateAvailablePopup.TryShow(res.latestVersion);
                     Debug.Log($"[BackendAuth] Wallet synced — vp={res.vpBalance} diamonds={res.diamondBalance}");
                 },
                 err => Debug.LogWarning("[Backend] Wallet sync failed — keeping cached balance. " + err));
@@ -288,6 +266,77 @@ namespace ValoCase.Core
 
             // Session can now persist profile choices (guest token is guaranteed here).
             FanMadeNoticePopup.TryShow();
+        }
+
+        /// <summary>
+        /// Creates the backend account for a brand-new player. Called only once the
+        /// nickname screen has a valid name, so no account exists until a person actually
+        /// asked for one. Persists the token, then pulls wallet and inventory.
+        /// onFailed receives a player-safe message and nothing is saved.
+        /// </summary>
+        public void RegisterGuestBackend(Action onDone, Action<string> onFailed)
+        {
+            if (!BackendReady) { onFailed?.Invoke(BackendErrorMapper.Generic); return; }
+            if (!string.IsNullOrEmpty(Save?.Data?.guestToken)) { onDone?.Invoke(); return; }
+            StartCoroutine(RegisterGuestRoutine(onDone, onFailed));
+        }
+
+        IEnumerator RegisterGuestRoutine(Action onDone, Action<string> onFailed)
+        {
+            if (BackendErrorMapper.IsOffline)
+            {
+                onFailed?.Invoke(BackendErrorMapper.Offline);
+                yield break;
+            }
+
+            bool registered = false;
+            BackendError error = null;
+
+            yield return Backend.RegisterGuest(
+                res =>
+                {
+                    var token = res.ResolveToken();
+                    if (string.IsNullOrEmpty(token))
+                    {
+                        // The server made an account but we cannot address it. Persisting an
+                        // empty token used to cause a fresh registration on every launch.
+                        Debug.LogError("[BackendAuth] Guest registration returned no usable token " +
+                                       "(check backend JSON field names).");
+                        return;
+                    }
+                    registered = true;
+                    Save.Data.guestToken     = token;
+                    Save.Data.guestAccountId = res.accountId;
+                    Backend.GuestToken       = token;
+                    SetDiamondBalance(res.diamondBalance);
+                    Save.Save();
+                    AdoptBackendAvatar(res.avatarId);
+                    Debug.Log("[BackendAuth] Guest registered on nickname confirm.");
+                },
+                err => error = err);
+
+            if (!registered)
+            {
+                onFailed?.Invoke(BackendErrorMapper.Map(error));
+                yield break;
+            }
+
+            // The account is live — bring the wallet and inventory in before handing back.
+            yield return Backend.GetWallet(
+                res =>
+                {
+                    Vp?.SetBalance(res.vpBalance);
+                    SetDiamondBalance(res.diamondBalance);
+                    ProgressionSync.ApplyFromWallet(res);
+                    Save.Save();
+                },
+                err => Debug.LogWarning("[Backend] Wallet sync after registration failed. " + err));
+
+            yield return Backend.GetInventory(
+                ApplyInventoryFromBackend,
+                err => Debug.LogWarning("[Backend] Inventory sync after registration failed. " + err));
+
+            onDone?.Invoke();
         }
 
         // Adopt a backend avatarId into the local profile cache, but only when it maps to a

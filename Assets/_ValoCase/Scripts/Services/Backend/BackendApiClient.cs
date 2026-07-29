@@ -407,7 +407,9 @@ namespace ValoCase.Services.Backend
                 Fail(new BackendError(status, $"{method} {path} -> HTTP {status}: {message}",
                                       lockedCategory: parsed?.category,
                                       requiredLevel: parsed?.requiredLevel ?? 0,
-                                      currentLevel: parsed?.currentLevel ?? 0));
+                                      currentLevel: parsed?.currentLevel ?? 0,
+                                      code: parsed?.code,
+                                      serverMessage: parsed?.message));
                 yield break;
             }
 
@@ -491,9 +493,12 @@ namespace ValoCase.Services.Backend
         public readonly int RequiredLevel;
         public readonly int CurrentLevel;
 
+        public readonly string Code;          // machine-readable reason, e.g. INSUFFICIENT_FUNDS
+        public readonly string ServerMessage; // raw server text, never shown to the player
+
         public BackendError(int httpStatus, string message, bool isTimeout = false, bool isOffline = false,
                             string lockedCategory = null, int requiredLevel = 0, int currentLevel = 0,
-                            bool isInvalidResponse = false)
+                            bool isInvalidResponse = false, string code = null, string serverMessage = null)
         {
             HttpStatus        = httpStatus;
             Message           = message;
@@ -503,9 +508,36 @@ namespace ValoCase.Services.Backend
             LockedCategory    = lockedCategory;
             RequiredLevel     = requiredLevel;
             CurrentLevel      = currentLevel;
+            Code              = code;
+            ServerMessage     = serverMessage;
         }
         public bool IsAuthError => HttpStatus == 401 || HttpStatus == 403;
         public bool IsLockedCategory => HttpStatus == 403 && !string.IsNullOrEmpty(LockedCategory);
+
+        /// <summary>
+        /// True only for an empty wallet. 422 alone is NOT enough: the backend also
+        /// returns it for "nothing to sell", "mission not complete", "invalid upgrade
+        /// target" and ad-reward state errors, so treating every 422 as a money problem
+        /// would show "not enough VP" for all of them. The reason code decides; until the
+        /// server fills it in, the server's own message is the fallback signal. 402 is
+        /// accepted outright for older server builds.
+        /// </summary>
+        public bool IsInsufficientFunds
+        {
+            get
+            {
+                if (HttpStatus == 402) return true;
+                if (HttpStatus != 422) return false;
+
+                if (!string.IsNullOrEmpty(Code))
+                    return Code.IndexOf("INSUFFICIENT", System.StringComparison.OrdinalIgnoreCase) >= 0;
+
+                var text = ServerMessage;
+                if (string.IsNullOrEmpty(text)) return false;
+                text = text.ToLowerInvariant();
+                return text.Contains("insufficient") || text.Contains("yetersiz");
+            }
+        }
 
         // A server-side or backend-connectivity failure (not a normal 4xx app error, not offline):
         // timeouts, connection failures with no HTTP response, 5xx, or an unparseable success body.
@@ -562,6 +594,9 @@ namespace ValoCase.Services.Backend
         public int vpBalance;
         public int diamondBalance;   // premium currency; 0 on older backends
         public ProgressionResponse progression;   // null on older backends — readers null-check
+        // Newest build published to the store, e.g. "1.0.16". Empty on backends that do
+        // not send it, in which case the update notice never appears.
+        public string latestVersion;
     }
 
     [Serializable]
@@ -1155,6 +1190,10 @@ namespace ValoCase.Services.Backend
         public int status;
         public string error;
         public string message;
+        // Machine-readable reason. 422 is used for many unrelated refusals (nothing to
+        // sell, mission not complete, bad upgrade target, ad-reward state), so the status
+        // alone cannot identify an empty wallet — this does.
+        public string code;
         // Present on a 403 locked-category error so the client can show the exact
         // unlock level. Absent (null/0) on every other error.
         public string category;
