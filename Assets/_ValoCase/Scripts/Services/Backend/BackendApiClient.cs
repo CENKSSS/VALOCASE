@@ -49,8 +49,22 @@ namespace ValoCase.Services.Backend
 
         // ── Endpoints ─────────────────────────────────────────────────────────
 
-        public IEnumerator RegisterGuest(Action<GuestRegisterResponse> onSuccess, Action<BackendError> onError)
-            => Send("POST", ApiPrefix + "/guest", "{}", auth: false, onSuccess, onError);
+        /// <summary>
+        /// Creates the guest account. The chosen nickname rides along in the body so the
+        /// account is created with its final name and never passes through an AgentXXXX
+        /// stage. The name must already satisfy the shared rules (3-20, A-Za-z0-9_) or the
+        /// server answers 400 and creates nothing. Passing null keeps the older
+        /// bodiless behaviour, and a backend that ignores the field is handled by the
+        /// caller falling back to the rename call.
+        /// </summary>
+        public IEnumerator RegisterGuest(string displayName,
+                                         Action<GuestRegisterResponse> onSuccess, Action<BackendError> onError)
+        {
+            var body = string.IsNullOrEmpty(displayName)
+                ? "{}"
+                : JsonUtility.ToJson(new GuestRegisterRequest { displayName = displayName });
+            return Send("POST", ApiPrefix + "/guest", body, auth: false, onSuccess, onError);
+        }
 
         public IEnumerator GetWallet(Action<WalletResponse> onSuccess, Action<BackendError> onError)
             => Send("GET", ApiPrefix + "/wallet", null, auth: true, onSuccess, onError);
@@ -351,6 +365,12 @@ namespace ValoCase.Services.Backend
 
             req.SetRequestHeader("Content-Type", "application/json");
             req.SetRequestHeader("Accept", "application/json");
+            // Sent on every call, including the unauthenticated ones. Until now the server
+            // could only learn a client's version from the analytics session body, which
+            // made it slow to tell which build was behind a given request. It also gives
+            // the server a way to recognise builds that predate this header: they simply
+            // never send it.
+            req.SetRequestHeader("X-App-Version", Application.version);
             if (auth && !string.IsNullOrEmpty(GuestToken))
                 req.SetRequestHeader("X-Guest-Token", GuestToken);
 
@@ -547,6 +567,12 @@ namespace ValoCase.Services.Backend
     }
 
     // ── Response DTOs (JsonUtility-serializable; adjust field names to backend) ──
+
+    [Serializable]
+    public sealed class GuestRegisterRequest
+    {
+        public string displayName;
+    }
 
     [Serializable]
     public sealed class GuestRegisterResponse

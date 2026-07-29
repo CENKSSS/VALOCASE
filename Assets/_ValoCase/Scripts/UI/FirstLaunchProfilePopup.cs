@@ -142,14 +142,21 @@ namespace ValoCase.UI
                 // registration so that merely opening the app creates nothing. Create it
                 // now, then name it. Returning players already have a token and go
                 // straight to the rename.
-                ctx.RegisterGuestBackend(
-                    () => ctx.SaveDisplayNameBackend(nickname,
-                        _ => SaveAvatarThenFinish(ctx),
-                        err =>
-                        {
-                            ShowError(string.IsNullOrEmpty(err) ? "Could not save. Please try again." : err);
-                            SetSaving(false);
-                        }),
+                ctx.RegisterGuestBackend(nickname,
+                    nameApplied =>
+                    {
+                        // The account is created with the nickname already set, so the
+                        // rename call only runs against a backend that ignored it.
+                        if (nameApplied) { SaveAvatarThenFinish(ctx); return; }
+
+                        ctx.SaveDisplayNameBackend(nickname,
+                            _ => SaveAvatarThenFinish(ctx),
+                            err =>
+                            {
+                                ShowError(string.IsNullOrEmpty(err) ? "Could not save. Please try again." : err);
+                                SetSaving(false);
+                            });
+                    },
                     err =>
                     {
                         ShowError(string.IsNullOrEmpty(err) ? "Could not connect. Please try again." : err);

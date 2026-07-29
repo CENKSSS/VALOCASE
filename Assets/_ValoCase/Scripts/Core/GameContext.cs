@@ -274,14 +274,23 @@ namespace ValoCase.Core
         /// asked for one. Persists the token, then pulls wallet and inventory.
         /// onFailed receives a player-safe message and nothing is saved.
         /// </summary>
-        public void RegisterGuestBackend(Action onDone, Action<string> onFailed)
+        /// <param name="displayName">
+        /// Already validated against the shared nickname rules. Sent with the request so
+        /// the account is born with its final name.
+        /// </param>
+        /// <param name="onDone">
+        /// Receives true when the server actually applied the name, so the caller can skip
+        /// the separate rename call. False means the server ignored the field and the name
+        /// still has to be set the old way.
+        /// </param>
+        public void RegisterGuestBackend(string displayName, Action<bool> onDone, Action<string> onFailed)
         {
             if (!BackendReady) { onFailed?.Invoke(BackendErrorMapper.Generic); return; }
-            if (!string.IsNullOrEmpty(Save?.Data?.guestToken)) { onDone?.Invoke(); return; }
-            StartCoroutine(RegisterGuestRoutine(onDone, onFailed));
+            if (!string.IsNullOrEmpty(Save?.Data?.guestToken)) { onDone?.Invoke(false); return; }
+            StartCoroutine(RegisterGuestRoutine(displayName, onDone, onFailed));
         }
 
-        IEnumerator RegisterGuestRoutine(Action onDone, Action<string> onFailed)
+        IEnumerator RegisterGuestRoutine(string displayName, Action<bool> onDone, Action<string> onFailed)
         {
             if (BackendErrorMapper.IsOffline)
             {
@@ -290,9 +299,10 @@ namespace ValoCase.Core
             }
 
             bool registered = false;
+            bool nameApplied = false;
             BackendError error = null;
 
-            yield return Backend.RegisterGuest(
+            yield return Backend.RegisterGuest(displayName,
                 res =>
                 {
                     var token = res.ResolveToken();
@@ -309,9 +319,21 @@ namespace ValoCase.Core
                     Save.Data.guestAccountId = res.accountId;
                     Backend.GuestToken       = token;
                     SetDiamondBalance(res.diamondBalance);
+
+                    // Only treat the name as done when the server echoed the one we asked
+                    // for. An older backend ignores the field and answers AgentXXXX, in
+                    // which case the caller still has to rename.
+                    nameApplied = !string.IsNullOrEmpty(displayName) &&
+                                  string.Equals(res.displayName, displayName, StringComparison.OrdinalIgnoreCase);
+                    if (nameApplied)
+                    {
+                        Save.Data.playerName = res.displayName;
+                        PlayerProfileData.SetUsername(res.displayName);
+                    }
+
                     Save.Save();
                     AdoptBackendAvatar(res.avatarId);
-                    Debug.Log("[BackendAuth] Guest registered on nickname confirm.");
+                    Debug.Log($"[BackendAuth] Guest registered on nickname confirm — nameApplied={nameApplied}");
                 },
                 err => error = err);
 
@@ -336,7 +358,7 @@ namespace ValoCase.Core
                 ApplyInventoryFromBackend,
                 err => Debug.LogWarning("[Backend] Inventory sync after registration failed. " + err));
 
-            onDone?.Invoke();
+            onDone?.Invoke(nameApplied);
         }
 
         // Adopt a backend avatarId into the local profile cache, but only when it maps to a
