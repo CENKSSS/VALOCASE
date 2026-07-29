@@ -1102,15 +1102,18 @@ namespace ValoCase.UI.Screens
             yield return new WaitForSecondsRealtime(countUpDuration + 0.1f);
             ValoCase.Audio.SoundManager.Instance?.StopCoinDrops();
 
-            // Draw: everyone tied, so no panel is a winner — all get the same gold
-            // DRAW treatment and the room banner states the entry was refunded.
+            // Draw: the players sharing the top total get the gold DRAW treatment and
+            // their entry back; anyone below them simply lost, so their panel stays plain.
             bool draw = _result.IsDraw;
             for (int i = 0; i < count; i++)
             {
+                bool tied = draw && i < _result.Players.Count && _result.Players[i].IsDrawWinner;
                 if (draw)
                 {
-                    _panels[i].SetStatus("DRAW", ColorPalette.GoldAccent);
-                    _panels[i].MarkDraw();
+                    _panels[i].SetStatus(tied ? "DRAW" : "LOSE",
+                                         tied ? ColorPalette.GoldAccent : ColorPalette.TextDim);
+                    if (tied) _panels[i].MarkDraw();
+                    else      _panels[i].MarkWinner(false);
                 }
                 else
                 {
@@ -1144,9 +1147,14 @@ namespace ValoCase.UI.Screens
                 PlayWinCelebration();
         }
 
+        // Reads from the local player's side: refunded only if they were on the top total.
         // Free/event lobbies have no entry cost, so "refunded" would read as 0 VP returned.
         string DrawStatusText()
-            => _result != null && _result.RefundVp > 0 ? "DRAW — ENTRY REFUNDED" : "DRAW — NO WINNER";
+        {
+            if (_result == null) return "DRAW";
+            if (!_result.UserRefunded) return "DRAW — NO WIN";
+            return _result.RefundVp > 0 ? "DRAW — ENTRY REFUNDED" : "DRAW — NO WINNER";
+        }
 
         void PlayWinCelebration()
         {
@@ -1924,8 +1932,14 @@ namespace ValoCase.UI.Screens
             var ctx = GameContext.Instance;
             if (ctx == null) return;
 
-            if (lobby?.progression != null)
-                ProgressionSync.ApplyFromProgression(lobby.progression, showXpToast: _result != null && _result.UserWon);
+            // The lobby response carries no progression — the server never puts one there,
+            // and JsonUtility still hands back a non-null all-zero object for the missing
+            // field. Applying that would blank the cached level to 1 until the wallet sync
+            // below repaired it, so it is only used when it holds real values.
+            // XP itself is granted server-side and arrives with RequestBackendResync.
+            var prog = lobby?.progression;
+            if (prog != null && (prog.level > 0 || prog.totalXp > 0))
+                ProgressionSync.ApplyFromProgression(prog, showXpToast: true);
 
             Debug.Log("[ONLINE_BATTLE] wallet/inventory/progression resync started battleId=" + lobby?.battleId);
             void OnInv()
@@ -1954,9 +1968,9 @@ namespace ValoCase.UI.Screens
             if (e.IsOffline) return BackendErrorMapper.Offline;
             if (e.IsTimeout) return BackendErrorMapper.Timeout;
             if (e.IsLockedCategory) return $"This case unlocks at Level {e.RequiredLevel}.";
+            if (e.IsInsufficientFunds) return "Not enough VP.";
             switch (e.HttpStatus)
             {
-                case 402: return "Not enough VP.";
                 case 403: return "This action isn't allowed.";
                 case 409: return "Action failed. The lobby may be full, already started, or cancelled.";
                 case 429: return BackendErrorMapper.TooManyReq;
@@ -2015,11 +2029,13 @@ namespace ValoCase.UI.Screens
             glow.effectColor    = ColorPalette.WithAlpha(Color.black, 0.55f);
             glow.effectDistance = new Vector2(0f, -6f);
 
-            // Draw shows what came back to the wallet, not a pot nobody won.
+            // Draw shows what came back to the wallet, not a pot nobody won — and only to
+            // the players who actually tied for the top. The others lost outright.
+            bool refunded = draw && _result.UserRefunded;
             Color valColor  = draw ? gold : green;
-            string titleTxt = draw ? "DRAW" : "The Battle is over!";
-            string capTxt   = draw ? "Refunded" : "Total win";
-            int    valAmount = draw ? _result.RefundVp : _result.TotalPotVp;
+            string titleTxt = !draw ? "The Battle is over!" : refunded ? "DRAW" : "LOSE";
+            string capTxt   = !draw ? "Total win" : refunded ? "Refunded" : "You get nothing";
+            int    valAmount = !draw ? _result.TotalPotVp : refunded ? _result.RefundVp : 0;
 
             var title = MakeTmp(card.transform, "Title", titleTxt, 26f, FontStyles.Bold, Color.white);
             title.alignment = TextAlignmentOptions.Center;
@@ -2035,10 +2051,8 @@ namespace ValoCase.UI.Screens
             valGlow.effectColor = ColorPalette.WithAlpha(valColor, 0.5f); valGlow.effectDistance = new Vector2(0f, -2f);
             PlaceBand(val.rectTransform, valY, 48f, pad);
 
-            // Draw frames every participant gold — nobody won, nobody lost. wi is -1 there,
-            // so no avatar takes the winner branch and both colours resolve to gold.
             BuildParticipantAvatars(card.transform, count, wi, avY, avRowH, avSize, pad,
-                                    draw ? gold : green, draw ? gold : red);
+                                    green, red, draw, gold);
 
             BuildResultButtons(card.transform, btnY, 54f, pad, green, gold);
 
@@ -2054,7 +2068,8 @@ namespace ValoCase.UI.Screens
             rt.sizeDelta = new Vector2(-2f * pad, h);
         }
 
-        void BuildParticipantAvatars(Transform card, int count, int winnerIdx, float yFromTop, float h, float size, float pad, Color green, Color red)
+        void BuildParticipantAvatars(Transform card, int count, int winnerIdx, float yFromTop, float h, float size, float pad,
+                                     Color green, Color red, bool draw, Color gold)
         {
             var go = NewGo("Avatars", card, typeof(HorizontalLayoutGroup));
             PlaceBand((RectTransform)go.transform, yFromTop, h, pad);
@@ -2064,13 +2079,19 @@ namespace ValoCase.UI.Screens
             hlg.childForceExpandWidth = false; hlg.childForceExpandHeight = false;
             hlg.childControlWidth = true; hlg.childControlHeight = true;
 
+            // In a draw the gold frame marks everyone who shared the top total; the rest
+            // are framed as losers just like a normal defeat.
             for (int i = 0; i < count; i++)
-                AddParticipantAvatar(go.transform, _result.Players[i], i == winnerIdx, size, green, red);
+            {
+                var p = _result.Players[i];
+                bool highlighted = draw ? p.IsDrawWinner : i == winnerIdx;
+                Color frame = highlighted ? (draw ? gold : green) : red;
+                AddParticipantAvatar(go.transform, p, highlighted, size, frame);
+            }
         }
 
-        void AddParticipantAvatar(Transform parent, BattlePlayerResult p, bool isWinner, float size, Color green, Color red)
+        void AddParticipantAvatar(Transform parent, BattlePlayerResult p, bool isWinner, float size, Color rc)
         {
-            Color rc = isWinner ? green : red;
 
             var av = MakeAngled("PAv", parent, ColorPalette.Surface, 7f, raycast: false);
             var le = av.gameObject.AddComponent<LayoutElement>();

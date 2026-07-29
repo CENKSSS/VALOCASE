@@ -108,30 +108,28 @@ namespace ValoCase.Battle
                 }
             }
 
-            // Winner: highest total VP. When EVERY player finished on the same total the
-            // battle is a DRAW — no winner, no loot, and the entry cost is refunded.
-            int firstVp = result.Players.Count > 0 ? result.Players[0].TotalVp : 0;
+            // Winner: highest total VP. When two or more players SHARE that top total the
+            // battle is a DRAW for them — no winner, no loot, and each of them gets the
+            // entry cost back. Anyone below the top total just loses.
             int bestIdx = 0;
-            int bestVp  = firstVp;
-            bool allEqual = result.Players.Count > 0;
+            int bestVp  = result.Players.Count > 0 ? result.Players[0].TotalVp : 0;
+            int tiedAtTop = result.Players.Count > 0 ? 1 : 0;
             for (int p = 1; p < result.Players.Count; p++)
             {
-                if (result.Players[p].TotalVp != firstVp) allEqual = false;
-                if (result.Players[p].TotalVp > bestVp)
-                {
-                    bestVp  = result.Players[p].TotalVp;
-                    bestIdx = p;
-                }
+                int vp = result.Players[p].TotalVp;
+                if (vp > bestVp) { bestVp = vp; bestIdx = p; tiedAtTop = 1; }
+                else if (vp == bestVp) tiedAtTop++;
             }
 
-            result.IsDraw = allEqual && result.Players.Count >= 2;
+            result.IsDraw = tiedAtTop >= 2;
 
             if (result.IsDraw)
             {
                 // No IsWinner flag on any player — the panels/popup read the draw state.
-                result.WinnerIndex = -1;
-                result.UserWon     = false;
-                result.RefundVp    = Mathf.Max(0, lobby.WagerVP);
+                result.WinnerIndex  = -1;
+                result.UserWon      = false;
+                result.RefundVp     = Mathf.Max(0, lobby.WagerVP);
+                result.UserRefunded = result.MarkDrawWinners();
             }
             else
             {
@@ -183,6 +181,8 @@ namespace ValoCase.Battle
         public string Name;
         public bool   IsUser;
         public bool   IsWinner;
+        /// <summary>Shares the top total in a draw — gets the entry cost back.</summary>
+        public bool   IsDrawWinner;
         public int    TotalVp;
         public Sprite Avatar;   // backend avatarId resolved to a face card; null → header falls back
         public readonly List<SkinDefinitionSO> Skins = new List<SkinDefinitionSO>();
@@ -197,11 +197,34 @@ namespace ValoCase.Battle
         public bool UserWon;
         public int TotalPotVp;
 
-        // Draw: every participant tied on the same total. WinnerIndex stays -1 and no
-        // player carries IsWinner, which distinguishes a real draw from an unresolved
-        // winner (mapping/transport failure). RefundVp is the entry cost returned.
+        // Draw: two or more participants share the highest total, so there is no single
+        // winner. Everyone on that top total gets their entry cost back (IsDrawWinner);
+        // anyone below it simply loses. WinnerIndex stays -1 and no player carries
+        // IsWinner, which distinguishes a real draw from an unresolved winner
+        // (mapping/transport failure). RefundVp is the entry cost returned to each of
+        // them; UserRefunded says whether the local player is one.
         public bool IsDraw;
         public int RefundVp;
+        public bool UserRefunded;
+
+        /// <summary>Marks the tied top scorers and reports whether the local player is one.</summary>
+        public bool MarkDrawWinners()
+        {
+            if (Players.Count == 0) return false;
+
+            int best = int.MinValue;
+            foreach (var p in Players)
+                if (p != null && p.TotalVp > best) best = p.TotalVp;
+
+            bool userTied = false;
+            foreach (var p in Players)
+            {
+                if (p == null) continue;
+                p.IsDrawWinner = p.TotalVp == best;
+                if (p.IsDrawWinner && p.IsUser) userTied = true;
+            }
+            return userTied;
+        }
 
         public readonly List<BattlePlayerResult> Players  = new List<BattlePlayerResult>();
         public readonly List<SkinDefinitionSO>   AllSkins = new List<SkinDefinitionSO>();

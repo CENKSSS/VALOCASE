@@ -131,13 +131,14 @@ namespace ValoCase.Battle
             RecordStatistics(battle);
         }
 
-        // Offline there is no server authority, so the draw refund is ours to make.
-        // Guarded because Settle runs from both the normal finish and the leave-triggered
-        // force-settle; the entry cost must come back exactly once.
+        // Offline there is no server authority, so the draw refund is ours to make — but
+        // only when the local player is one of the tied top scorers. Guarded because
+        // Settle runs from both the normal finish and the leave-triggered force-settle;
+        // the entry cost must come back exactly once.
         void RefundDraw(BattleResult battle)
         {
             if (_refunded) return;
-            if (battle == null || !battle.IsDraw) return;
+            if (battle == null || !battle.IsDraw || !battle.UserRefunded) return;
             if (battle.RefundVp <= 0 || _vp == null) return;
 
             _vp.Add(battle.RefundVp);
@@ -316,6 +317,8 @@ namespace ValoCase.Battle
             }
 
             battle.TotalPotVp = pot;
+            // Tied slots come from the authoritative totals — see BattleLobbyMapper.
+            if (battle.IsDraw) battle.UserRefunded = battle.MarkDrawWinners();
             return battle;
         }
 

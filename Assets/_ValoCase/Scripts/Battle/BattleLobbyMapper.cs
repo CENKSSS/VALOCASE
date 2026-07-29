@@ -137,6 +137,11 @@ namespace ValoCase.Battle
             battle.PlayerCount = battle.Players.Count;
             battle.TotalPotVp  = pot;
 
+            // Which slots tied is derived from the authoritative totals rather than a
+            // separate field, so the server only has to say "this was a draw" and how
+            // much it refunded the requesting player.
+            if (battle.IsDraw) battle.UserRefunded = battle.MarkDrawWinners();
+
             // Winner index is the POSITION of the winning slot in the reordered list.
             battle.WinnerIndex = -1;
             for (int i = 0; i < battle.Players.Count; i++)
