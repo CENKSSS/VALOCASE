@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -1413,12 +1414,24 @@ namespace ValoCase.UI.Screens
         float _multiLandingJitter;
         const float MultiItemWidth = 132f;
         const float MultiRowHeight = 176f;
-        // Keeps the shared random landing within the card (±40% of the card width) so
-        // the winner is always unambiguously the card under the triangle.
-        const float MultiMarkerJitterFraction = 0.8f;
+        // Keeps the shared random landing near the MIDDLE of the winning card, not merely
+        // inside it. At ±40% of the card width the triangle could stop 16 px from the card
+        // edge — geometrically still the winner, but it read as sitting on the separator
+        // and players called the neighbouring card the result. ±15% leaves at least ~46 px
+        // of card on either side of the triangle, which reads unambiguously while still
+        // varying the stopping point between opens.
+        const float MultiMarkerJitterFraction = 0.3f;
 
         // Red pointer sits at the row/viewport center. Ratio tuned so the tick lands on the
         // visible separator under the pointer; 0.5 is math-centered but reads ~0.35 early.
+        // One continuous spin: the reel cruises fast, then winds down over LandingSeconds.
+        // The landing distance is derived from the cruise speed (a cubic ease-out covers
+        // speed * duration / 3), so the wind-down starts at exactly the speed the reel
+        // already had and coasts to a stop instead of jumping. ~5.5 s in total when the
+        // results are already in hand.
+        const float CruiseItemsPerSecond = 20f;
+        const float MinCruiseSeconds     = 1.0f;
+        const float LandingSeconds       = 4.5f;
         const float PointerLocalX        = 0f;
         const float TickPhaseOffsetRatio = 0.15f;
         const float TickPhaseOffset      = MultiItemWidth * TickPhaseOffsetRatio;
@@ -1634,27 +1647,6 @@ namespace ValoCase.UI.Screens
             return list;
         }
 
-        // Swaps the real winner into each row's winner slot once the server answers, and
-        // drops any row whose open never completed.
-        void ApplyWinnersToRows(List<SkinDefinitionSO> winners)
-        {
-            var visuals = GameContext.Instance?.RarityVisuals;
-            for (int i = 0; i < _multiRows.Count; i++)
-            {
-                var row = _multiRows[i];
-                if (row?.root == null) continue;
-
-                if (i >= winners.Count || winners[i] == null)
-                {
-                    row.root.gameObject.SetActive(false);   // this open failed
-                    continue;
-                }
-
-                if (_multiWinnerIndex >= 0 && _multiWinnerIndex < row.items.Count)
-                    row.items[_multiWinnerIndex]?.Bind(winners[i], visuals);
-            }
-        }
-
         // Mirrors the single backend open (request → map → authoritative wallet).
         // Runs alongside the spin; onDone always fires so the reel is never left waiting.
         // Progression is collected rather than applied — the caller applies it after the
@@ -1861,63 +1853,258 @@ namespace ValoCase.UI.Screens
             img.raycastTarget = false;
         }
 
-        // resultsReady gates the final approach: the reel spins freely from the first
-        // frame, but must not carry a placeholder card into view. Past SafeEased the
-        // winner slot is close enough to the pointer to matter, so the spin holds there
-        // until the server answers — in practice the answer arrives long before, since
-        // the whole spin lasts seconds and the requests overlap it.
+        // Free-scrolls every row at constant speed while the server answers, recycling
+        // cards off the left edge back to the right so it can run for as long as it needs
+        // to, then appends the real winners and decelerates onto them. Same two-phase
+        // shape the single-open reel uses; an earlier attempt eased toward a fixed target
+        // and simply paused when the results were late, which read as a stutter roughly a
+        // second in — the ease front-loads the travel, so the pause always landed there.
         IEnumerator AnimateMultiRows(System.Func<bool> resultsReady, List<SkinDefinitionSO> winners)
         {
-            const float SafeEased = 0.60f;
-            // Never hang on a stuck request; the fetch reports done on failure too, this
-            // is only a backstop.
-            const float MaxHoldSeconds = 20f;
+            const float MaxWarmupSeconds = 20f;   // backstop; the fetch also reports failures
 
-            float dur    = GameConstants.CaseSpinDurationSeconds;
-            float target = -(_multiWinnerIndex * MultiItemWidth);
-            float t = 0f;
-            float held = 0f;
+            var caseDef = _selected;
+            var pool    = CaseReelBuilder.BuildPool(caseDef);
+            var weights = caseDef?.DropTable?.RarityWeights;
+            var visuals = GameContext.Instance?.RarityVisuals;
+
+            float x = 0f;
             int prevBoundary = int.MinValue;
+
+            // ── Phase 1: cruise at full speed until the winners are known ────────
+            {
+                float speed      = MultiItemWidth * CruiseItemsPerSecond;
+                float stripWidth = _multiRows.Count > 0 && _multiRows[0] != null
+                                 ? _multiRows[0].items.Count * MultiItemWidth : 0f;
+                float waited = 0f;
+
+                // Always cruise a little even when the results are already in hand, so the
+                // reel never starts mid-deceleration.
+                while (stripWidth > 0f && waited < MaxWarmupSeconds &&
+                       (waited < MinCruiseSeconds || (resultsReady != null && !resultsReady())))
+                {
+                    float dt = Time.unscaledDeltaTime;
+                    waited += dt;
+                    x      -= speed * dt;
+
+                    foreach (var row in _multiRows)
+                    {
+                        if (row?.content == null) continue;
+                        row.content.anchoredPosition = new Vector2(x, 0f);
+
+                        // Recycle anything that has scrolled past the left edge.
+                        float cull = -(row.root.rect.width * 0.5f) - MultiItemWidth;
+                        foreach (var item in row.items)
+                        {
+                            if (item == null) continue;
+                            var ap = item.RectTransform.anchoredPosition;
+                            if (x + ap.x >= cull) continue;
+                            ap.x += stripWidth;
+                            item.RectTransform.anchoredPosition = ap;
+                            item.Bind(CaseReelBuilder.PickFiller(pool, weights), visuals);
+                        }
+                    }
+
+                    PlayBoundaryTick(x, ref prevBoundary);
+                    yield return null;
+                }
+            }
+
+            // ── Phase 2: spin down onto the winners ──────────────────────────────
+            float cruise   = MultiItemWidth * CruiseItemsPerSecond;
+            float dur      = LandingSeconds;
+            float distance = cruise * dur / 3f;
+            float winnerX  = AppendWinnersForLanding(winners, -x + distance, pool, weights, visuals);
+
+            float from   = x;
+            float target = -winnerX + _multiLandingJitter;
+
+            float t = 0f;
+            bool sampledLooksStopped = false;   // TEMP diagnostic flag
             while (t < dur)
             {
+                t += Time.unscaledDeltaTime;
                 float p = Mathf.Clamp01(t / dur);
-                float eased = 1f - Mathf.Pow(1f - p, 5f);
-
-                bool ready = resultsReady == null || resultsReady() || held >= MaxHoldSeconds;
-                if (!ready && eased > SafeEased)
-                {
-                    eased = SafeEased;          // hold short of the reveal
-                    held += Time.unscaledDeltaTime;
-                }
-                else t += Time.unscaledDeltaTime;
+                float eased = 1f - Mathf.Pow(1f - p, 3f);
                 // Every row shares the same offset this frame, so all triangles stay in
                 // perfect sync — but the shared landing spot is random each open.
-                float x = Mathf.Lerp(0f, target + _multiLandingJitter, eased);
+                x = Mathf.Lerp(from, target, eased);
                 foreach (var row in _multiRows)
                     if (row.content != null)
                         row.content.anchoredPosition = new Vector2(x, 0f);
 
-                // One tick per separator crossing the fixed pointer. No throttle, so the
-                // slow end phase always ticks on the boundary; a fast frame that skips
-                // several boundaries still fires once (early phase precision is not critical).
-                int boundary = Mathf.FloorToInt((PointerLocalX - x + TickPhaseOffset) / MultiItemWidth);
-                if (prevBoundary == int.MinValue) prevBoundary = boundary;
-                else if (boundary != prevBoundary)
+                // TEMP diagnostic — remove with LogLandingDiagnostics. Samples the moment
+                // the reel first looks stationary to a player, so a creep between "looks
+                // stopped" and "actually stopped" shows up as two different cards.
+                if (!sampledLooksStopped && Mathf.Abs(target - x) < MultiItemWidth * 0.75f)
                 {
-                    ValoCase.Audio.SoundManager.Instance?.PlayTick();
-                    prevBoundary = boundary;
+                    sampledLooksStopped = true;
+                    Debug.Log($"[REEL_DIAG] LOOKS-STOPPED at t={t:0.00}s of {dur:0.00}s, " +
+                              $"still {Mathf.Abs(target - x):0.#}px to travel " +
+                              $"({Mathf.Abs(target - x) / MultiItemWidth:0.00} cards)");
+                    LogLandingDiagnostics(winners, x);
                 }
+
+                PlayBoundaryTick(x, ref prevBoundary);
                 yield return null;
             }
 
-            // The real cards go in only now — before this point the winner slot was still
-            // off to the right, so nothing placeholder was ever on screen.
-            if (winners != null) ApplyWinnersToRows(winners);
-
-            float finalX = target + _multiLandingJitter;
             foreach (var row in _multiRows)
                 if (row.content != null)
-                    row.content.anchoredPosition = new Vector2(finalX, 0f);
+                    row.content.anchoredPosition = new Vector2(target, 0f);
+
+            LogLandingDiagnostics(winners, target);   // TEMP diagnostic — remove after use
+
+            // Rows whose open never completed are dropped now that the reel has settled.
+            if (winners != null) HideRowsWithoutWinner(winners);
+        }
+
+        // TEMP diagnostic — remove once the reel/popup mismatch is understood.
+        // Runs only after the reel has come to rest and reads positions; it never moves
+        // anything, so the spin itself is untouched.
+        void LogLandingDiagnostics(List<SkinDefinitionSO> winners, float restX)
+        {
+            for (int r = 0; r < _multiRows.Count; r++)
+            {
+                var row = _multiRows[r];
+                if (row?.items == null || row.items.Count == 0) continue;
+
+                var expected = winners != null && r < winners.Count ? winners[r] : null;
+
+                ValoCase.UI.ReelItemView nearest = null;
+                int   nearestIdx = -1;
+                float nearestAbs = float.MaxValue;
+                float nearestOff = 0f;
+                float expectedOff = float.NaN;
+
+                for (int i = 0; i < row.items.Count; i++)
+                {
+                    var item = row.items[i];
+                    if (item == null || item.RectTransform == null) continue;
+
+                    // Marker sits at row-local x = 0; a card's centre is content + card offset.
+                    float centre = restX + item.RectTransform.anchoredPosition.x;
+                    if (Mathf.Abs(centre) < nearestAbs)
+                    {
+                        nearestAbs = Mathf.Abs(centre);
+                        nearest    = item;
+                        nearestIdx = i;
+                        nearestOff = centre;
+                    }
+                    if (expected != null && item.Skin == expected && float.IsNaN(expectedOff))
+                        expectedOff = centre;
+                }
+
+                string expName  = expected != null ? expected.SkinName : "<none>";
+                string nearName = nearest?.Skin != null ? nearest.Skin.SkinName : "<empty card>";
+                bool   match    = nearest != null && expected != null && nearest.Skin == expected;
+
+                // Every card whose body is anywhere near the triangle, so a single log from
+                // a bad open shows exactly what was on screen around the marker.
+                var around = new StringBuilder();
+                for (int i = 0; i < row.items.Count; i++)
+                {
+                    var item = row.items[i];
+                    if (item == null || item.RectTransform == null) continue;
+                    float centre = restX + item.RectTransform.anchoredPosition.x;
+                    if (Mathf.Abs(centre) > MultiItemWidth * 1.6f) continue;
+                    around.Append($" [{i}]'{(item.Skin != null ? item.Skin.SkinName : "<empty>")}'@{centre:0.#}");
+                }
+
+                Debug.Log($"[REEL_DIAG] row={r} match={match} " +
+                          $"expected='{expName}' underMarker='{nearName}' " +
+                          $"markerOffset={nearestOff:0.#}px cardIndex={nearestIdx}/{row.items.Count} " +
+                          $"expectedCardOffset={(float.IsNaN(expectedOff) ? "NOT-ON-REEL" : expectedOff.ToString("0.#") + "px")} " +
+                          $"restX={restX:0.#} jitter={_multiLandingJitter:0.#} cardWidth={MultiItemWidth}" +
+                          $" | nearMarker:{around}");
+            }
+        }
+
+        // One tick per separator crossing the fixed pointer. No throttle, so the slow end
+        // phase always ticks on the boundary; a fast frame that skips several boundaries
+        // still fires once (early phase precision is not critical).
+        static void PlayBoundaryTick(float x, ref int prevBoundary)
+        {
+            int boundary = Mathf.FloorToInt((PointerLocalX - x + TickPhaseOffset) / MultiItemWidth);
+            if (prevBoundary == int.MinValue) { prevBoundary = boundary; return; }
+            if (boundary == prevBoundary) return;
+            ValoCase.Audio.SoundManager.Instance?.PlayTick();
+            prevBoundary = boundary;
+        }
+
+        // Places every row's winner at the requested distance ahead, bridging the gap to
+        // the cards already on screen with filler and trailing more behind it so the right
+        // half stays populated once the winner centres. Returns the content-local x the
+        // winners actually sit at — identical across rows, which is what keeps the
+        // pointers in sync.
+        float AppendWinnersForLanding(List<SkinDefinitionSO> winners, float desiredX,
+                                      List<SkinDefinitionSO> pool,
+                                      IReadOnlyList<RarityWeightEntry> weights,
+                                      RarityVisualSO visuals)
+        {
+            int trailing = GameConstants.ReelVisibleItemCount;
+
+            // Rows are built and recycled identically, so one row's extent speaks for all.
+            float maxX = 0f;
+            var first = _multiRows.Count > 0 ? _multiRows[0] : null;
+            if (first?.items != null)
+                foreach (var item in first.items)
+                    if (item != null) maxX = Mathf.Max(maxX, item.RectTransform.anchoredPosition.x);
+
+            // Snap to the card grid. desiredX comes from a live scroll offset, so it is an
+            // arbitrary float; placing the winner there would leave the last gap-filler
+            // only a fraction of a card away and the two would overlap, showing a doubled
+            // separator. Rounding up to a whole number of cards past the strip keeps every
+            // card exactly one width apart.
+            int steps = Mathf.Max(1, Mathf.CeilToInt((desiredX - maxX) / MultiItemWidth));
+            float winnerX = maxX + steps * MultiItemWidth;
+
+            // Bridge the gap in whole card steps. Accumulating a float here would drift
+            // over ~30 additions and reintroduce the overlap this snapping exists to stop.
+            foreach (var row in _multiRows)
+            {
+                if (row?.content == null) continue;
+
+                for (int i = 1; i < steps; i++)
+                    AppendItem(row, CaseReelBuilder.PickFiller(pool, weights),
+                               maxX + i * MultiItemWidth, visuals);
+            }
+
+            for (int r = 0; r < _multiRows.Count; r++)
+            {
+                var row = _multiRows[r];
+                if (row?.content == null) continue;
+
+                var winner = winners != null && r < winners.Count ? winners[r] : null;
+                AppendItem(row, winner, winnerX, visuals);
+
+                for (int i = 1; i <= trailing; i++)
+                    AppendItem(row, CaseReelBuilder.PickFiller(pool, weights),
+                               winnerX + i * MultiItemWidth, visuals);
+            }
+
+            return winnerX;
+        }
+
+        void AppendItem(MultiRow row, SkinDefinitionSO skin, float x, RarityVisualSO visuals)
+        {
+            if (PoolManager.Instance == null) return;
+            var view = PoolManager.Instance.GetReelItem();
+            view.transform.SetParent(row.content, false);
+            view.Bind(skin, visuals);
+            view.RectTransform.anchoredPosition = new Vector2(x, 0f);
+            row.items.Add(view);
+        }
+
+        void HideRowsWithoutWinner(List<SkinDefinitionSO> winners)
+        {
+            for (int i = 0; i < _multiRows.Count; i++)
+            {
+                var row = _multiRows[i];
+                if (row?.root == null) continue;
+                if (i >= winners.Count || winners[i] == null)
+                    row.root.gameObject.SetActive(false);
+            }
         }
 
         void ClearMultiRows()
