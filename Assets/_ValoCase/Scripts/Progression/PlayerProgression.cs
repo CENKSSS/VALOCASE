@@ -16,7 +16,14 @@ namespace ValoCase.Progression
     public static class PlayerProgression
     {
         public const int DefaultXpPerLevel = 20;
-        public const int MaxLevel = 15;
+
+        /// <summary>
+        /// Highest level with an authored threshold. NOT a cap — levelling continues past
+        /// it at <see cref="XpPerLevelAfterTable"/> each. It is only the point where case
+        /// unlocks stop mattering, since the last category (Melee) opens here.
+        /// </summary>
+        public const int LastAuthoredLevel = 15;
+        public const int XpPerLevelAfterTable = 100;
 
         // Cumulative total XP required to REACH each level (index = level). Mirrors the
         // backend threshold table; used ONLY as a display fallback when the backend omits
@@ -67,17 +74,12 @@ namespace ValoCase.Progression
         // so "vandal_basic", "protocol_melee", and "melee_arcane" all resolve correctly.
         static readonly string[] CategoryKeys = { "classic", "ghost", "bulldog", "vandal", "melee" };
 
-        public static bool IsMaxLevel => Level >= MaxLevel;
+        /// <summary>True once every case category is unlocked. Levelling does not stop here.</summary>
+        public static bool AllCasesUnlocked => Level >= LastAuthoredLevel;
 
-        public static float Fill01
-        {
-            get
-            {
-                if (IsMaxLevel) return 1f;
-                return XpRequiredForNextLevel > 0
-                    ? Mathf.Clamp01((float)CurrentLevelXp / XpRequiredForNextLevel) : 0f;
-            }
-        }
+        public static float Fill01 => XpRequiredForNextLevel > 0
+            ? Mathf.Clamp01((float)CurrentLevelXp / XpRequiredForNextLevel)
+            : 0f;
 
         /// <summary>Overwrites the cache with a backend-reported snapshot. Primitive
         /// arguments keep this layer free of any backend-DTO dependency.</summary>
@@ -104,16 +106,23 @@ namespace ValoCase.Progression
 
         static void ApplyTableFallback(int backendCurrentLevelXp)
         {
-            if (IsMaxLevel)
+            int floorXp;
+
+            if (Level >= LastAuthoredLevel)
             {
-                CurrentLevelXp         = Mathf.Max(0, TotalXp - LevelTotalXp[MaxLevel]);
-                XpRequiredForNextLevel = 0;
-                return;
+                // Past the authored table every level costs a flat amount, so the floor is
+                // the last threshold plus one block per level beyond it. Levelling never
+                // stops, and the bar never sticks at full.
+                floorXp = LevelTotalXp[LastAuthoredLevel]
+                        + (Level - LastAuthoredLevel) * XpPerLevelAfterTable;
+                XpRequiredForNextLevel = XpPerLevelAfterTable;
+            }
+            else
+            {
+                floorXp = LevelTotalXp[Level];
+                XpRequiredForNextLevel = Mathf.Max(1, LevelTotalXp[Level + 1] - floorXp);
             }
 
-            int lvl     = Mathf.Clamp(Level, 1, MaxLevel - 1);
-            int floorXp = LevelTotalXp[lvl];
-            XpRequiredForNextLevel = Mathf.Max(1, LevelTotalXp[lvl + 1] - floorXp);
             CurrentLevelXp = TotalXp > 0
                 ? Mathf.Clamp(TotalXp - floorXp, 0, XpRequiredForNextLevel)
                 : Mathf.Max(0, backendCurrentLevelXp);

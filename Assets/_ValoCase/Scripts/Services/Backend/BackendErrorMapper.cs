@@ -15,6 +15,7 @@ namespace ValoCase.Services.Backend
         public const string Unauthorized = "Oturum süresi doldu. Lütfen tekrar giriş yap.";
         public const string Forbidden    = "Bu işlem için yetkin yok.";
         public const string Conflict     = "İşlem tamamlanamadı. VP bakiyeni veya mevcut durumunu kontrol et.";
+        public const string NoFunds      = "Yeterli VP'n yok.";
         public const string TooManyReq   = "Çok hızlı işlem yapıyorsun. Lütfen biraz bekle.";
         public const string ServerError  = "Sunucu hatası oluştu. Lütfen biraz sonra tekrar dene.";
         public const string Generic      = "İşlem başarısız. Lütfen tekrar dene.";
@@ -32,6 +33,10 @@ namespace ValoCase.Services.Backend
 
             // HttpStatus 0 == transport failure with no HTTP response.
             if (error.HttpStatus == 0) return IsOffline ? Offline : Generic;
+
+            // Checked before the switch: the wallet case has its own message and must not
+            // fall through to the generic 4xx text.
+            if (error.IsInsufficientFunds) return NoFunds;
 
             switch (error.HttpStatus)
             {

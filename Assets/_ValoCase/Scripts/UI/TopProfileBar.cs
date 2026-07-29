@@ -156,15 +156,13 @@ namespace ValoCase.UI
             if (_levelLabel != null) _levelLabel.text = $"Lv. {lvl}";
             if (_xpLabel != null)
             {
-                if (PlayerProgression.IsMaxLevel) _xpLabel.text = "MAX";
-                else
-                {
-                    int cur = PlayerProgression.CurrentLevelXp;
-                    int req = PlayerProgression.XpRequiredForNextLevel > 0
-                        ? PlayerProgression.XpRequiredForNextLevel
-                        : PlayerProgression.DefaultXpPerLevel;
-                    _xpLabel.text = $"{cur}/{req}";
-                }
+                // There is no top level — the bar keeps counting past 15, where the last
+                // case category unlocks but progression carries on.
+                int cur = PlayerProgression.CurrentLevelXp;
+                int req = PlayerProgression.XpRequiredForNextLevel > 0
+                    ? PlayerProgression.XpRequiredForNextLevel
+                    : PlayerProgression.DefaultXpPerLevel;
+                _xpLabel.text = $"{cur}/{req}";
             }
             if (_xpFill != null) _xpFill.anchorMax = new Vector2(PlayerProgression.Fill01, 1f);
         }
