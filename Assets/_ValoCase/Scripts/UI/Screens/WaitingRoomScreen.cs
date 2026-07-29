@@ -75,6 +75,9 @@ namespace ValoCase.UI.Screens
         // True once this battle's result has been settled (rewards/stats), so leaving
         // mid-animation cannot leave VP spent without settlement, and cannot double-settle.
         bool                         _resultSettled;
+        // Held from the completed-lobby response until the reveal, so nothing derived
+        // from it can reach the UI before the player sees the outcome.
+        LobbyResponse                _completedLobby;
 
         // Battle authority seam (economy / result generation / rewards / stats / save).
         // The screen no longer spends VP or grants skins directly — it calls this.
@@ -145,6 +148,7 @@ namespace ValoCase.UI.Screens
             _warmupRunning = false;
             _warmupShown   = false;
             _resultSettled = false;
+            _completedLobby = null;   // never carry a previous battle's response over
             _lastLobby     = null;
             _lastStatus    = null;
             _slotsRoot     = null;
@@ -1128,11 +1132,17 @@ namespace ValoCase.UI.Screens
             // order as before. The screen no longer touches VP or inventory directly.
             // Guarded by _resultSettled so a leave-triggered force-settle and this normal
             // settle never both run (and the service's own guards back this up).
+            // Settle pulls the authoritative wallet and inventory. Running it here — with
+            // the totals counted up and the winner already marked — means the refund or
+            // winnings land after the player has seen the outcome, never before it.
             if (!_resultSettled)
             {
                 _battleService?.Settle(_result);
                 _resultSettled = true;
             }
+
+            ApplyPvpProgression(_completedLobby);
+            _completedLobby = null;
 
             _state = RoomState.Finished;
             // Online mode hides the bottom CTA while waiting/running; bring it back as
@@ -1911,7 +1921,14 @@ namespace ValoCase.UI.Screens
             Debug.Log("[ONLINE_BATTLE] local player " +
                       (_result.IsDraw ? "DRAW (refundVp=" + _result.RefundVp + ")" : _result.UserWon ? "WIN" : "LOSS") +
                       " detected");
-            ResyncAfterPvp(lobby);
+
+            // Deliberately NOT resynced here. The completed lobby is already known to the
+            // client, so pulling the wallet now would drop the draw refund into the top
+            // bar before the reels have even started — the balance jumping up announced
+            // the draw while a loss left it unchanged, which gave the result away every
+            // time. Settle() resyncs once the outcome is on screen; the lobby is kept so
+            // its progression can be applied at the same moment.
+            _completedLobby = lobby;
 
             if (_slotsRoot != null) { Destroy(_slotsRoot); _slotsRoot = null; }
 
@@ -1927,19 +1944,25 @@ namespace ValoCase.UI.Screens
             StartCoroutine(RunBattle());
         }
 
+        // The lobby response carries no progression today — the server never puts one
+        // there, and JsonUtility still hands back a non-null all-zero object for the
+        // missing field. Applying that would blank the cached level to 1, so it is used
+        // only when it holds real values. XP itself is granted server-side and arrives
+        // with the wallet resync.
+        static void ApplyPvpProgression(LobbyResponse lobby)
+        {
+            var prog = lobby?.progression;
+            if (prog != null && (prog.level > 0 || prog.totalXp > 0))
+                ProgressionSync.ApplyFromProgression(prog, showXpToast: true);
+        }
+
+        // Full reconcile for the paths that never reach the reveal (an unmappable result).
         void ResyncAfterPvp(LobbyResponse lobby)
         {
             var ctx = GameContext.Instance;
             if (ctx == null) return;
 
-            // The lobby response carries no progression — the server never puts one there,
-            // and JsonUtility still hands back a non-null all-zero object for the missing
-            // field. Applying that would blank the cached level to 1 until the wallet sync
-            // below repaired it, so it is only used when it holds real values.
-            // XP itself is granted server-side and arrives with RequestBackendResync.
-            var prog = lobby?.progression;
-            if (prog != null && (prog.level > 0 || prog.totalXp > 0))
-                ProgressionSync.ApplyFromProgression(prog, showXpToast: true);
+            ApplyPvpProgression(lobby);
 
             Debug.Log("[ONLINE_BATTLE] wallet/inventory/progression resync started battleId=" + lobby?.battleId);
             void OnInv()
