@@ -39,6 +39,11 @@ namespace ValoCase.UI.Screens
         Sprite          _pendingSprite;
         Sprite          _circleMaskSprite;
 
+        // ── Country row (same picker the first-launch panel opens) ────────────
+        Button            _countryBtn;
+        TextMeshProUGUI   _countryBtnLbl;
+        CountryChangeFlow _countryFlow;
+
         // ── Save-button dirty state ───────────────────────────────────────────
         bool            _hasUnsavedChanges = true;
         Image           _saveBtnImg;
@@ -238,6 +243,9 @@ namespace ValoCase.UI.Screens
 
             // ── Display name block ────────────────────────────────────────────
             BuildDisplayNameBlock(cRt.transform);
+
+            // ── Country row — shows the stored country and opens the picker ───
+            BuildCountryRow(cRt.transform);
 
             var selHint = PT(cRt, "GridHint", "SELECT AVATAR",
                 9f, FontStyles.Bold, TextAlignmentOptions.Center, AccentPink);
@@ -449,6 +457,111 @@ namespace ValoCase.UI.Screens
             _displayNameInput.onValueChanged.AddListener(_ => MarkDirty());
         }
 
+        // ── Country row ───────────────────────────────────────────────────────
+        // Displays the country the account has and opens CountryPickerPopup — the same
+        // picker first-launch setup uses, so there is one list and one label format.
+        //
+        // Queued behind SAVE, exactly like the name and avatar. Picking a country and
+        // confirming it only stages the choice: the row shows the new country, SAVE lights
+        // up, and nothing leaves the device or touches the local save until SAVE is
+        // pressed. Backing out of the screen therefore changes nothing.
+        //
+        // CountryChangeFlow still owns the rules — normalise, confirm, single request,
+        // apply only the server's echo. The only difference is when Confirm() is called:
+        // the SAVE button calls it, not the dialog.
+        void BuildCountryRow(Transform parent)
+        {
+            _countryBtn = BuildActionButton(parent, "COUNTRY", AccentPink);
+            _countryBtnLbl = _countryBtn.GetComponentInChildren<TextMeshProUGUI>();
+
+            _countryFlow = new CountryChangeFlow(
+                GameContext.Instance?.Save?.Data?.countryCode,
+                SaveCountryForFlow,
+                onApplied: _ =>
+                {
+                    // The flow already holds the server's echo; the label reads from it.
+                    // One toast for the whole profile save, raised by FinishProfileSaved.
+                    SetCountryRowBusy(false);
+                    // The top bar shows the code in front of the name, and the country is
+                    // applied after the name save, so it needs telling a second time.
+                    PlayerProfileData.NotifyProfileChanged();
+                    FinishProfileSaved();
+                },
+                onFailed: err =>
+                {
+                    // Old country untouched; the row and SAVE are usable again for a retry.
+                    SetCountryRowBusy(false);
+                    GameEvents.RaiseToast(string.IsNullOrEmpty(err) ? CountryMessages.SaveFailed : err);
+                    SetSaveButtonActive(true);
+                });
+
+            _countryBtn.onClick.AddListener(OnCountryRowClicked);
+            RefreshCountryLabel();
+        }
+
+        // Backend when available; otherwise the same local fallback the name and avatar
+        // use in offline editor sessions. Either way the flow hears "saved" only with a
+        // code that was actually stored.
+        void SaveCountryForFlow(string code, System.Action<string> onSaved, System.Action<string> onFailed)
+        {
+            var ctx = GameContext.Instance;
+            if (ctx != null && ctx.BackendEnabled)
+            {
+                ctx.SaveCountryBackend(code, onSaved, onFailed);
+                return;
+            }
+
+            if (ctx?.Save?.Data != null)
+            {
+                ctx.Save.Data.countryCode = code;
+                ctx.Save.Save();
+            }
+            onSaved?.Invoke(code);
+        }
+
+        void OnCountryRowClicked()
+        {
+            if (_countryFlow == null || _countryFlow.State == CountryChangeFlow.Phase.Saving) return;
+            CountryPickerPopup.Show(transform, _countryFlow.CurrentCode, OnCountryPicked);
+        }
+
+        void OnCountryPicked(string code)
+        {
+            // Select() refuses the country the account already has, so re-picking the
+            // current entry never raises a pointless confirmation or request.
+            if (_countryFlow == null || !_countryFlow.Select(code)) return;
+
+            ConfirmDialogPopup.Show(transform, CountryMessages.ConfirmChange,
+                CountryMessages.ConfirmYes, CountryMessages.ConfirmNo,
+                // Yes stages the choice and lights up SAVE — it does not send anything.
+                // The flow stays in AwaitingConfirmation until SAVE calls Confirm().
+                onConfirm: () => { RefreshCountryLabel(); MarkDirty(); },
+                onCancel:  () => { _countryFlow.Cancel(); RefreshCountryLabel(); });
+        }
+
+        void SetCountryRowBusy(bool busy)
+        {
+            if (_countryBtn != null) _countryBtn.interactable = !busy;
+            if (busy)
+            {
+                if (_countryBtnLbl != null) _countryBtnLbl.text = "COUNTRY: " + CountryMessages.Saving;
+                return;
+            }
+            RefreshCountryLabel();
+        }
+
+        // Shows the staged country while one is waiting for SAVE, so the row reflects what
+        // the player chose even though the account still holds the old value.
+        void RefreshCountryLabel()
+        {
+            if (_countryBtnLbl == null || _countryFlow == null) return;
+            var code = _countryFlow.State == CountryChangeFlow.Phase.AwaitingConfirmation
+                ? _countryFlow.PendingCode
+                : _countryFlow.CurrentCode;
+            var label = CountryCatalog.LabelFor(code);
+            _countryBtnLbl.text = "COUNTRY: " + (label.Length > 0 ? label : CountryMessages.NotSet);
+        }
+
         // ── Separator ─────────────────────────────────────────────────────────
         void BuildDivider(Transform parent)
         {
@@ -644,21 +757,19 @@ namespace ValoCase.UI.Screens
             if (newSprite != null) PlayerProfileData.SetAvatar(newSprite, newKey);
             PlayerProfileData.SetUsername(newName);
 
-            GameEvents.RaiseToast("Profile saved.");
-
-            _hasUnsavedChanges = false;
-            SetSaveButtonActive(false);
-            Debug.Log("[SETTINGS] Saved changes — save button disabled");
+            // The staged country is written here too, through the same flow, so the local
+            // path cannot quietly drop a change the player confirmed.
+            SaveCountryThenFinish();
         }
 
         // Persists the chosen avatar to the backend after the name save succeeded, then
         // adopts it into the local cache. With no avatar selected there is nothing to
-        // push, so the profile save is already complete.
+        // push, so the chain moves straight on to the country.
         void SaveAvatarThenFinish(GameContext ctx, string avatarKey, Sprite avatarSprite)
         {
             if (string.IsNullOrEmpty(avatarKey) || avatarSprite == null)
             {
-                FinishProfileSaved();
+                SaveCountryThenFinish();
                 return;
             }
 
@@ -666,13 +777,28 @@ namespace ValoCase.UI.Screens
                 saved =>
                 {
                     PlayerProfileData.SetAvatar(avatarSprite, avatarKey);
-                    FinishProfileSaved();
+                    SaveCountryThenFinish();
                 },
                 err =>
                 {
                     GameEvents.RaiseToast(string.IsNullOrEmpty(err) ? "Avatar kaydedilemedi." : err);
                     SetSaveButtonActive(true);   // name saved; allow retry for the avatar
                 });
+        }
+
+        // Last link in the save chain. Fires the country change the player staged earlier;
+        // with nothing staged the profile save is already complete. The flow's callbacks
+        // finish the save (or re-enable SAVE for a retry).
+        void SaveCountryThenFinish()
+        {
+            if (_countryFlow == null || _countryFlow.State != CountryChangeFlow.Phase.AwaitingConfirmation)
+            {
+                FinishProfileSaved();
+                return;
+            }
+
+            SetCountryRowBusy(true);
+            _countryFlow.Confirm();
         }
 
         void FinishProfileSaved()
@@ -683,23 +809,15 @@ namespace ValoCase.UI.Screens
             Debug.Log("[SETTINGS] Profile saved to backend — save button disabled");
         }
 
-        // Mirrors the backend rules: 3–20 chars, English letters/digits/underscore only.
-        static bool TryValidateNickname(string raw, out string trimmed, out string error)
+        // Renaming and signing up now answer to one rule, in NicknameValidator: a name
+        // that was legal at sign-up can never be illegal afterwards, or the reverse.
+        // The local copy this replaced was ASCII-only and capped at 20, so it refused
+        // names like Çınar that the server accepts, and accepted lengths it does not.
+        static bool TryValidateNickname(string raw, out string normalized, out string error)
         {
-            trimmed = (raw ?? string.Empty).Trim();
-            error = null;
-
-            if (string.IsNullOrEmpty(trimmed)) { error = "İsim boş bırakılamaz."; return false; }
-            if (trimmed.Length < 3)            { error = "İsim en az 3 karakter olmalı."; return false; }
-            if (trimmed.Length > 20)           { error = "İsim en fazla 20 karakter olmalı."; return false; }
-
-            foreach (var c in trimmed)
-            {
-                bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-                          (c >= '0' && c <= '9') || c == '_';
-                if (!ok) { error = "Sadece harf, rakam ve _ kullanabilirsin."; return false; }
-            }
-            return true;
+            bool ok = NicknameValidator.TryValidate(raw, out normalized, out var reason);
+            error = ok ? null : NicknameMessages.For(reason);
+            return ok;
         }
 
         // New players have no saved nickname yet — show the backend-style AgentXXXX
@@ -752,6 +870,11 @@ namespace ValoCase.UI.Screens
             }
             if (_agentNameLbl     != null) _agentNameLbl.text     = PlayerProfileData.AvatarKey;
             if (_displayNameInput != null) _displayNameInput.text = ResolveDisplayNameForUi();
+
+            // Mid-change (confirmation open or PATCH in flight) the flow ignores this, so
+            // a profile refresh cannot yank the state out from under the player.
+            _countryFlow?.SyncCurrent(GameContext.Instance?.Save?.Data?.countryCode);
+            RefreshCountryLabel();
 
             // Grid might not have been populated yet
             if (_gridContent != null && _gridContent.childCount == 0)
@@ -837,7 +960,9 @@ namespace ValoCase.UI.Screens
             field.textComponent  = itTmp;
             field.placeholder    = phTmp;
             field.text           = initialText;
-            field.characterLimit = 20;
+            // Backend storage guard, not the 15 user-visible characters the rule enforces
+            // — see the note in FirstLaunchProfilePopup.BuildNameInput.
+            field.characterLimit = NicknameValidator.MaxUtf16Length;
             field.contentType    = TMP_InputField.ContentType.Standard;
             field.caretColor     = AccentPink;
             field.selectionColor = AccentPinkSoft;

@@ -107,8 +107,9 @@ namespace ValoCase.Battle
                 bool isUser = IsMine(s, myAccountId);
                 var pr = new BattlePlayerResult
                 {
-                    Name     = ResolveName(s, isUser),
-                    IsUser   = isUser,
+                    Name        = ResolveName(s, isUser),
+                    CountryCode = s.countryCode,
+                    IsUser      = isUser,
                     IsWinner = winningSlot >= 0 && s.slotIndex == winningSlot,
                     TotalVp  = s.totalVp,            // authoritative — never recomputed
                     Avatar   = ValoCase.Profile.ProfileManager.ResolveAvatarSprite(s.avatarId),

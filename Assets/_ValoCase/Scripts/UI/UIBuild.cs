@@ -226,5 +226,63 @@ namespace ValoCase.UI
             var buttons = root.GetComponentsInChildren<Button>(true);
             for (int i = 0; i < buttons.Length; i++) WireButtonClick(buttons[i]);
         }
+
+        /// <summary>
+        /// The country code shown in front of a player's name, in the accent red. Bright
+        /// enough to read as its own element beside the name without a background — a
+        /// highlight behind it looks like a film over the letters.
+        /// </summary>
+        public const string CountryCodeHex = "#FF2E4C";
+
+        /// <summary>
+        /// "TR - CENK", with the code coloured. Returns the name untouched when there is
+        /// no country to show, so a player whose country is unknown — a bot, or an
+        /// opponent on a backend that does not send one — reads exactly as before.
+        ///
+        /// Rich text rather than a second label: the two parts stay on one baseline and
+        /// the row centres as a unit whatever the name length. Callers that also derive
+        /// something from the raw name (an avatar initial, a comparison) must keep using
+        /// the plain name — this output is for display only.
+        /// </summary>
+        public static string WithCountryTag(string countryCode, string name)
+        {
+            var code = ValoCase.Core.CountryCatalog.Normalize(countryCode);
+            if (code.Length == 0) return name;
+            return $"<color={CountryCodeHex}><b>{code}</b></color> - {name}";
+        }
+
+        /// <summary>
+        /// A parent for a popup that must be shown, used when the scene offers none —
+        /// no SafeArea and no root Canvas. Builds a screen-space overlay canvas above
+        /// everything and returns it.
+        ///
+        /// This exists so a popup that gates progress can fail closed. The onboarding
+        /// popups used to log a warning and destroy themselves in this case, which let
+        /// a player straight into the session with no account, no nickname and no
+        /// country — the one outcome first-launch setup exists to prevent. A missing
+        /// canvas is a scene defect either way; the difference is whether it costs a
+        /// visible popup or a silently accountless player.
+        ///
+        /// sortingOrder sits below <see cref="OpeningScreen"/>'s 30000 so the branded
+        /// splash still covers it for its few seconds.
+        /// </summary>
+        public static Transform CreateFallbackOverlayCanvas(string name)
+        {
+            var go = new GameObject(name, typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
+
+            var canvas = go.GetComponent<Canvas>();
+            canvas.renderMode  = RenderMode.ScreenSpaceOverlay;
+            canvas.sortingOrder = 29000;
+
+            var scaler = go.GetComponent<CanvasScaler>();
+            scaler.uiScaleMode         = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+            scaler.referenceResolution = new Vector2(1080f, 1920f);
+            scaler.screenMatchMode     = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
+            scaler.matchWidthOrHeight  = 0.5f;
+
+            // The popup outlives the scene it was created in, same as the popups it hosts.
+            UnityEngine.Object.DontDestroyOnLoad(go);
+            return go.transform;
+        }
     }
 }

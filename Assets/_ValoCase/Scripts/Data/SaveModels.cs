@@ -83,6 +83,9 @@ namespace ValoCase.Save
     {
         public int version = 1;
         public string playerName = "Agent";
+        // ISO-3166-1 alpha-2 of the country chosen at setup. Empty on saves written before
+        // country selection existed; the profile shows nothing rather than a guess.
+        public string countryCode;
         public bool profileSetupCompleted;
         public int vpBalance;
         public bool adminVpGrantApplied;   // true after the one-time 500 000 VP grant

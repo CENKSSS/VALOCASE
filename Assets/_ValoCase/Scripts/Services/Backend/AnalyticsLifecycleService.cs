@@ -20,7 +20,6 @@ namespace ValoCase.Services.Backend
     /// </summary>
     public sealed class AnalyticsLifecycleService : MonoBehaviour
     {
-        const string InstallationIdPrefKey = "valocase_installation_id";
         const float HeartbeatIntervalSeconds = 30f;
         const int MaxStartResumeAttempts = 3;
         const float StartResumeRetryBaseSeconds = 2f;
@@ -364,28 +363,12 @@ namespace ValoCase.Services.Backend
         static string UtcNowIso() =>
             DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture);
 
-        static string LoadOrCreateInstallationId()
-        {
-            var existing = PlayerPrefs.GetString(InstallationIdPrefKey, string.Empty);
-            if (Guid.TryParse(existing, out var parsed) && parsed != Guid.Empty)
-                return parsed.ToString();
-            var id = Guid.NewGuid().ToString();
-            PlayerPrefs.SetString(InstallationIdPrefKey, id);
-            PlayerPrefs.Save();
-            return id;
-        }
+        // Both delegate to ClientIdentity so this service and onboarding telemetry report
+        // the same installationId. The backend's funnel view joins pre-account events to
+        // post-account sessions on that id: two independently generated ids would break
+        // the join silently and read as a funnel nobody ever converted through.
+        static string LoadOrCreateInstallationId() => ClientIdentity.InstallationId;
 
-        static string DetectPlatform()
-        {
-#if UNITY_EDITOR
-            return "EDITOR";
-#elif UNITY_ANDROID
-            return "ANDROID";
-#elif UNITY_IOS
-            return "IOS";
-#else
-            return "UNKNOWN";
-#endif
-        }
+        static string DetectPlatform() => ClientIdentity.Platform;
     }
 }

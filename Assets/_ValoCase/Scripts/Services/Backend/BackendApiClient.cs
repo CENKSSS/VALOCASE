@@ -52,19 +52,36 @@ namespace ValoCase.Services.Backend
         /// <summary>
         /// Creates the guest account. The chosen nickname rides along in the body so the
         /// account is created with its final name and never passes through an AgentXXXX
-        /// stage. The name must already satisfy the shared rules (3-20, A-Za-z0-9_) or the
-        /// server answers 400 and creates nothing. Passing null keeps the older
+        /// stage. The name must already satisfy the shared rules — see NicknameValidator,
+        /// which is the client twin of the server's — or the server answers 400 and
+        /// creates nothing. Send the validator's normalised output, since that is the
+        /// exact value the server stores and echoes back. Passing null keeps the older
         /// bodiless behaviour, and a backend that ignores the field is handled by the
         /// caller falling back to the rename call.
         /// </summary>
-        public IEnumerator RegisterGuest(string displayName,
+        /// <param name="countryCode">
+        /// ISO-3166-1 alpha-2, upper case, already checked against CountryCatalog. Only
+        /// the code travels — the localized country name is a display concern and is
+        /// resolved from the code wherever it is shown.
+        /// </param>
+        public IEnumerator RegisterGuest(string displayName, string countryCode,
                                          Action<GuestRegisterResponse> onSuccess, Action<BackendError> onError)
-        {
-            var body = string.IsNullOrEmpty(displayName)
+            => Send("POST", ApiPrefix + "/guest", BuildGuestBody(displayName, countryCode),
+                    auth: false, onSuccess, onError);
+
+        /// <summary>
+        /// The exact registration body this client sends. Separated from the request so a
+        /// test can assert the bytes rather than a reconstruction of them — the payload
+        /// shape is the whole contract with POST /api/v1/guest.
+        /// </summary>
+        public static string BuildGuestBody(string displayName, string countryCode)
+            => string.IsNullOrEmpty(displayName) && string.IsNullOrEmpty(countryCode)
                 ? "{}"
-                : JsonUtility.ToJson(new GuestRegisterRequest { displayName = displayName });
-            return Send("POST", ApiPrefix + "/guest", body, auth: false, onSuccess, onError);
-        }
+                : JsonUtility.ToJson(new GuestRegisterRequest
+                {
+                    displayName = displayName ?? string.Empty,
+                    countryCode = countryCode ?? string.Empty
+                });
 
         public IEnumerator GetWallet(Action<WalletResponse> onSuccess, Action<BackendError> onError)
             => Send("GET", ApiPrefix + "/wallet", null, auth: true, onSuccess, onError);
@@ -101,6 +118,21 @@ namespace ValoCase.Services.Backend
             => Send("PUT", ApiPrefix + "/account/avatar",
                     JsonUtility.ToJson(new AvatarRequest { avatarId = avatarId }),
                     auth: true, onSuccess, onError);
+
+        // PATCH, not PUT, and that is the server's distinction rather than a preference:
+        // the endpoint revises one field of the account and leaves the nickname and avatar
+        // untouched. The account edited is whichever one X-Guest-Token resolves to — the
+        // body carries the country and nothing else, so there is no shape that edits
+        // another player. The backend uppercases and validates the code against the same
+        // 249-entry allowlist CountryCatalog mirrors, and echoes the stored profile. The
+        // local save is updated only after this succeeds.
+        public IEnumerator SetCountry(string countryCode, Action<AccountProfileResponse> onSuccess, Action<BackendError> onError)
+            => Send("PATCH", ApiPrefix + "/account/country", BuildCountryBody(countryCode),
+                    auth: true, onSuccess, onError);
+
+        /// <summary>The exact country-change body this client sends. Test seam, as above.</summary>
+        public static string BuildCountryBody(string countryCode)
+            => JsonUtility.ToJson(new CountryRequest { countryCode = countryCode });
 
         // ── Inventory selling (server-authoritative) ────────────────────────────
         // Backend validates ownership, removes inventory, credits VP, writes the
@@ -310,6 +342,16 @@ namespace ValoCase.Services.Backend
 
         public IEnumerator PostSessionEnd(AnalyticsEndRequest body, Action<AnalyticsAckResponse> onSuccess, Action<BackendError> onError)
             => Send("POST", ApiPrefix + "/analytics/session/end", JsonUtility.ToJson(body), auth: true, onSuccess, onError, silent: true);
+
+        // ── Pre-account onboarding telemetry ────────────────────────────────────
+        // Unauthenticated by necessity: every step it records happens before an account,
+        // and therefore before a token, exists. Silent like the analytics calls, so a
+        // failed funnel ping can never raise the connectivity or server-error popup.
+        // The backend answers 202 for both a fresh insert and a duplicate.
+        public IEnumerator PostOnboardingEvent(OnboardingEventRequest body,
+                                               Action<OnboardingEventAck> onSuccess, Action<BackendError> onError)
+            => Send("POST", ApiPrefix + "/telemetry/onboarding", JsonUtility.ToJson(body),
+                    auth: false, onSuccess, onError, silent: true);
 
         // ── Core request pipeline ───────────────────────────────────────────────
 
@@ -572,6 +614,9 @@ namespace ValoCase.Services.Backend
     public sealed class GuestRegisterRequest
     {
         public string displayName;
+        // ISO code only. There is deliberately no field for the country's display name:
+        // that name is localized client-side and is not what the account stores.
+        public string countryCode;
     }
 
     [Serializable]
@@ -587,6 +632,7 @@ namespace ValoCase.Services.Backend
         public string token;
         public string displayName;   // backend-assigned default (AgentXXXX) for new guests
         public string avatarId;      // backend-assigned default (avatar_1) for new guests
+        public string countryCode;   // echo of the code sent with registration; empty if the server omits it
         public int vpBalance;        // server may include the starting wallet here
         public int diamondBalance;   // premium currency starting balance (0 on older backends)
 
@@ -761,6 +807,28 @@ namespace ValoCase.Services.Backend
         public string avatarId;
     }
 
+    // ── Account country DTOs ────────────────────────────────────────────────────
+
+    // Mirrors the server's UpdateCountryRequest exactly: one field, the ISO code.
+    // The server accepts any case and stores the uppercase form.
+    [Serializable]
+    public sealed class CountryRequest
+    {
+        public string countryCode;
+    }
+
+    // Mirrors the server's AccountProfileResponse — the record it returns from both the
+    // country change and the rename. DisplayNameResponse above is the same record read
+    // through an older, country-less view; it still parses because JsonUtility ignores
+    // keys a DTO does not declare.
+    [Serializable]
+    public sealed class AccountProfileResponse
+    {
+        public string accountId;
+        public string displayName;
+        public string countryCode;
+    }
+
     // ── Sell request/response DTOs ──────────────────────────────────────────────
 
     [Serializable]
@@ -857,6 +925,7 @@ namespace ValoCase.Services.Backend
         public bool isUser;
         public string name;
         public string avatarId;
+        public string countryCode;   // empty for bots and for backends that omit it
         public int totalVp;
         public BotBattleRoundResponse[] rounds;
     }
@@ -919,6 +988,7 @@ namespace ValoCase.Services.Backend
         public string accountId;
         public string displayName;
         public string avatarId;
+        public string countryCode;     // empty on a backend that does not send it yet
     }
 
     [Serializable]
@@ -929,6 +999,9 @@ namespace ValoCase.Services.Backend
         public string accountId;
         public string displayName;
         public string avatarId;
+        // ISO alpha-2 of the occupant, shown in front of the name. Empty for bots, and
+        // empty on a backend that does not send it — the tag is then simply not drawn.
+        public string countryCode;
         public bool addBotAllowed;
         public int totalVp;
         public BotBattleRoundResponse[] rounds;   // per-round rolled skins (completed lobby)
@@ -1208,6 +1281,35 @@ namespace ValoCase.Services.Backend
         public string serverSessionId;
         public string lifecycleState;
         public string serverTimeUtc;
+    }
+
+    // ── Onboarding telemetry DTOs ───────────────────────────────────────────────
+    // JsonUtility always emits every public field, so the optional ones travel as ""
+    // or 0 rather than being omitted. That is safe against this endpoint by design:
+    // it treats a blank rejectionReason/networkErrorCategory as absent and discards an
+    // httpStatus outside 100-599, and it ignores fields it does not declare.
+    //
+    // There is deliberately no field here for the nickname, the guest token, an auth
+    // header, an email or an advertising id. The record below is the entire payload.
+
+    [Serializable]
+    public sealed class OnboardingEventRequest
+    {
+        public string installationId;        // opaque per-install UUID; max 64 chars
+        public string eventId;               // per-event UUID; the idempotency key, max 64 chars
+        public string eventName;             // must be on the backend allowlist
+        public string clientTimestampUtc;    // ISO-8601; untrusted, server time is authoritative
+        public string appVersion;            // max 20 chars
+        public string platform;              // ANDROID | IOS | EDITOR | UNKNOWN
+        public string rejectionReason;       // nickname_rejected only
+        public string networkErrorCategory;  // registration_failed only
+        public int    httpStatus;            // registration_failed only; 0 == no HTTP response
+    }
+
+    [Serializable]
+    public sealed class OnboardingEventAck
+    {
+        public string result;   // "accepted" or "duplicate" — both mean stop retrying
     }
 
     [Serializable]

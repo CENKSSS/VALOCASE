@@ -49,5 +49,41 @@ namespace ValoCase.Services.Backend
             if (error.HttpStatus >= 400) return Generic;
             return Generic;
         }
+
+        /// <summary>
+        /// Maps a failure onto the backend's NetworkErrorCategory allowlist, for the
+        /// registration_failed telemetry event. Lives here so the telemetry vocabulary
+        /// and the player-facing vocabulary are decided from the same error object and
+        /// cannot drift into disagreeing about what went wrong.
+        ///
+        /// Only these seven tokens exist server-side; anything else is discarded on
+        /// arrival, which is why this returns a fixed string rather than error text.
+        /// No URL, hostname, or exception message is ever included.
+        /// </summary>
+        public static string NetworkCategory(BackendError error)
+        {
+            if (error == null) return "unknown";
+            if (error.IsOffline) return "offline";
+            if (error.IsTimeout) return "timeout";
+            if (error.HttpStatus >= 400) return "http_error";
+            if (error.IsInvalidResponse) return "invalid_response";
+
+            // HttpStatus 0 is a transport failure with no HTTP response. Name resolution
+            // is worth telling apart from a refused or reset connection: it usually means
+            // captive-wifi or DNS trouble on the device rather than a backend problem.
+            if (error.HttpStatus == 0)
+                return LooksLikeDnsFailure(error.Message) ? "dns" : "transport";
+
+            return "unknown";
+        }
+
+        static bool LooksLikeDnsFailure(string message)
+        {
+            if (string.IsNullOrEmpty(message)) return false;
+            var text = message.ToLowerInvariant();
+            // UnityWebRequest phrasing varies by platform and version, so match on the
+            // words all of them share rather than on one exact string.
+            return text.Contains("resolve") || text.Contains("dns") || text.Contains("name not resolved");
+        }
     }
 }

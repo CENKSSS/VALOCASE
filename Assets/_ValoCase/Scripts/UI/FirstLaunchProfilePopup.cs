@@ -1,18 +1,23 @@
+using System;
 using System.Collections;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 using ValoCase.Core;
 using ValoCase.Profile;
+using ValoCase.Services.Backend;
 
 namespace ValoCase.UI
 {
     /// <summary>
-    /// One-time first-launch profile setup: new players pick a nickname and avatar
-    /// before playing. Shown by GameContext once the session can persist the choice
+    /// One-time first-launch profile setup: new players pick a nickname, a country and an
+    /// avatar before playing. Shown by GameContext once the session can persist the choice
     /// (after backend boot sync, or immediately in local editor mode). Built at
     /// runtime with zero prefab dependency, same pattern as NoInternetPopup.
     /// Completion is stored in SaveDataRoot.profileSetupCompleted.
+    ///
+    /// The three choices are kept in <see cref="ProfileSetupDraft"/> as they are made, so
+    /// a failed registration or an app closed mid-setup does not throw them away.
     /// </summary>
     public sealed class FirstLaunchProfilePopup : MonoBehaviour
     {
@@ -39,6 +44,10 @@ namespace ValoCase.UI
         Image           _confirmImg;
         TextMeshProUGUI _confirmLbl;
         Transform       _grid;
+        Button          _countryBtn;
+        Outline         _countryOutline;
+        TextMeshProUGUI _countryLbl;
+        string          _countryCode = string.Empty;
         string          _selectedKey;
         Sprite          _selectedSprite;
         bool            _saving;
@@ -79,6 +88,16 @@ namespace ValoCase.UI
             if (_instance == this) _instance = null;
         }
 
+        // A setup that never finished usually ends by the app being backgrounded and then
+        // killed, where OnApplicationQuit does not run. Writing the draft to disk here is
+        // what makes the choices survive that.
+        void OnApplicationPause(bool paused)
+        {
+            if (paused) ProfileSetupDraft.Flush();
+        }
+
+        void OnApplicationQuit() => ProfileSetupDraft.Flush();
+
         IEnumerator Start()
         {
             // Wait a frame so scene UI (canvas, screens) finished building first.
@@ -91,18 +110,23 @@ namespace ValoCase.UI
                 yield break;
             }
 
+            // Skipping the panel used to let the player into the session with no
+            // account, no nickname and no country — silently, and permanently, since
+            // the next launch takes the same branch. Setup gates progress, so a scene
+            // with no canvas gets one built for it rather than the gate being dropped.
             var parent = FindPopupParent();
             if (parent == null)
             {
-                Debug.LogWarning("[FirstLaunchProfile] No Canvas found — popup skipped this session.");
-                Destroy(gameObject);
-                yield break;
+                Debug.LogWarning("[FirstLaunchProfile] No Canvas found — building a fallback overlay canvas.");
+                parent = UIBuild.CreateFallbackOverlayCanvas("FirstLaunchProfileCanvas");
             }
 
             ProfileManager.EnsureInitialized();
             transform.SetParent(parent, false);
             BuildUi();
+            RestoreDraft();
             transform.SetAsLastSibling();
+            OnboardingTelemetry.Emit(OnboardingTelemetry.NicknameScreenShown);
             Debug.Log("[FirstLaunchProfile] Popup shown (profile setup pending).");
         }
 
@@ -126,14 +150,36 @@ namespace ValoCase.UI
             var ctx = GameContext.Instance;
             if (ctx == null || ctx.Save?.Data == null) return;
 
-            if (!TryValidateNickname(_nameInput != null ? _nameInput.text : null,
-                    out var nickname, out var error))
+            // The name is validated, normalised, and only then sent. The value that goes
+            // to the server is the canonical one the validator produced, not the raw
+            // field text, so what the backend stores is what was already checked here.
+            if (!NicknameValidator.TryValidate(_nameInput != null ? _nameInput.text : null,
+                    out var nickname, out var reason))
             {
-                ShowError(error);
+                ShowError(NicknameMessages.For(reason));
+                OnboardingTelemetry.Emit(OnboardingTelemetry.NicknameRejected,
+                    rejectionReason: NicknameValidator.WireName(reason));
+                return;
+            }
+
+            // Checked after the nickname so a player with both problems is told about the
+            // name first — that is the field they were last typing in, and it is the one
+            // the funnel records a reason for.
+            var country = CountryCatalog.Normalize(_countryCode);
+            if (country.Length == 0)
+            {
+                ShowError(CountryRequiredMessage);
+                return;
+            }
+
+            if (string.IsNullOrEmpty(_selectedKey) || _selectedSprite == null)
+            {
+                ShowError(AvatarRequiredMessage);
                 return;
             }
 
             ShowError(null);
+            OnboardingTelemetry.Emit(OnboardingTelemetry.NicknameConfirmClicked);
             SetSaving(true);
 
             if (ctx.BackendEnabled)
@@ -142,7 +188,7 @@ namespace ValoCase.UI
                 // registration so that merely opening the app creates nothing. Create it
                 // now, then name it. Returning players already have a token and go
                 // straight to the rename.
-                ctx.RegisterGuestBackend(nickname,
+                ctx.RegisterGuestBackend(nickname, country,
                     nameApplied =>
                     {
                         // The account is created with the nickname already set, so the
@@ -167,7 +213,8 @@ namespace ValoCase.UI
 
             PlayerProfileData.SetUsername(nickname);
             if (_selectedSprite != null) PlayerProfileData.SetAvatar(_selectedSprite, _selectedKey);
-            ctx.Save.Data.playerName = nickname;
+            ctx.Save.Data.playerName  = nickname;
+            ctx.Save.Data.countryCode = country;
             MarkCompleteAndClose(ctx);
         }
 
@@ -196,27 +243,15 @@ namespace ValoCase.UI
         {
             ctx.Save.Data.profileSetupCompleted = true;
             ctx.Save.Save();
-            Debug.Log($"[FirstLaunchProfile] Setup complete — name={PlayerProfileData.Username} avatar={_selectedKey}");
+            // The choices now live on the account and in the save; the draft has nothing
+            // left to protect.
+            ProfileSetupDraft.Clear();
+            // The country is stored after the name, so the top bar — which renders the two
+            // together — has to be told once more before the panel closes.
+            PlayerProfileData.NotifyProfileChanged();
+            Debug.Log($"[FirstLaunchProfile] Setup complete — name={PlayerProfileData.Username} " +
+                      $"avatar={_selectedKey} country={ctx.Save.Data.countryCode}");
             Destroy(gameObject);
-        }
-
-        // Mirrors the backend rules used by SettingsScreen: 3–20 chars, letters/digits/underscore.
-        static bool TryValidateNickname(string raw, out string trimmed, out string error)
-        {
-            trimmed = (raw ?? string.Empty).Trim();
-            error = null;
-
-            if (string.IsNullOrEmpty(trimmed)) { error = "Please enter a nickname.";            return false; }
-            if (trimmed.Length < 3)            { error = "Nickname must be at least 3 characters."; return false; }
-            if (trimmed.Length > 20)           { error = "Nickname must be at most 20 characters."; return false; }
-
-            foreach (var c in trimmed)
-            {
-                bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-                          (c >= '0' && c <= '9') || c == '_';
-                if (!ok) { error = "Only letters, digits and _ are allowed."; return false; }
-            }
-            return true;
         }
 
         void ShowError(string message)
@@ -229,16 +264,19 @@ namespace ValoCase.UI
             _saving = saving;
             if (_confirmLbl != null) _confirmLbl.text = saving ? "SAVING..." : "CONFIRM";
             if (_nameInput  != null) _nameInput.interactable = !saving;
+            if (_countryBtn != null) _countryBtn.interactable = !saving;
             RefreshConfirmState();
         }
 
-        // The button stays grey until the field holds a usable nickname, so the player can
-        // see the requirement before pressing anything. It remains clickable while grey —
-        // pressing it is how they get told what is wrong.
+        // The button stays grey until all three choices are made, so the player can see
+        // the requirement before pressing anything. It remains clickable while grey —
+        // pressing it is how they get told what is missing, and it is the only moment at
+        // which a refused nickname can be reported to the funnel.
         void RefreshConfirmState()
         {
             bool ready = !_saving &&
-                         TryValidateNickname(_nameInput != null ? _nameInput.text : null, out _, out _);
+                         ProfileSetupGate.IsReady(_nameInput != null ? _nameInput.text : null,
+                                                  _selectedKey, _countryCode);
 
             if (_confirmBtn != null) _confirmBtn.interactable = !_saving;
             if (_confirmImg != null) _confirmImg.color = ready ? Accent : ConfirmIdle;
@@ -250,7 +288,65 @@ namespace ValoCase.UI
         // not linger under a field that is now fine.
         void OnNicknameChanged(string value)
         {
-            if (TryValidateNickname(value, out _, out _)) ShowError(null);
+            if (NicknameValidator.TryValidate(value, out _, out _)) ShowError(null);
+            ProfileSetupDraft.SetNickname(value);
+            RefreshConfirmState();
+        }
+
+        void OnCountryButtonClicked()
+        {
+            if (_saving) return;
+            CountryPickerPopup.Show(transform.parent, _countryCode, OnCountryPicked);
+        }
+
+        void OnCountryPicked(string code)
+        {
+            _countryCode = CountryCatalog.Normalize(code);
+            ProfileSetupDraft.SetCountryCode(_countryCode);
+            ProfileSetupDraft.Flush();
+            ShowError(null);
+            UpdateCountryLabel();
+            RefreshConfirmState();
+        }
+
+        void UpdateCountryLabel()
+        {
+            if (_countryLbl == null) return;
+            var label = CountryCatalog.LabelFor(_countryCode);
+            bool chosen = label.Length > 0;
+
+            _countryLbl.text      = chosen ? label : CountryPlaceholderText;
+            _countryLbl.color     = chosen ? TextMain : TextDim;
+            _countryLbl.fontStyle = chosen ? FontStyles.Bold : FontStyles.Italic;
+            if (_countryOutline != null)
+                _countryOutline.effectColor = chosen ? Accent : AccentDim;
+        }
+
+        // Puts back whatever the player had chosen before the app closed or registration
+        // failed. Nothing here selects for them: an absent draft leaves the panel in its
+        // untouched state.
+        void RestoreDraft()
+        {
+            var nickname = ProfileSetupDraft.Nickname;
+            if (_nameInput != null && !string.IsNullOrEmpty(nickname)) _nameInput.text = nickname;
+
+            var avatarKey = ProfileSetupDraft.AvatarKey;
+            var avatars = ProfileManager.Avatars;
+            if (!string.IsNullOrEmpty(avatarKey) && avatars != null)
+            {
+                foreach (var (name, sprite) in avatars)
+                    if (string.Equals(name, avatarKey, StringComparison.OrdinalIgnoreCase))
+                    {
+                        _selectedKey    = name;
+                        _selectedSprite = sprite;
+                        break;
+                    }
+            }
+
+            _countryCode = ProfileSetupDraft.CountryCode;
+
+            RefreshCellHighlights();
+            UpdateCountryLabel();
             RefreshConfirmState();
         }
 
@@ -283,7 +379,7 @@ namespace ValoCase.UI
             TopBand(title.rectTransform, -44f, 48f);
 
             var subtitle = UIBuild.MakeTmp(card.transform, "Subtitle",
-                "Pick a nickname and avatar to get started", 20f, FontStyles.Normal, TextDim);
+                "Pick a nickname, country and avatar to get started", 20f, FontStyles.Normal, TextDim);
             subtitle.alignment = TextAlignmentOptions.Center;
             TopBand(subtitle.rectTransform, -98f, 30f);
 
@@ -294,10 +390,17 @@ namespace ValoCase.UI
 
             BuildNameInput(card.transform);
 
+            var countryHint = UIBuild.MakeTmp(card.transform, "CountryHint", "COUNTRY", 18f, FontStyles.Bold, TextDim);
+            countryHint.alignment        = TextAlignmentOptions.MidlineLeft;
+            countryHint.characterSpacing = 3f;
+            TopBand(countryHint.rectTransform, -294f, 26f, 60f);
+
+            BuildCountryButton(card.transform);
+
             var avHint = UIBuild.MakeTmp(card.transform, "AvatarHint", "SELECT AVATAR", 18f, FontStyles.Bold, TextDim);
             avHint.alignment        = TextAlignmentOptions.MidlineLeft;
             avHint.characterSpacing = 3f;
-            TopBand(avHint.rectTransform, -316f, 26f, 60f);
+            TopBand(avHint.rectTransform, -426f, 26f, 60f);
 
             BuildAvatarScrollGrid(card.transform);
             PopulateAvatars();
@@ -360,7 +463,12 @@ namespace ValoCase.UI
             _nameInput.textViewport   = taRt;
             _nameInput.textComponent  = txt;
             _nameInput.placeholder    = ph;
-            _nameInput.characterLimit = 20;
+            // The field's hard stop is the backend's raw-storage guard, not the 15
+            // user-visible characters the rule is about. A grapheme cluster can span
+            // several UTF-16 units, so stopping the field at 15 would silently truncate
+            // a legitimate name in scripts that use combining marks. Past 15 clusters the
+            // validator says so in words instead.
+            _nameInput.characterLimit = NicknameValidator.MaxUtf16Length;
             _nameInput.contentType    = TMP_InputField.ContentType.Standard;
             _nameInput.caretColor     = Accent;
             // Starts empty on purpose: a pre-filled name let players confirm without ever
@@ -369,13 +477,47 @@ namespace ValoCase.UI
             _nameInput.onValueChanged.AddListener(OnNicknameChanged);
         }
 
+        // Deliberately a button that opens the picker rather than a dropdown: 249 entries
+        // are not browsable without a search box, and the picker is the same one Settings
+        // opens.
+        void BuildCountryButton(Transform parent)
+        {
+            var go = new GameObject("CountryBtn",
+                typeof(RectTransform), typeof(Image), typeof(Outline), typeof(Button));
+            go.transform.SetParent(parent, false);
+            TopBand((RectTransform)go.transform, -324f, 84f, 60f);
+            go.GetComponent<Image>().color = InputBg;
+
+            _countryOutline = go.GetComponent<Outline>();
+            _countryOutline.effectColor    = AccentDim;
+            _countryOutline.effectDistance = new Vector2(1.5f, -1.5f);
+
+            _countryLbl = UIBuild.MakeTmp(go.transform, "Lbl", CountryPlaceholderText, 26f, FontStyles.Italic, TextDim);
+            _countryLbl.alignment = TextAlignmentOptions.MidlineLeft;
+            var lRt = _countryLbl.rectTransform;
+            lRt.anchorMin = Vector2.zero; lRt.anchorMax = Vector2.one;
+            lRt.offsetMin = new Vector2(24f, 0f); lRt.offsetMax = new Vector2(-64f, 0f);
+
+            var caret = UIBuild.MakeTmp(go.transform, "Caret", "▾", 26f, FontStyles.Bold, Accent);
+            caret.alignment = TextAlignmentOptions.Center;
+            var cRt = caret.rectTransform;
+            cRt.anchorMin = cRt.anchorMax = cRt.pivot = new Vector2(1f, 0.5f);
+            cRt.anchoredPosition = new Vector2(-22f, 0f);
+            cRt.sizeDelta        = new Vector2(40f, 40f);
+
+            _countryBtn = go.GetComponent<Button>();
+            _countryBtn.transition = Selectable.Transition.None;
+            UIBuild.WireButtonClick(_countryBtn);
+            _countryBtn.onClick.AddListener(OnCountryButtonClicked);
+        }
+
         void BuildAvatarScrollGrid(Transform parent)
         {
             var scrollGo = new GameObject("AvatarScroll",
                 typeof(RectTransform), typeof(Image), typeof(ScrollRect));
             scrollGo.transform.SetParent(parent, false);
             var scrollRt = (RectTransform)scrollGo.transform;
-            TopBand(scrollRt, -350f, 560f, 50f);
+            TopBand(scrollRt, -456f, 456f, 50f);
             scrollGo.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0.25f);
 
             var sr = scrollGo.GetComponent<ScrollRect>();
@@ -479,8 +621,11 @@ namespace ValoCase.UI
                 if (_saving) return;
                 _selectedKey    = capKey;
                 _selectedSprite = capSprite;
+                ProfileSetupDraft.SetAvatarKey(capKey);
+                ProfileSetupDraft.Flush();
                 ShowError(null);
                 RefreshCellHighlights();
+                RefreshConfirmState();
             });
         }
 
@@ -526,8 +671,17 @@ namespace ValoCase.UI
             _confirmLbl.characterSpacing = 3f;
             UIBuild.Stretch(_confirmLbl.rectTransform);
 
-            // Field starts empty, so the button starts grey.
+            // Nothing is chosen yet, so the button starts grey.
             RefreshConfirmState();
         }
+
+        // ── Player-facing text ────────────────────────────────────────────────
+        // Device language, matching how NicknameMessages picks its wording.
+
+        static bool IsTurkish => Application.systemLanguage == SystemLanguage.Turkish;
+
+        static string CountryPlaceholderText => IsTurkish ? "Ülkeni seç…"          : "Select your country…";
+        static string CountryRequiredMessage => IsTurkish ? "Lütfen ülkeni seç."   : "Please select your country.";
+        static string AvatarRequiredMessage  => IsTurkish ? "Lütfen bir avatar seç." : "Please select an avatar.";
     }
 }

@@ -1596,8 +1596,10 @@ namespace ValoCase.UI.Screens
 
             string headerName = empty ? "EMPTY SLOT"
                 : isBot ? (string.IsNullOrEmpty(slot.displayName) ? "BOT" : slot.displayName)
-                : (string.IsNullOrEmpty(slot.displayName) ? "PLAYER" : slot.displayName) + (mine ? "  (YOU)" : "");
+                : UIBuild.WithCountryTag(ResolveSlotCountry(slot, mine),
+                    (string.IsNullOrEmpty(slot.displayName) ? "PLAYER" : slot.displayName) + (mine ? "  (YOU)" : ""));
             string headerStatus = empty ? "—" : isBot ? "BOT" : (mine ? "YOU" : "PLAYER");
+
             Color  headerColor  = empty ? ColorPalette.TextDim : ColorPalette.TextBright;
 
             BuildPanelHeader(pRt, slot, empty, isBot, mine, accent, headerName, headerStatus, headerColor, pad, headerH);
@@ -1642,6 +1644,16 @@ namespace ValoCase.UI.Screens
                     new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(0.5f, 0f),
                     new Vector2(0f, 18f), new Vector2(-12f, 16f));
             }
+        }
+
+        // The occupant's country. The server's value wins; for the local player it falls
+        // back to the save, so my own flag shows even on a backend that does not send the
+        // field yet. An opponent on such a backend simply has no tag.
+        static string ResolveSlotCountry(LobbySlotResponse slot, bool mine)
+        {
+            var fromServer = slot != null ? slot.countryCode : null;
+            if (!string.IsNullOrEmpty(fromServer)) return fromServer;
+            return mine ? GameContext.Instance?.Save?.Data?.countryCode : null;
         }
 
         void BuildPanelHeader(RectTransform pRt, LobbySlotResponse slot, bool empty, bool isBot, bool mine,

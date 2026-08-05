@@ -102,5 +102,12 @@ namespace ValoCase.Profile
             PlayerPrefs.Save();
             OnProfileChanged?.Invoke();
         }
+
+        /// <summary>
+        /// Announces a profile change this class does not own. The country lives in the
+        /// save file rather than here, but the top bar renders it next to the name, so it
+        /// still has to hear about it — and it only ever listens to this one event.
+        /// </summary>
+        public static void NotifyProfileChanged() => OnProfileChanged?.Invoke();
     }
 }

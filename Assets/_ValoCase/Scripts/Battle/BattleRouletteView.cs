@@ -162,7 +162,9 @@ namespace ValoCase.UI
                 Stretch(aLbl.rectTransform);
             }
 
-            var name = MakeTmp(header.transform, "Name", displayName,
+            // Tagged only here, at the label. The initial above is derived from the plain
+            // name and must stay clear of the rich text.
+            var name = MakeTmp(header.transform, "Name", TagName(player, displayName),
                 26f, FontStyles.Bold, ColorPalette.TextBright);
             name.alignment = TextAlignmentOptions.MidlineLeft;
             name.enableWordWrapping = false;
@@ -620,7 +622,7 @@ namespace ValoCase.UI
                 Stretch(initialLbl.rectTransform);
             }
 
-            var nameLbl = MakeTmp(root.transform, "Name", displayName,
+            var nameLbl = MakeTmp(root.transform, "Name", TagName(player, displayName),
                 18f, FontStyles.Bold, ColorPalette.TextBright);
             nameLbl.alignment = TextAlignmentOptions.Center;
             nameLbl.enableWordWrapping = false;
@@ -639,6 +641,17 @@ namespace ValoCase.UI
                 new Vector2(0f, -(padTop + avatarSize + 14f + 26f + 6f)), new Vector2(-8f, 16f));
 
             root.SetActive(false);
+        }
+
+        // Puts the country code in front of a participant's name. The local player's code
+        // comes from the save; an opponent's comes from whatever the backend sent with the
+        // battle, and no tag is drawn when that is absent — bots included.
+        string TagName(BattlePlayerResult player, string displayName)
+        {
+            var code = _isUser
+                ? ValoCase.Core.GameContext.Instance?.Save?.Data?.countryCode
+                : player?.CountryCode;
+            return UIBuild.WithCountryTag(code, displayName);
         }
 
         Sprite ResolveHeaderAvatar(BattlePlayerResult player)

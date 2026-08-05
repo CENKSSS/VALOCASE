@@ -2,6 +2,7 @@ using System.Collections;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
+using ValoCase.Services.Backend;
 
 namespace ValoCase.UI
 {
@@ -48,18 +49,23 @@ namespace ValoCase.UI
             // Wait a frame so scene UI (canvas, screens) finished building first.
             yield return null;
 
+            // Same reasoning as the setup panel it chains to: the notice is shown on a
+            // canvas built for the purpose rather than skipped, so the accepted flag is
+            // only ever written by a player who actually saw it.
             var parent = FindPopupParent();
             if (parent == null)
             {
-                Debug.LogWarning("[FanMadeNotice] No Canvas found — notice skipped this session.");
-                Destroy(gameObject);
-                FirstLaunchProfilePopup.TryShow();
-                yield break;
+                Debug.LogWarning("[FanMadeNotice] No Canvas found — building a fallback overlay canvas.");
+                parent = UIBuild.CreateFallbackOverlayCanvas("FanMadeNoticeCanvas");
             }
 
             transform.SetParent(parent, false);
             BuildUi();
             transform.SetAsLastSibling();
+            // Emitted after the UI exists, not before: the event is meant to mean the
+            // player saw the notice, and the no-canvas path above is precisely the case
+            // where they did not.
+            OnboardingTelemetry.Emit(OnboardingTelemetry.FanNoticeShown);
             Debug.Log("[FanMadeNotice] Popup shown (not yet accepted).");
         }
 
@@ -77,6 +83,7 @@ namespace ValoCase.UI
 
         void OnOkClicked()
         {
+            OnboardingTelemetry.Emit(OnboardingTelemetry.FanNoticeAccepted);
             PlayerPrefs.SetInt(AcceptedKey, 1);
             PlayerPrefs.Save();
             Destroy(gameObject);

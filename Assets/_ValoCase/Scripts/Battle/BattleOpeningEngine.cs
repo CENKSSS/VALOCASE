@@ -179,6 +179,8 @@ namespace ValoCase.Battle
     public sealed class BattlePlayerResult
     {
         public string Name;
+        /// <summary>ISO alpha-2 shown in front of the name. Empty for bots and unknown opponents.</summary>
+        public string CountryCode;
         public bool   IsUser;
         public bool   IsWinner;
         /// <summary>Shares the top total in a draw — gets the entry cost back.</summary>

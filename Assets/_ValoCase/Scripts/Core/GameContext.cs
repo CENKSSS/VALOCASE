@@ -204,6 +204,13 @@ namespace ValoCase.Core
         void TryStartBackendSync()
         {
             if (gameConfig == null) return;
+
+            // First funnel step. Emitted before the local-mode return below so the count
+            // means "the app started", not "the app started and was configured for
+            // backend" — an install that never reaches the nickname screen is exactly
+            // what this funnel exists to make visible.
+            OnboardingTelemetry.Emit(OnboardingTelemetry.AppLaunched);
+
             // Boot the backend client when the asset opts in OR when backend is mandatory
             // (release/player builds), so a misconfigured useBackend=false still connects.
             if (!gameConfig.UseBackend && CanUseLocalEconomy)
@@ -278,19 +285,23 @@ namespace ValoCase.Core
         /// Already validated against the shared nickname rules. Sent with the request so
         /// the account is born with its final name.
         /// </param>
+        /// <param name="countryCode">
+        /// The country the player chose, as an ISO-3166-1 alpha-2 code. Normalised against
+        /// CountryCatalog here so an unassigned code can never reach the request.
+        /// </param>
         /// <param name="onDone">
         /// Receives true when the server actually applied the name, so the caller can skip
         /// the separate rename call. False means the server ignored the field and the name
         /// still has to be set the old way.
         /// </param>
-        public void RegisterGuestBackend(string displayName, Action<bool> onDone, Action<string> onFailed)
+        public void RegisterGuestBackend(string displayName, string countryCode, Action<bool> onDone, Action<string> onFailed)
         {
             if (!BackendReady) { onFailed?.Invoke(BackendErrorMapper.Generic); return; }
             if (!string.IsNullOrEmpty(Save?.Data?.guestToken)) { onDone?.Invoke(false); return; }
-            StartCoroutine(RegisterGuestRoutine(displayName, onDone, onFailed));
+            StartCoroutine(RegisterGuestRoutine(displayName, CountryCatalog.Normalize(countryCode), onDone, onFailed));
         }
 
-        IEnumerator RegisterGuestRoutine(string displayName, Action<bool> onDone, Action<string> onFailed)
+        IEnumerator RegisterGuestRoutine(string displayName, string countryCode, Action<bool> onDone, Action<string> onFailed)
         {
             if (BackendErrorMapper.IsOffline)
             {
@@ -300,9 +311,12 @@ namespace ValoCase.Core
 
             bool registered = false;
             bool nameApplied = false;
+            bool tokenMissing = false;
             BackendError error = null;
 
-            yield return Backend.RegisterGuest(displayName,
+            OnboardingTelemetry.Emit(OnboardingTelemetry.RegistrationAttempted);
+
+            yield return Backend.RegisterGuest(displayName, countryCode,
                 res =>
                 {
                     var token = res.ResolveToken();
@@ -310,6 +324,7 @@ namespace ValoCase.Core
                     {
                         // The server made an account but we cannot address it. Persisting an
                         // empty token used to cause a fresh registration on every launch.
+                        tokenMissing = true;
                         Debug.LogError("[BackendAuth] Guest registration returned no usable token " +
                                        "(check backend JSON field names).");
                         return;
@@ -331,6 +346,13 @@ namespace ValoCase.Core
                         PlayerProfileData.SetUsername(res.displayName);
                     }
 
+                    // Prefer the server's echo; fall back to the code we sent so the
+                    // profile can still show the country on a backend that stores it
+                    // without returning it.
+                    var storedCountry = CountryCatalog.Normalize(res.countryCode);
+                    if (storedCountry.Length == 0) storedCountry = countryCode;
+                    if (storedCountry.Length > 0) Save.Data.countryCode = storedCountry;
+
                     Save.Save();
                     AdoptBackendAvatar(res.avatarId);
                     Debug.Log($"[BackendAuth] Guest registered on nickname confirm — nameApplied={nameApplied}");
@@ -339,9 +361,20 @@ namespace ValoCase.Core
 
             if (!registered)
             {
+                // A 2xx whose body carried no usable token is a backend failure, not a
+                // network one, and is reported as such rather than as a bare "unknown".
+                OnboardingTelemetry.Emit(OnboardingTelemetry.RegistrationFailed,
+                    networkErrorCategory: tokenMissing
+                        ? "invalid_response"
+                        : BackendErrorMapper.NetworkCategory(error),
+                    httpStatus: error != null ? error.HttpStatus : 0);
                 onFailed?.Invoke(BackendErrorMapper.Map(error));
                 yield break;
             }
+
+            // The token is persisted and the client can address the account: from here on
+            // the account exists whatever the wallet and inventory syncs below do.
+            OnboardingTelemetry.Emit(OnboardingTelemetry.RegistrationSucceeded);
 
             // The account is live — bring the wallet and inventory in before handing back.
             yield return Backend.GetWallet(
@@ -513,10 +546,17 @@ namespace ValoCase.Core
         public void SaveDisplayNameBackend(string displayName, Action<string> onSaved, Action<string> onFailed)
         {
             if (!BackendReady) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
-            var trimmed = (displayName ?? string.Empty).Trim();
-            if (string.IsNullOrEmpty(trimmed)) { onFailed?.Invoke("İsim boş olamaz."); return; }
-            if (trimmed.Length > 20) trimmed = trimmed.Substring(0, 20);
-            StartCoroutine(SaveDisplayNameRoutine(trimmed, onSaved, onFailed));
+
+            // Validated rather than truncated. Cutting a name to fit used to send the
+            // server something the player never typed, and — now that length is counted
+            // in user-visible characters — a cut could land mid-cluster and produce a
+            // name that fails validation anyway. A refusal here says which rule broke.
+            if (!NicknameValidator.TryValidate(displayName, out var normalized, out var reason))
+            {
+                onFailed?.Invoke(NicknameMessages.For(reason));
+                return;
+            }
+            StartCoroutine(SaveDisplayNameRoutine(normalized, onSaved, onFailed));
         }
 
         IEnumerator SaveDisplayNameRoutine(string displayName, Action<string> onSaved, Action<string> onFailed)
@@ -528,8 +568,11 @@ namespace ValoCase.Core
             if (error != null || res == null)
             {
                 Debug.LogWarning("[Backend] Display name save failed — " + (error?.ToString() ?? "null response"));
+                // A 400 here means the client validator and the server's disagreed about
+                // this name — the request is only sent once NicknameValidator accepts it.
+                // Worth a distinct message so the case is recognisable in a bug report.
                 var msg = error != null && error.HttpStatus == 400
-                    ? "İsim geçersiz. En fazla 20 karakter olmalı."
+                    ? NicknameMessages.For(NicknameRejectionReason.InvalidCharacter)
                     : BackendErrorMapper.Map(error);
                 onFailed?.Invoke(msg);
                 yield break;
@@ -575,6 +618,44 @@ namespace ValoCase.Core
 
             var saved = !string.IsNullOrEmpty(res.avatarId) ? res.avatarId : avatarId;
             Debug.Log("[Backend] Avatar saved.");
+            onSaved?.Invoke(saved);
+        }
+
+        // ── Backend account country (server-authoritative profile) ──────────────
+        // Same shape as the display name and avatar: validate locally, let the server
+        // decide, and cache only what it echoed. The local save is what the profile row
+        // reads, so writing it before the server agreed would show a country the account
+        // does not have.
+        public void SaveCountryBackend(string countryCode, Action<string> onSaved, Action<string> onFailed)
+        {
+            if (!BackendReady) { onFailed?.Invoke("Sunucu kullanılamıyor."); return; }
+
+            var normalized = CountryCatalog.Normalize(countryCode);
+            if (string.IsNullOrEmpty(normalized)) { onFailed?.Invoke("Ülke geçersiz."); return; }
+            StartCoroutine(SaveCountryRoutine(normalized, onSaved, onFailed));
+        }
+
+        IEnumerator SaveCountryRoutine(string countryCode, Action<string> onSaved, Action<string> onFailed)
+        {
+            AccountProfileResponse res = null;
+            BackendError error = null;
+            yield return Backend.SetCountry(countryCode, r => res = r, e => error = e);
+
+            if (error != null || res == null)
+            {
+                Debug.LogWarning("[Backend] Country save failed — " + (error?.ToString() ?? "null response"));
+                var msg = error != null && error.HttpStatus == 400
+                    ? "Ülke geçersiz."
+                    : BackendErrorMapper.Map(error);
+                onFailed?.Invoke(msg);
+                yield break;
+            }
+
+            var echoed = CountryCatalog.Normalize(res.countryCode);
+            var saved = echoed.Length > 0 ? echoed : countryCode;
+            Save.Data.countryCode = saved;
+            Save.Save();
+            Debug.Log("[Backend] Country saved.");
             onSaved?.Invoke(saved);
         }
 

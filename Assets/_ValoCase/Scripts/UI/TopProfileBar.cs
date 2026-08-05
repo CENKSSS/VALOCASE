@@ -126,8 +126,18 @@ namespace ValoCase.UI
                 _avatarImg.sprite = PlayerProfileData.Avatar;
             }
             if (_usernameLabel != null)
-                _usernameLabel.text = PlayerProfileData.Username.ToUpper();
+                _usernameLabel.text = BuildUsernameLabel();
         }
+
+        // "TR - CENK" once a country is set, plain "CENK" until then. Normalised through
+        // CountryCatalog so a code the catalog does not know shows nothing rather than
+        // putting an unassigned value in front of the player's name.
+        //
+        // Shares UIBuild.WithCountryTag with the lobby and the battle screen, so the code
+        // is coloured and spaced identically everywhere a player's name appears.
+        static string BuildUsernameLabel() =>
+            UIBuild.WithCountryTag(GameContext.Instance?.Save?.Data?.countryCode,
+                                   PlayerProfileData.Username.ToUpper());
 
         void SyncVp()
         {
