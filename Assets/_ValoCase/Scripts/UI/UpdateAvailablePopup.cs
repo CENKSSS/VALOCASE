@@ -12,10 +12,18 @@ namespace ValoCase.UI
     /// WalletResponse.latestVersion). While the server omits it nothing is ever shown,
     /// so shipping this ahead of the backend field is harmless.
     ///
-    /// UPDATE opens the store page for this exact build's package id; LATER dismisses,
-    /// because a player without a connection strong enough to update must still be able
-    /// to keep playing. Making the update mandatory is a one-line change: drop the LATER
-    /// button and the Hide() wiring.
+    /// <para><strong>The update is mandatory.</strong> There is no dismiss button and
+    /// nothing behind the overlay can be clicked: UPDATE opens the store page and that is
+    /// the only control. A player on an outdated build cannot reach the game until they
+    /// update.</para>
+    ///
+    /// <para>That turns the server value into a live wall in front of every player at once,
+    /// so two safeguards are deliberate and must stay. An empty
+    /// <c>valocase.client.latest-version</c> shows nothing — that is the off switch. And
+    /// <see cref="IsNewer"/> returns false whenever either string fails to parse, so a
+    /// malformed value locks nobody out. Never point the property at a version that is not
+    /// already live in the store: every player would be held at a wall in front of a
+    /// download that does not exist.</para>
     /// </summary>
     public sealed class UpdateAvailablePopup : MonoBehaviour
     {
@@ -30,10 +38,13 @@ namespace ValoCase.UI
         bool IsShowing => gameObject.activeSelf;
 
         /// <summary>
-        /// Shows the notice when <paramref name="latestVersion"/> is newer than the running
-        /// build. Safe to call on every boot: it is a no-op when the server sent nothing,
-        /// when the strings do not parse, or when this build is already current.
-        /// Shown at most once per session so it cannot interrupt play repeatedly.
+        /// Shows the wall when <paramref name="latestVersion"/> is newer than the running
+        /// build. Safe to call on every boot and from more than one caller: it is a no-op
+        /// when the server sent nothing, when the strings do not parse, or when this build
+        /// is already current.
+        ///
+        /// <para>The once-per-session guard only stops the overlay being rebuilt. It cannot
+        /// be used to get past the wall, because nothing dismisses it once it is up.</para>
         /// </summary>
         public static void TryShow(string latestVersion)
         {
@@ -52,18 +63,40 @@ namespace ValoCase.UI
         {
             if (IsShowing) return;
 
-            _body.text = $"Version {latestVersion} is available.\nYou are on {Application.version}.";
+            _body.text = $"Version {latestVersion} is available.\n" +
+                         $"You are on {Application.version}.\n\n" +
+                         "You need to update to keep playing.";
             gameObject.SetActive(true);
             transform.SetAsLastSibling();
-            Debug.Log($"[Update] Notice shown — installed={Application.version} latest={latestVersion}");
+            Debug.Log($"[Update] Mandatory wall shown — installed={Application.version} latest={latestVersion}");
         }
 
-        void Hide() => gameObject.SetActive(false);
+        /// <summary>
+        /// Keeps the wall on top for as long as it is up. A screen opened after the wall
+        /// appeared — a popup queued before it, a canvas that re-sorts its children — would
+        /// otherwise draw over it and hand back a clickable game underneath.
+        /// </summary>
+        void LateUpdate()
+        {
+            if (IsShowing && transform.GetSiblingIndex() != transform.parent.childCount - 1)
+                transform.SetAsLastSibling();
+        }
 
         void OpenStore()
         {
             Debug.Log("[Update] Opening store page — " + _storeUrl);
             Application.OpenURL(_storeUrl);
+        }
+
+        /// <summary>
+        /// Clears the once-per-session state so a test can build the wall more than once.
+        /// Deliberately not a dismiss path: it forgets that the wall was shown, it does not
+        /// take one down. Nothing in the game calls this.
+        /// </summary>
+        public static void ResetForTests()
+        {
+            _shownThisSession = false;
+            Instance = null;
         }
 
         // ── Version comparison ────────────────────────────────────────────────
@@ -132,7 +165,6 @@ namespace ValoCase.UI
 
             var accent   = new Color(1f, 0.275f, 0.333f, 1f);
             var textMain = new Color(0.961f, 0.961f, 0.961f, 1f);
-            var textDim  = new Color(0.541f, 0.569f, 0.651f, 1f);
             var cardBg   = new Color(0.051f, 0.067f, 0.090f, 1f);
             var darkText = new Color(0.043f, 0.055f, 0.082f, 1f);
 
@@ -150,7 +182,8 @@ namespace ValoCase.UI
             var cardRt = (RectTransform)cardGo.transform;
             cardRt.anchorMin = cardRt.anchorMax = new Vector2(0.5f, 0.5f);
             cardRt.pivot     = new Vector2(0.5f, 0.5f);
-            cardRt.sizeDelta = new Vector2(420f, 290f);
+            // Shorter than the dismissible version used to be: one button, not two.
+            cardRt.sizeDelta = new Vector2(420f, 268f);
             cardGo.GetComponent<Image>().color = cardBg;
             var cardOl = cardGo.GetComponent<Outline>();
             cardOl.effectColor    = new Color(accent.r, accent.g, accent.b, 0.85f);
@@ -173,8 +206,8 @@ namespace ValoCase.UI
             bRt.anchorMin        = new Vector2(0f, 1f);
             bRt.anchorMax        = new Vector2(1f, 1f);
             bRt.pivot            = new Vector2(0.5f, 1f);
-            bRt.anchoredPosition = new Vector2(0f, -78f);
-            bRt.sizeDelta        = new Vector2(-48f, 70f);
+            bRt.anchoredPosition = new Vector2(0f, -74f);
+            bRt.sizeDelta        = new Vector2(-48f, 96f);   // three lines now, not two
 
             var updateGo = new GameObject("UpdateBtn", typeof(RectTransform), typeof(Image), typeof(Button));
             updateGo.transform.SetParent(cardGo.transform, false);
@@ -182,7 +215,7 @@ namespace ValoCase.UI
             uRt.anchorMin        = new Vector2(0.5f, 0f);
             uRt.anchorMax        = new Vector2(0.5f, 0f);
             uRt.pivot            = new Vector2(0.5f, 0f);
-            uRt.anchoredPosition = new Vector2(0f, 74f);
+            uRt.anchoredPosition = new Vector2(0f, 32f);   // sits alone; no LATER beneath it
             uRt.sizeDelta        = new Vector2(240f, 52f);
             var uImg = updateGo.GetComponent<Image>();
             uImg.color = accent;
@@ -194,23 +227,8 @@ namespace ValoCase.UI
             uLbl.alignment = TextAlignmentOptions.Center;
             UIBuild.Stretch(uLbl.rectTransform);
 
-            var laterGo = new GameObject("LaterBtn", typeof(RectTransform), typeof(Image), typeof(Button));
-            laterGo.transform.SetParent(cardGo.transform, false);
-            var lRt = (RectTransform)laterGo.transform;
-            lRt.anchorMin        = new Vector2(0.5f, 0f);
-            lRt.anchorMax        = new Vector2(0.5f, 0f);
-            lRt.pivot            = new Vector2(0.5f, 0f);
-            lRt.anchoredPosition = new Vector2(0f, 26f);
-            lRt.sizeDelta        = new Vector2(240f, 40f);
-            var lImg = laterGo.GetComponent<Image>();
-            lImg.color = new Color(0f, 0f, 0f, 0f);   // text-only, no filled slab
-            var lBtn = laterGo.GetComponent<Button>();
-            lBtn.transition    = Selectable.Transition.None;
-            lBtn.targetGraphic = lImg;
-
-            var lLbl = UIBuild.MakeTmp(laterGo.transform, "Lbl", "LATER", 15f, FontStyles.Normal, textDim);
-            lLbl.alignment = TextAlignmentOptions.Center;
-            UIBuild.Stretch(lLbl.rectTransform);
+            // No LATER button. The update is mandatory, so there is deliberately no second
+            // control here — a dismiss path would be the whole feature undone.
 
             var popup = rootGo.AddComponent<UpdateAvailablePopup>();
             popup._body = bodyLbl;
@@ -219,9 +237,7 @@ namespace ValoCase.UI
             popup._storeUrl = "https://play.google.com/store/apps/details?id=" + Application.identifier;
 
             uBtn.onClick.AddListener(popup.OpenStore);
-            lBtn.onClick.AddListener(popup.Hide);
             UIBuild.WireButtonClick(uBtn);
-            UIBuild.WireButtonClick(lBtn);
 
             Instance = popup;
             rootGo.SetActive(false);

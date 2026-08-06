@@ -233,6 +233,19 @@ namespace ValoCase.Core
         {
             Debug.Log("[Backend] Boot sync started — baseUrl=" + gameConfig.BackendBaseUrl);
 
+            // 0) Version gate, before anything that needs a token. The update wall is
+            //    mandatory, so it has to reach the clients least able to ask for it: a
+            //    first-time install with no token yet, and — the case that actually
+            //    happened — a build whose saved token the server no longer accepts. Both
+            //    return from this method before /wallet is ever called, so a version check
+            //    that lived only there would never run for them.
+            //
+            //    Failure is ignored on purpose. An unreachable backend must not hold a
+            //    player at a wall; the notice simply does not appear this launch.
+            yield return Backend.GetHealth(
+                res => UpdateAvailablePopup.TryShow(res != null ? res.latestVersion : null),
+                err => Debug.Log("[Update] Version check skipped — " + BackendErrorMapper.Map(err)));
+
             // 1) Ensure a guest token. A first-time player has none: registration is NOT
             //    done here. It waits until they confirm a nickname, so an app that is
             //    merely launched and closed — an old build, an automated crawler, a

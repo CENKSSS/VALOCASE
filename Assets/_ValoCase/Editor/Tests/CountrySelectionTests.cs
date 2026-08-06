@@ -246,12 +246,13 @@ namespace ValoCase.EditorTests
         public void RegistrationBodyCarriesTheCodeAndNothingElseAboutTheCountry()
         {
             // The real builder the request uses, not a reconstruction of it.
-            var json = BackendApiClient.BuildGuestBody("Player123", "TR");
+            var json = BackendApiClient.BuildGuestBody("Player123", "TR", InstallId);
 
             // The whole field set, not just a contains-check: a second country field —
             // a localized name, a region, a flag — could not be added without failing here.
-            // The server's GuestRegisterRequest record declares exactly these two.
-            CollectionAssert.AreEquivalent(new[] { "displayName", "countryCode" }, KeysOf(json));
+            // The server's GuestRegisterRequest record declares exactly these three.
+            CollectionAssert.AreEquivalent(
+                new[] { "displayName", "countryCode", "installationId" }, KeysOf(json));
             StringAssert.Contains("\"countryCode\":\"TR\"", json);
             StringAssert.Contains("\"displayName\":\"Player123\"", json);
         }
@@ -262,8 +263,8 @@ namespace ValoCase.EditorTests
             // Preserves the older bodiless call. The server reads a missing body as a
             // missing displayName and refuses it, which is the intended outcome — it must
             // not become a body that looks like a real registration.
-            Assert.AreEqual("{}", BackendApiClient.BuildGuestBody(null, null));
-            Assert.AreEqual("{}", BackendApiClient.BuildGuestBody("", ""));
+            Assert.AreEqual("{}", BackendApiClient.BuildGuestBody(null, null, null));
+            Assert.AreEqual("{}", BackendApiClient.BuildGuestBody("", "", ""));
         }
 
         [Test]
@@ -271,9 +272,35 @@ namespace ValoCase.EditorTests
         {
             foreach (var country in CountryCatalog.All)
             {
-                var json = BackendApiClient.BuildGuestBody("Player123", country.Code);
+                var json = BackendApiClient.BuildGuestBody("Player123", country.Code, InstallId);
                 StringAssert.DoesNotContain(country.Name, json);
             }
+        }
+
+        // A fixed id rather than ClientIdentity.InstallationId: these tests assert the
+        // payload shape, and reading the real PlayerPrefs value would make them depend on
+        // machine state. That the request passes the canonical one is asserted separately
+        // in InstallationLinkPayloadTests.
+        const string InstallId = "550e8400-e29b-41d4-a716-446655440000";
+
+        [Test]
+        public void RegistrationBodyCarriesTheInstallIdItWasGiven()
+        {
+            var json = BackendApiClient.BuildGuestBody("Player123", "TR", InstallId);
+
+            StringAssert.Contains("\"installationId\":\"" + InstallId + "\"", json);
+        }
+
+        [Test]
+        public void RegistrationBodyStillRegistersWhenThereIsNoInstallId()
+        {
+            // The id is analytics data. A device without one must still send a body the
+            // server accepts, or a measurement would be costing us a player.
+            var json = BackendApiClient.BuildGuestBody("Player123", "TR", null);
+
+            StringAssert.Contains("\"displayName\":\"Player123\"", json);
+            StringAssert.Contains("\"installationId\":\"\"", json);
+            Assert.AreNotEqual("{}", json);
         }
 
         [Test]

@@ -66,22 +66,46 @@ namespace ValoCase.Services.Backend
         /// </param>
         public IEnumerator RegisterGuest(string displayName, string countryCode,
                                          Action<GuestRegisterResponse> onSuccess, Action<BackendError> onError)
-            => Send("POST", ApiPrefix + "/guest", BuildGuestBody(displayName, countryCode),
+            => Send("POST", ApiPrefix + "/guest",
+                    BuildGuestBody(displayName, countryCode, ClientIdentity.InstallationId),
                     auth: false, onSuccess, onError);
 
         /// <summary>
         /// The exact registration body this client sends. Separated from the request so a
         /// test can assert the bytes rather than a reconstruction of them — the payload
         /// shape is the whole contract with POST /api/v1/guest.
+        ///
+        /// <para>The install id is the same <see cref="ClientIdentity.InstallationId"/> that
+        /// onboarding telemetry and the session lifecycle already report. A second id
+        /// generated here would silently break the join it exists to make, which is why
+        /// this takes the value rather than reading it itself — the caller passes the one
+        /// canonical source and a test can pass a known value.</para>
+        ///
+        /// <para>It is analytics data and never a precondition: the server drops a blank or
+        /// unparseable id and creates the account anyway, so a device that somehow has
+        /// none still registers.</para>
         /// </summary>
-        public static string BuildGuestBody(string displayName, string countryCode)
-            => string.IsNullOrEmpty(displayName) && string.IsNullOrEmpty(countryCode)
+        public static string BuildGuestBody(string displayName, string countryCode,
+                                            string installationId)
+            => string.IsNullOrEmpty(displayName)
+               && string.IsNullOrEmpty(countryCode)
+               && string.IsNullOrEmpty(installationId)
                 ? "{}"
                 : JsonUtility.ToJson(new GuestRegisterRequest
                 {
-                    displayName = displayName ?? string.Empty,
-                    countryCode = countryCode ?? string.Empty
+                    displayName    = displayName ?? string.Empty,
+                    countryCode    = countryCode ?? string.Empty,
+                    installationId = installationId ?? string.Empty
                 });
+
+        /// <summary>
+        /// Liveness check that also carries the store's current version. Unauthenticated on
+        /// purpose: this is the only way a client with no usable guest token can be told
+        /// that updating is what fixes it. /wallet carries the same field but needs auth,
+        /// which is exactly what such a client does not have.
+        /// </summary>
+        public IEnumerator GetHealth(Action<HealthResponse> onSuccess, Action<BackendError> onError)
+            => Send("GET", ApiPrefix + "/health", null, auth: false, onSuccess, onError);
 
         public IEnumerator GetWallet(Action<WalletResponse> onSuccess, Action<BackendError> onError)
             => Send("GET", ApiPrefix + "/wallet", null, auth: true, onSuccess, onError);
@@ -611,12 +635,27 @@ namespace ValoCase.Services.Backend
     // ── Response DTOs (JsonUtility-serializable; adjust field names to backend) ──
 
     [Serializable]
+    public sealed class HealthResponse
+    {
+        public string status;         // "OK"
+        public string service;        // "valocase-backend"
+        // Omitted by the server when no update is being required, and absent entirely on
+        // backends older than this field. JsonUtility leaves it null in both cases, which
+        // UpdateAvailablePopup.TryShow already treats as "show nothing".
+        public string latestVersion;
+    }
+
+    [Serializable]
     public sealed class GuestRegisterRequest
     {
         public string displayName;
         // ISO code only. There is deliberately no field for the country's display name:
         // that name is localized client-side and is not what the account stores.
         public string countryCode;
+        // The canonical per-install UUID (ClientIdentity.InstallationId), so the account
+        // can be joined to the onboarding funnel that preceded it. Analytics only: the
+        // server never authenticates on it and never echoes it back.
+        public string installationId;
     }
 
     [Serializable]

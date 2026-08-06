@@ -77,6 +77,22 @@ namespace ValoCase.Services.Backend
         bool _draining;
         int _droppedCount;
 
+        /// <summary>
+        /// Set whenever the queue changes; cleared once it has been written to disk. The
+        /// write is coalesced through <see cref="PersistPump"/> rather than done inline so
+        /// a burst of Emits during boot produces one file write instead of nine.
+        /// </summary>
+        bool _dirty;
+
+        /// <summary>
+        /// How long a change may sit unwritten. Short enough that a crash a second after
+        /// launch still keeps the event, long enough that the boot burst coalesces.
+        /// </summary>
+        const float PersistIntervalSeconds = 1f;
+
+        /// <summary>Whether the disk queue has been restored into this instance yet.</summary>
+        bool _restored;
+
         // ── Public API ────────────────────────────────────────────────────────
 
         /// <summary>
@@ -150,6 +166,14 @@ namespace ValoCase.Services.Backend
             }
             _instance = this;
             DontDestroyOnLoad(gameObject);
+
+            // A fresh instance means a fresh run. The flag is static and survives a domain
+            // reload in the editor, where a stale true would leave the pump exiting on its
+            // first tick and nothing ever reaching disk.
+            _quitting = false;
+
+            RestoreFromDisk();
+            StartCoroutine(PersistPump());
         }
 
         void OnDestroy()
@@ -157,9 +181,83 @@ namespace ValoCase.Services.Backend
             if (_instance == this) _instance = null;
         }
 
+        /// <summary>
+        /// Loads whatever the previous run could not deliver, ahead of anything this run
+        /// emits. Order matters: a crash-loop device would otherwise keep reporting its
+        /// newest launch and never the launch that explains the crash.
+        /// </summary>
+        void RestoreFromDisk()
+        {
+            if (_restored) return;
+            _restored = true;
+            try
+            {
+                var pending = OnboardingTelemetryStore.Load();
+                if (pending.Count == 0) return;
+
+                var carried = new Queue<OnboardingEventRequest>(pending);
+                while (_queue.Count > 0) carried.Enqueue(_queue.Dequeue());
+                while (carried.Count > 0) _queue.Enqueue(carried.Dequeue());
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                Debug.Log($"[OnboardingTelemetry] restored {pending.Count} pending event(s) from disk.");
+#endif
+                if (!_draining) StartCoroutine(Drain());
+            }
+            catch (Exception e)
+            {
+                // Restoring is a best-effort improvement on losing the events entirely.
+                Debug.LogWarning("[OnboardingTelemetry] restore failed and was skipped: " + e.Message);
+            }
+        }
+
+        /// <summary>
+        /// Writes the queue at most once per <see cref="PersistIntervalSeconds"/>, and only
+        /// when something changed. Runs for the life of the app; the cost when idle is one
+        /// bool check per second.
+        /// </summary>
+        IEnumerator PersistPump()
+        {
+            var wait = new WaitForSecondsRealtime(PersistIntervalSeconds);
+            while (!_quitting)
+            {
+                yield return wait;
+                if (_dirty) PersistNow();
+            }
+        }
+
+        /// <summary>
+        /// Writes the queue synchronously. Small by construction — at most
+        /// <see cref="MaxQueuedEvents"/> flat records — so this is a sub-millisecond write
+        /// rather than work that needs a thread.
+        /// </summary>
+        void PersistNow()
+        {
+            _dirty = false;
+            OnboardingTelemetryStore.Save(_queue);
+        }
+
+        // The last moment the OS reliably gives us on mobile. A player who swipes the app
+        // away, or an OS that kills a backgrounded process, never reaches OnApplicationQuit,
+        // so the pause hook is the one that actually saves those events.
+        void OnApplicationPause(bool paused)
+        {
+            if (paused && _dirty) PersistNow();
+        }
+
+        void OnApplicationFocus(bool focused)
+        {
+            if (!focused && _dirty) PersistNow();
+        }
+
         // Stops a send being started during teardown, when coroutines will not finish
-        // and Unity APIs are unreliable.
-        void OnApplicationQuit() => _quitting = true;
+        // and Unity APIs are unreliable. The queue is written before that flag is set:
+        // anything still undelivered belongs to the next launch.
+        void OnApplicationQuit()
+        {
+            if (_dirty) PersistNow();
+            _quitting = true;
+        }
 
         // ── Queue ─────────────────────────────────────────────────────────────
 
@@ -173,6 +271,7 @@ namespace ValoCase.Services.Backend
                 _droppedCount++;
             }
             _queue.Enqueue(request);
+            _dirty = true;
 
             if (!_draining) StartCoroutine(Drain());
         }
@@ -189,12 +288,19 @@ namespace ValoCase.Services.Backend
                     // Delivered, permanently refused, or out of attempts — either way it
                     // leaves the queue, so a stuck event cannot block the ones behind it.
                     if (_queue.Count > 0 && ReferenceEquals(_queue.Peek(), request))
+                    {
                         _queue.Dequeue();
+                        _dirty = true;
+                    }
                 }
             }
             finally
             {
                 _draining = false;
+                // Write the shrunken queue now rather than waiting for the pump. An empty
+                // one deletes the file, so the ordinary case — everything delivered during
+                // this launch — leaves no state behind for the next one to reason about.
+                if (_dirty && !_quitting) PersistNow();
             }
         }
 
