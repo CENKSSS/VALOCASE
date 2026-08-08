@@ -645,7 +645,7 @@ namespace ValoCase.UI
 
         // Puts the country code in front of a participant's name. The local player's code
         // comes from the save; an opponent's comes from whatever the backend sent with the
-        // battle, and no tag is drawn when that is absent — bots included.
+        // battle, and "00" stands in when that is absent — bots included.
         string TagName(BattlePlayerResult player, string displayName)
         {
             var code = _isUser

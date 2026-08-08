@@ -29,8 +29,8 @@ namespace ValoCase.Data
         [Header("Backend (Spring Boot)")]
         [Tooltip("When false (default) the game runs fully local/offline. When true, boot-time guest/wallet/inventory sync runs against backendBaseUrl.")]
         [SerializeField] bool useBackend = false;
-        [Tooltip("Base URL of the Spring Boot backend, no trailing slash. Example: https://valocase-backend-digitalocean-isy6d.ondigitalocean.app")]
-        [SerializeField] string backendBaseUrl = "https://valocase-backend-digitalocean-isy6d.ondigitalocean.app";
+        [Tooltip("Base URL of the Spring Boot backend, no trailing slash. Example: https://valocase-backend-f6btemapa7exb9bd.polandcentral-01.azurewebsites.net")]
+        [SerializeField] string backendBaseUrl = "https://valocase-backend-f6btemapa7exb9bd.polandcentral-01.azurewebsites.net";
         [Tooltip("Per-request network timeout in seconds.")]
         [SerializeField] int requestTimeoutSeconds = 15;
 

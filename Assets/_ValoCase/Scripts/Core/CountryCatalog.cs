@@ -25,7 +25,11 @@ namespace ValoCase.Core
     }
 
     /// <summary>
-    /// The 249 officially assigned ISO-3166-1 alpha-2 codes and the name shown for each.
+    /// The 249 officially assigned ISO-3166-1 alpha-2 codes and the name shown for each,
+    /// plus <see cref="NoCountryCode"/> — "AA", the code for a player who was asked and
+    /// chose not to say. AA is a value the backend stores and validates like any other, so
+    /// it is a catalog entry here rather than a display-only placeholder; it is simply
+    /// kept out of <see cref="Official"/> so the ISO list stays exactly the ISO list.
     ///
     /// One list, one label format, one search. The picker, the profile row and the
     /// registration payload all read from here, so a country can never be displayed one
@@ -293,8 +297,39 @@ namespace ValoCase.Core
             new Country("ZW", "Zimbabwe"),
         };
 
-        // Folded names, built once, in the same order as Entries. Folding on every
-        // keystroke instead would re-normalise 249 strings per character typed.
+        /// <summary>
+        /// The code for "asked, and chose not to say". A real value the backend stores and
+        /// validates, not a client-side placeholder: it is what distinguishes a player who
+        /// declined from an account that was never asked, which is stored as NULL. The two
+        /// answer different questions about the setup screen, so they are kept apart on
+        /// both sides.
+        ///
+        /// "AA" is in ISO-3166-1's user-assigned range, which the standard promises never
+        /// to assign to a country, so it can never collide with a real code.
+        /// </summary>
+        public const string NoCountryCode = "AA";
+
+        /// <summary>
+        /// The catalog entry for <see cref="NoCountryCode"/>. Name and code are both "AA",
+        /// so the row reads "AA - AA" in the same "name - code" format as every country
+        /// under it.
+        /// </summary>
+        public static readonly Country NoCountry = new Country(NoCountryCode, NoCountryCode);
+
+        /// <summary>
+        /// Everything the player may pick: <see cref="NoCountry"/> first, then the 249
+        /// assigned codes. AA leads because it is the default and because "AA" sorts ahead
+        /// of "Afghanistan" anyway, so the list stays alphabetical.
+        ///
+        /// Kept out of <see cref="Entries"/> rather than pasted into it, mirroring the
+        /// backend's split. Entries is the ISO list and is pinned to the official count;
+        /// folding one non-country into it would quietly destroy that check, and AA would
+        /// then be indistinguishable from a real country the day the standard adds one.
+        /// </summary>
+        static readonly Country[] Selectable = BuildSelectable();
+
+        // Folded names, built once, in the same order as Selectable. Folding on every
+        // keystroke instead would re-normalise 250 strings per character typed.
         static readonly string[] FoldedNames = BuildFoldedNames();
 
         static readonly Dictionary<string, int> IndexByCode = BuildIndex();
@@ -306,10 +341,20 @@ namespace ValoCase.Core
             new List<Country>(), new List<Country>(), new List<Country>(), new List<Country>()
         };
 
-        /// <summary>Every country, alphabetical by name.</summary>
-        public static IReadOnlyList<Country> All => Entries;
+        /// <summary>
+        /// Everything the player may pick, alphabetical by name, with
+        /// <see cref="NoCountry"/> first. This is the list the picker shows.
+        /// </summary>
+        public static IReadOnlyList<Country> All => Selectable;
 
-        /// <summary>Whether the value is an officially assigned alpha-2 code (case-insensitive).</summary>
+        /// <summary>
+        /// The 249 officially assigned ISO-3166-1 codes, without <see cref="NoCountry"/>.
+        /// Use this wherever the question is "is this a real country" — the ISO integrity
+        /// checks, and any assertion about what a payload may not contain.
+        /// </summary>
+        public static IReadOnlyList<Country> Official => Entries;
+
+        /// <summary>Whether the value is a code the backend accepts (case-insensitive), AA included.</summary>
         public static bool IsValidCode(string code) => !string.IsNullOrEmpty(Normalize(code));
 
         /// <summary>
@@ -328,8 +373,23 @@ namespace ValoCase.Core
         {
             var normalized = Normalize(code);
             if (normalized.Length == 0) { country = default; return false; }
-            country = Entries[IndexByCode[normalized]];
+            country = Selectable[IndexByCode[normalized]];
             return true;
+        }
+
+        /// <summary>
+        /// The value a request carries. A code the catalog knows, or <see cref="NoCountryCode"/>
+        /// for anything else — never empty.
+        ///
+        /// That "never empty" is the point. A registration that sent nothing left the
+        /// server with no country to store and the client with no code to write, so
+        /// whatever country the save happened to be holding from an earlier account
+        /// survived and looked like the game had picked one at random.
+        /// </summary>
+        public static string ForWire(string code)
+        {
+            var normalized = Normalize(code);
+            return normalized.Length > 0 ? normalized : NoCountryCode;
         }
 
         /// <summary>
@@ -352,16 +412,16 @@ namespace ValoCase.Core
             var folded = Fold(query);
             if (folded.Length == 0)
             {
-                results.AddRange(Entries);
+                results.AddRange(Selectable);
                 return;
             }
 
             for (int i = 0; i < Buckets.Length; i++) Buckets[i].Clear();
 
-            for (int i = 0; i < Entries.Length; i++)
+            for (int i = 0; i < Selectable.Length; i++)
             {
-                int rank = Rank(Entries[i].Code, FoldedNames[i], folded);
-                if (rank >= 0) Buckets[rank].Add(Entries[i]);
+                int rank = Rank(Selectable[i].Code, FoldedNames[i], folded);
+                if (rank >= 0) Buckets[rank].Add(Selectable[i]);
             }
 
             for (int i = 0; i < Buckets.Length; i++) results.AddRange(Buckets[i]);
@@ -413,17 +473,25 @@ namespace ValoCase.Core
             return sb.ToString();
         }
 
+        static Country[] BuildSelectable()
+        {
+            var all = new Country[Entries.Length + 1];
+            all[0] = NoCountry;
+            Array.Copy(Entries, 0, all, 1, Entries.Length);
+            return all;
+        }
+
         static string[] BuildFoldedNames()
         {
-            var folded = new string[Entries.Length];
-            for (int i = 0; i < Entries.Length; i++) folded[i] = Fold(Entries[i].Name);
+            var folded = new string[Selectable.Length];
+            for (int i = 0; i < Selectable.Length; i++) folded[i] = Fold(Selectable[i].Name);
             return folded;
         }
 
         static Dictionary<string, int> BuildIndex()
         {
-            var index = new Dictionary<string, int>(Entries.Length, StringComparer.Ordinal);
-            for (int i = 0; i < Entries.Length; i++) index[Entries[i].Code] = i;
+            var index = new Dictionary<string, int>(Selectable.Length, StringComparer.Ordinal);
+            for (int i = 0; i < Selectable.Length; i++) index[Selectable[i].Code] = i;
             return index;
         }
     }

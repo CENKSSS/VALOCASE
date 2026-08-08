@@ -20,7 +20,12 @@ namespace ValoCase.UI
     /// visible hitch on a low-end phone every time the picker opens, which is exactly the
     /// kind of stutter a setup screen cannot afford.
     ///
-    /// Nothing is selected until the player taps a row: the picker never invokes its
+    /// The first row is "AA - AA", <see cref="CountryCatalog.NoCountryCode"/> — the code
+    /// for a player who would rather not say. It is an ordinary catalog entry, so nothing
+    /// here special-cases it; it is highlighted on open for an account that has no country
+    /// stored at all, which is what an older save looks like.
+    ///
+    /// Nothing is committed until the player taps a row: the picker never invokes its
     /// callback on open or on close.
     /// </summary>
     public sealed class CountryPickerPopup : MonoBehaviour
@@ -83,7 +88,11 @@ namespace ValoCase.UI
 
             var go = new GameObject("CountryPickerPopup");
             _instance = go.AddComponent<CountryPickerPopup>();
-            _instance._currentCode = CountryCatalog.Normalize(currentCode);
+            // No country set reads as the AA row being the current one, so the list always
+            // opens with something highlighted instead of looking like a list nobody has
+            // ever touched.
+            var normalized = CountryCatalog.Normalize(currentCode);
+            _instance._currentCode = normalized.Length > 0 ? normalized : CountryCatalog.NoCountryCode;
             _instance._onPicked    = onPicked;
             go.transform.SetParent(parent, false);
             _instance.BuildUi();

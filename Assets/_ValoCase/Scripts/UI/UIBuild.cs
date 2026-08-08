@@ -235,9 +235,11 @@ namespace ValoCase.UI
         public const string CountryCodeHex = "#FF2E4C";
 
         /// <summary>
-        /// "TR - CENK", with the code coloured. Returns the name untouched when there is
-        /// no country to show, so a player whose country is unknown — a bot, or an
-        /// opponent on a backend that does not send one — reads exactly as before.
+        /// "TR - CENK", with the code coloured. A player with no known country reads
+        /// "AA - CENK" rather than losing the tag, so every name row keeps the same shape
+        /// instead of some carrying a code and others silently dropping it — which read as
+        /// a layout bug once skipping the country became ordinary. See
+        /// <see cref="ValoCase.Core.CountryCatalog.NoCountryCode"/>.
         ///
         /// Rich text rather than a second label: the two parts stay on one baseline and
         /// the row centres as a unit whatever the name length. Callers that also derive
@@ -247,7 +249,7 @@ namespace ValoCase.UI
         public static string WithCountryTag(string countryCode, string name)
         {
             var code = ValoCase.Core.CountryCatalog.Normalize(countryCode);
-            if (code.Length == 0) return name;
+            if (code.Length == 0) code = ValoCase.Core.CountryCatalog.NoCountryCode;
             return $"<color={CountryCodeHex}><b>{code}</b></color> - {name}";
         }
 

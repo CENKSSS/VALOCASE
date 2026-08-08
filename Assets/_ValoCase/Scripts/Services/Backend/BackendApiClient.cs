@@ -42,7 +42,7 @@ namespace ValoCase.Services.Backend
 
         public BackendApiClient(string baseUrl, int timeoutSeconds, string guestToken = null)
         {
-            _baseUrl = string.IsNullOrEmpty(baseUrl) ? "https://valocase-backend-digitalocean-isy6d.ondigitalocean.app" : baseUrl.TrimEnd('/');
+            _baseUrl = string.IsNullOrEmpty(baseUrl) ? "https://valocase-backend-f6btemapa7exb9bd.polandcentral-01.azurewebsites.net" : baseUrl.TrimEnd('/');
             _timeoutSeconds = timeoutSeconds > 0 ? timeoutSeconds : DefaultTimeoutSeconds;
             GuestToken = guestToken;
         }

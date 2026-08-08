@@ -10,11 +10,16 @@ using ValoCase.Services.Backend;
 namespace ValoCase.UI
 {
     /// <summary>
-    /// One-time first-launch profile setup: new players pick a nickname, a country and an
-    /// avatar before playing. Shown by GameContext once the session can persist the choice
-    /// (after backend boot sync, or immediately in local editor mode). Built at
+    /// One-time first-launch profile setup: new players are offered a nickname, a country
+    /// and an avatar before playing. Shown by GameContext once the session can persist the
+    /// choice (after backend boot sync, or immediately in local editor mode). Built at
     /// runtime with zero prefab dependency, same pattern as NoInternetPopup.
     /// Completion is stored in SaveDataRoot.profileSetupCompleted.
+    ///
+    /// Offered, not demanded: CONFIRM works with the panel untouched. The backend names an
+    /// unnamed account AgentXXXX, stores a missing country as NULL, and has always given
+    /// new accounts a default avatar, so the only thing this screen can usefully refuse is
+    /// a nickname that was typed and breaks a rule — see <see cref="ProfileSetupGate"/>.
     ///
     /// The three choices are kept in <see cref="ProfileSetupDraft"/> as they are made, so
     /// a failed registration or an app closed mid-setup does not throw them away.
@@ -47,7 +52,10 @@ namespace ValoCase.UI
         Button          _countryBtn;
         Outline         _countryOutline;
         TextMeshProUGUI _countryLbl;
-        string          _countryCode = string.Empty;
+        // Starts on AA — "asked, chose not to say" — so the panel opens with a real,
+        // already-valid answer rather than a blank the player has to fill in. Tapping the
+        // row swaps it for a country; leaving it alone sends AA.
+        string          _countryCode = CountryCatalog.NoCountryCode;
         string          _selectedKey;
         Sprite          _selectedSprite;
         bool            _saving;
@@ -153,8 +161,13 @@ namespace ValoCase.UI
             // The name is validated, normalised, and only then sent. The value that goes
             // to the server is the canonical one the validator produced, not the raw
             // field text, so what the backend stores is what was already checked here.
-            if (!NicknameValidator.TryValidate(_nameInput != null ? _nameInput.text : null,
-                    out var nickname, out var reason))
+            //
+            // An empty field is the one refusal that no longer stops anything: it means
+            // the player did not want to pick a name, and the server answers that with an
+            // AgentXXXX of its own. Every other reason is still a refusal, because the
+            // server would answer those with a 400.
+            var reason = NicknameValidator.Classify(_nameInput != null ? _nameInput.text : null);
+            if (reason != NicknameRejectionReason.None && reason != NicknameRejectionReason.Blank)
             {
                 ShowError(NicknameMessages.For(reason));
                 OnboardingTelemetry.Emit(OnboardingTelemetry.NicknameRejected,
@@ -162,21 +175,16 @@ namespace ValoCase.UI
                 return;
             }
 
-            // Checked after the nickname so a player with both problems is told about the
-            // name first — that is the field they were last typing in, and it is the one
-            // the funnel records a reason for.
-            var country = CountryCatalog.Normalize(_countryCode);
-            if (country.Length == 0)
-            {
-                ShowError(CountryRequiredMessage);
-                return;
-            }
+            // Empty when the field was blank. That is what the backend wants for "assign
+            // one for me" — not a name this client made up.
+            var nickname = reason == NicknameRejectionReason.None
+                ? NicknameValidator.Normalize(_nameInput.text)
+                : string.Empty;
 
-            if (string.IsNullOrEmpty(_selectedKey) || _selectedSprite == null)
-            {
-                ShowError(AvatarRequiredMessage);
-                return;
-            }
+            // Never empty: "AA" when nothing was picked. A registration that stated no
+            // country left the save holding whatever an earlier account had put there,
+            // which is how a player who touched nothing ended up with a country.
+            var country = CountryCatalog.ForWire(_countryCode);
 
             ShowError(null);
             OnboardingTelemetry.Emit(OnboardingTelemetry.NicknameConfirmClicked);
@@ -195,6 +203,12 @@ namespace ValoCase.UI
                         // rename call only runs against a backend that ignored it.
                         if (nameApplied) { SaveAvatarThenFinish(ctx); return; }
 
+                        // Nothing to rename to. We asked for no name, so whatever the
+                        // account is called is the server's to decide — sending the empty
+                        // field on would only earn a refusal from the same validator that
+                        // let it through a moment ago.
+                        if (nickname.Length == 0) { SaveAvatarThenFinish(ctx); return; }
+
                         ctx.SaveDisplayNameBackend(nickname,
                             _ => SaveAvatarThenFinish(ctx),
                             err =>
@@ -211,9 +225,15 @@ namespace ValoCase.UI
                 return;
             }
 
-            PlayerProfileData.SetUsername(nickname);
+            // Local editor session: there is no server to assign the missing pieces, so a
+            // blank choice simply leaves the existing default alone rather than writing an
+            // empty name over it.
+            if (nickname.Length > 0)
+            {
+                PlayerProfileData.SetUsername(nickname);
+                ctx.Save.Data.playerName = nickname;
+            }
             if (_selectedSprite != null) PlayerProfileData.SetAvatar(_selectedSprite, _selectedKey);
-            ctx.Save.Data.playerName  = nickname;
             ctx.Save.Data.countryCode = country;
             MarkCompleteAndClose(ctx);
         }
@@ -268,15 +288,14 @@ namespace ValoCase.UI
             RefreshConfirmState();
         }
 
-        // The button stays grey until all three choices are made, so the player can see
-        // the requirement before pressing anything. It remains clickable while grey —
-        // pressing it is how they get told what is missing, and it is the only moment at
-        // which a refused nickname can be reported to the funnel.
+        // Grey while the typed nickname breaks a rule, so the player can see there is a
+        // problem before pressing anything. An untouched panel is ready — nothing on it is
+        // required. It remains clickable while grey: pressing it is how they get told what
+        // is wrong, and it is the only moment at which a refused nickname reaches the funnel.
         void RefreshConfirmState()
         {
             bool ready = !_saving &&
-                         ProfileSetupGate.IsReady(_nameInput != null ? _nameInput.text : null,
-                                                  _selectedKey, _countryCode);
+                         ProfileSetupGate.IsReady(_nameInput != null ? _nameInput.text : null);
 
             if (_confirmBtn != null) _confirmBtn.interactable = !_saving;
             if (_confirmImg != null) _confirmImg.color = ready ? Accent : ConfirmIdle;
@@ -284,11 +303,12 @@ namespace ValoCase.UI
                 _confirmLbl.color = ready ? DarkText : TextDim;
         }
 
-        // Clears a stale complaint as soon as the name becomes valid, so the red line does
-        // not linger under a field that is now fine.
+        // Clears a stale complaint as soon as the name stops breaking a rule — including
+        // when the field is emptied again, which is now an allowed state — so the red line
+        // does not linger under a field that is fine.
         void OnNicknameChanged(string value)
         {
-            if (NicknameValidator.TryValidate(value, out _, out _)) ShowError(null);
+            if (ProfileSetupGate.IsReady(value)) ShowError(null);
             ProfileSetupDraft.SetNickname(value);
             RefreshConfirmState();
         }
@@ -309,17 +329,18 @@ namespace ValoCase.UI
             RefreshConfirmState();
         }
 
+        // AA is a selection like any other, so the row always reads as filled in. Only the
+        // outline distinguishes the default from a country the player went and picked.
         void UpdateCountryLabel()
         {
             if (_countryLbl == null) return;
             var label = CountryCatalog.LabelFor(_countryCode);
-            bool chosen = label.Length > 0;
+            if (label.Length == 0) label = CountryCatalog.NoCountry.Label;
 
-            _countryLbl.text      = chosen ? label : CountryPlaceholderText;
-            _countryLbl.color     = chosen ? TextMain : TextDim;
-            _countryLbl.fontStyle = chosen ? FontStyles.Bold : FontStyles.Italic;
+            _countryLbl.text = label;
             if (_countryOutline != null)
-                _countryOutline.effectColor = chosen ? Accent : AccentDim;
+                _countryOutline.effectColor =
+                    CountryCatalog.NoCountryCode == _countryCode ? AccentDim : Accent;
         }
 
         // Puts back whatever the player had chosen before the app closed or registration
@@ -343,7 +364,9 @@ namespace ValoCase.UI
                     }
             }
 
-            _countryCode = ProfileSetupDraft.CountryCode;
+            // An absent draft leaves the default in place rather than blanking it.
+            var draftCountry = ProfileSetupDraft.CountryCode;
+            if (draftCountry.Length > 0) _countryCode = draftCountry;
 
             RefreshCellHighlights();
             UpdateCountryLabel();
@@ -379,7 +402,7 @@ namespace ValoCase.UI
             TopBand(title.rectTransform, -44f, 48f);
 
             var subtitle = UIBuild.MakeTmp(card.transform, "Subtitle",
-                "Pick a nickname, country and avatar to get started", 20f, FontStyles.Normal, TextDim);
+                SubtitleText, 20f, FontStyles.Normal, TextDim);
             subtitle.alignment = TextAlignmentOptions.Center;
             TopBand(subtitle.rectTransform, -98f, 30f);
 
@@ -492,7 +515,10 @@ namespace ValoCase.UI
             _countryOutline.effectColor    = AccentDim;
             _countryOutline.effectDistance = new Vector2(1.5f, -1.5f);
 
-            _countryLbl = UIBuild.MakeTmp(go.transform, "Lbl", CountryPlaceholderText, 26f, FontStyles.Italic, TextDim);
+            // Text and styling are set by UpdateCountryLabel, which RestoreDraft calls
+            // before the panel is visible.
+            _countryLbl = UIBuild.MakeTmp(go.transform, "Lbl", CountryCatalog.NoCountry.Label,
+                                          26f, FontStyles.Bold, TextMain);
             _countryLbl.alignment = TextAlignmentOptions.MidlineLeft;
             var lRt = _countryLbl.rectTransform;
             lRt.anchorMin = Vector2.zero; lRt.anchorMax = Vector2.one;
@@ -680,8 +706,8 @@ namespace ValoCase.UI
 
         static bool IsTurkish => Application.systemLanguage == SystemLanguage.Turkish;
 
-        static string CountryPlaceholderText => IsTurkish ? "Ülkeni seç…"          : "Select your country…";
-        static string CountryRequiredMessage => IsTurkish ? "Lütfen ülkeni seç."   : "Please select your country.";
-        static string AvatarRequiredMessage  => IsTurkish ? "Lütfen bir avatar seç." : "Please select an avatar.";
+        static string SubtitleText => IsTurkish
+            ? "Hepsi isteğe bağlı — sonradan Ayarlar'dan değiştirebilirsin"
+            : "All optional — you can change these later in Settings";
     }
 }

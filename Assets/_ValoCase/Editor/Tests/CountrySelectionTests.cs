@@ -37,8 +37,11 @@ namespace ValoCase.EditorTests
         public void HoldsEveryOfficiallyAssignedCode()
         {
             // ISO-3166-1 currently assigns 249 alpha-2 codes. A number that drifts means
-            // an entry was dropped or duplicated during an edit.
-            Assert.AreEqual(249, CountryCatalog.All.Count);
+            // an entry was dropped or duplicated during an edit. Asserted against Official,
+            // not All: AA belongs to the picker, not to the standard, and merging the two
+            // would be exactly the edit this check exists to catch.
+            Assert.AreEqual(249, CountryCatalog.Official.Count);
+            Assert.AreEqual(250, CountryCatalog.All.Count);
         }
 
         [Test]
@@ -187,41 +190,31 @@ namespace ValoCase.EditorTests
         }
 
         // ── CONFIRM gate ──────────────────────────────────────────────────────
-
-        [Test]
-        public void ConfirmIsBlockedUntilACountryIsChosen()
-        {
-            Assert.IsFalse(ProfileSetupGate.IsReady("Player123", "Jett", null));
-            Assert.IsFalse(ProfileSetupGate.IsReady("Player123", "Jett", ""));
-            Assert.IsTrue(ProfileSetupGate.IsReady("Player123", "Jett", "TR"));
-        }
-
-        [Test]
-        public void ConfirmIsBlockedByACountryOutsideTheCatalog()
-        {
-            // A code restored from an older draft or a hand-edited pref must not pass.
-            Assert.IsFalse(ProfileSetupGate.IsReady("Player123", "Jett", "XX"));
-            Assert.IsFalse(ProfileSetupGate.IsReady("Player123", "Jett", "Türkiye"));
-        }
-
-        [Test]
-        public void ConfirmIsBlockedUntilAnAvatarIsChosen()
-        {
-            Assert.IsFalse(ProfileSetupGate.IsReady("Player123", null, "TR"));
-            Assert.IsFalse(ProfileSetupGate.IsReady("Player123", "", "TR"));
-        }
+        // Nothing on the setup panel is required: the server names an unnamed account
+        // AgentXXXX, stores a missing country as NULL, and has always given new accounts a
+        // default avatar. The gate exists for the one thing the server would refuse — a
+        // nickname that was typed and breaks a rule.
 
         [TestCase(null)]
         [TestCase("")]
+        [TestCase("   ")]
+        public void ConfirmWorksOnAnUntouchedPanel(string nickname)
+        {
+            // A blank field is a choice, not a mistake. Blocking it was the whole reason a
+            // player could get stuck on the one screen there is no way past.
+            Assert.IsTrue(ProfileSetupGate.IsReady(nickname));
+        }
+
         [TestCase("ab")]
         [TestCase("Ahmet Yılmaz")]
         [TestCase("Jean-Luc")]
         [TestCase("abcdefghijklmnop")]
-        public void ACountryCannotRescueARefusedNickname(string nickname)
+        public void ATypedNicknameIsStillHeldToEveryRule(string nickname)
         {
-            // The gate defers to NicknameValidator; adding country selection must not have
-            // opened a second, laxer path to CONFIRM.
-            Assert.IsFalse(ProfileSetupGate.IsReady(nickname, "Jett", "TR"));
+            // Too short, whitespace, an illegal character, too long. The server answers all
+            // four with a 400, so letting the blank case through must not have loosened
+            // them — the gate still defers to NicknameValidator for anything typed.
+            Assert.IsFalse(ProfileSetupGate.IsReady(nickname));
         }
 
         [TestCase("Player123")]
@@ -229,11 +222,7 @@ namespace ValoCase.EditorTests
         [TestCase("Yiğit")]
         [TestCase("한국어")]
         public void NicknamesTheValidatorAcceptsStillPass(string nickname) =>
-            Assert.IsTrue(ProfileSetupGate.IsReady(nickname, "Jett", "TR"));
-
-        [Test]
-        public void GateAcceptsALowerCaseCodeTheSameWayTheCatalogDoes() =>
-            Assert.IsTrue(ProfileSetupGate.IsReady("Player123", "Jett", "tr"));
+            Assert.IsTrue(ProfileSetupGate.IsReady(nickname));
 
         // ── Registration payload ──────────────────────────────────────────────
 
@@ -268,9 +257,38 @@ namespace ValoCase.EditorTests
         }
 
         [Test]
+        public void RegistrationBodySendsBlanksRatherThanInventingThem()
+        {
+            // A player who touched nothing. The name travels empty — that is how the
+            // server is asked to assign AgentXXXX — while the country travels as AA, the
+            // code that says the question was asked and declined. Neither is a value this
+            // client made up, and neither is a dropped field the server would have to
+            // guess about.
+            var json = BackendApiClient.BuildGuestBody("", CountryCatalog.NoCountryCode, InstallId);
+
+            CollectionAssert.AreEquivalent(
+                new[] { "displayName", "countryCode", "installationId" }, KeysOf(json));
+            StringAssert.Contains("\"displayName\":\"\"", json);
+            StringAssert.Contains("\"countryCode\":\"AA\"", json);
+            Assert.AreNotEqual("{}", json);
+        }
+
+        [Test]
+        public void RegistrationBodyCarriesANameWithoutACountry()
+        {
+            // The other half of the skip: named, but no country.
+            var json = BackendApiClient.BuildGuestBody("Player123", CountryCatalog.NoCountryCode, InstallId);
+
+            StringAssert.Contains("\"displayName\":\"Player123\"", json);
+            StringAssert.Contains("\"countryCode\":\"AA\"", json);
+        }
+
+        [Test]
         public void RegistrationBodyNeverCarriesTheLocalizedName()
         {
-            foreach (var country in CountryCatalog.All)
+            // Official, not All: AA's "name" is the string "AA", which is exactly what the
+            // payload is supposed to contain when it is the chosen code.
+            foreach (var country in CountryCatalog.Official)
             {
                 var json = BackendApiClient.BuildGuestBody("Player123", country.Code, InstallId);
                 StringAssert.DoesNotContain(country.Name, json);
@@ -317,8 +335,85 @@ namespace ValoCase.EditorTests
         [Test]
         public void CountryUpdateBodyNeverCarriesTheLocalizedName()
         {
-            foreach (var country in CountryCatalog.All)
+            foreach (var country in CountryCatalog.Official)
                 StringAssert.DoesNotContain(country.Name, BackendApiClient.BuildCountryBody(country.Code));
+        }
+
+        // ── AA: asked, chose not to say ───────────────────────────────────────
+
+        [Test]
+        public void NoCountryIsAPickableValue()
+        {
+            // The backend stores and validates AA like any other code, so the client must
+            // be able to hold, send and display it. It is not a placeholder that has to be
+            // translated into something else on the way out.
+            Assert.IsTrue(CountryCatalog.IsValidCode(CountryCatalog.NoCountryCode));
+            Assert.AreEqual("AA", CountryCatalog.Normalize("aa"));
+            Assert.AreEqual("AA - AA", CountryCatalog.LabelFor("AA"));
+            Assert.AreEqual("AA - AA", CountryCatalog.NoCountry.Label);
+        }
+
+        [Test]
+        public void NoCountryIsNotInTheOfficialList()
+        {
+            // The two must stay apart: Official is the ISO standard, and AA is not in it.
+            // Merging them would put a non-country in every place that asks "which real
+            // countries exist".
+            foreach (var country in CountryCatalog.Official)
+                Assert.AreNotEqual(CountryCatalog.NoCountryCode, country.Code);
+        }
+
+        [Test]
+        public void NoCountryLeadsTheList()
+        {
+            // "1st row" is the requirement. It is also alphabetically where "AA" belongs,
+            // so the list needs no special case to put it there.
+            Assert.AreEqual(CountryCatalog.NoCountryCode, CountryCatalog.All[0].Code);
+            Assert.AreEqual(CountryCatalog.NoCountryCode, Search("")[0].Code);
+            Assert.AreEqual(CountryCatalog.NoCountryCode, Search("aa")[0].Code);
+        }
+
+        [TestCase(null, "AA")]
+        [TestCase("", "AA")]
+        [TestCase("   ", "AA")]
+        [TestCase("XX", "AA")]
+        [TestCase("Türkiye", "AA")]
+        [TestCase("AA", "AA")]
+        [TestCase("aa", "AA")]
+        [TestCase("tr", "TR")]
+        [TestCase("TR", "TR")]
+        public void ForWireAlwaysStatesACountry(string raw, string expected)
+        {
+            // Never empty. A registration that stated no country left the save holding
+            // whatever the previous account on the device had, which is how a player who
+            // touched nothing ended up with someone else's country.
+            Assert.AreEqual(expected, CountryCatalog.ForWire(raw));
+        }
+
+        // ── Name tag ──────────────────────────────────────────────────────────
+
+        [TestCase("TR")]
+        [TestCase("tr")]
+        [TestCase("US")]
+        public void NameTagShowsTheCodeWhenThereIsOne(string code)
+        {
+            var tag = ValoCase.UI.UIBuild.WithCountryTag(code, "CENK");
+            StringAssert.Contains(">" + code.ToUpperInvariant() + "<", tag);
+            StringAssert.EndsWith(" - CENK", tag);
+        }
+
+        [TestCase(null)]
+        [TestCase("")]
+        [TestCase("XX")]
+        [TestCase("Türkiye")]
+        public void NameTagFallsBackToNoCountry(string code)
+        {
+            // Skipping the country is ordinary now, so the tag has to hold its shape
+            // instead of vanishing — a name that sometimes has a code in front of it and
+            // sometimes does not reads as a broken layout.
+            var tag = ValoCase.UI.UIBuild.WithCountryTag(code, "CENK");
+            StringAssert.Contains(">" + CountryCatalog.NoCountryCode + "<", tag);
+            StringAssert.EndsWith(" - CENK", tag);
         }
 
         // ── One picker, not two ───────────────────────────────────────────────

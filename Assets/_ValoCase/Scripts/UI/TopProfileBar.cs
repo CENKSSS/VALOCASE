@@ -129,9 +129,9 @@ namespace ValoCase.UI
                 _usernameLabel.text = BuildUsernameLabel();
         }
 
-        // "TR - CENK" once a country is set, plain "CENK" until then. Normalised through
-        // CountryCatalog so a code the catalog does not know shows nothing rather than
-        // putting an unassigned value in front of the player's name.
+        // "TR - CENK" once a country is set, "00 - CENK" until then. Normalised through
+        // CountryCatalog so a code the catalog does not know reads as no country rather
+        // than putting an unassigned value in front of the player's name.
         //
         // Shares UIBuild.WithCountryTag with the lobby and the battle screen, so the code
         // is coloured and spaced identically everywhere a player's name appears.

@@ -1648,7 +1648,7 @@ namespace ValoCase.UI.Screens
 
         // The occupant's country. The server's value wins; for the local player it falls
         // back to the save, so my own flag shows even on a backend that does not send the
-        // field yet. An opponent on such a backend simply has no tag.
+        // field yet. An opponent on such a backend reads as "00".
         static string ResolveSlotCountry(LobbySlotResponse slot, bool mine)
         {
             var fromServer = slot != null ? slot.countryCode : null;

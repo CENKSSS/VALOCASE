@@ -262,6 +262,13 @@ namespace ValoCase.Core
             Backend.GuestToken = Save.Data.guestToken;
             Debug.Log("[BackendAuth] Reusing saved guest token.");
 
+            // A saved token the server no longer knows is a dead end. Every authenticated
+            // call answers 401 and the sync steps below quietly keep the stale local cache,
+            // so the player watches a balance that never moves and opens cases that never
+            // reach the server. Nothing used to clear the token, which left that player
+            // stuck on every launch with no way out short of wiping the app's data.
+            bool tokenRejected = false;
+
             // 2) Wallet — backend is authoritative; overwrite the local cached balance.
             yield return Backend.GetWallet(
                 res =>
@@ -274,7 +281,25 @@ namespace ValoCase.Core
                     UpdateAvailablePopup.TryShow(res.latestVersion);
                     Debug.Log($"[BackendAuth] Wallet synced — vp={res.vpBalance} diamonds={res.diamondBalance}");
                 },
-                err => Debug.LogWarning("[Backend] Wallet sync failed — keeping cached balance. " + err));
+                err =>
+                {
+                    // 401 only. A 403 means the token is real but the action is refused,
+                    // and a transport failure carries status 0 — neither is a reason to
+                    // throw an account away.
+                    if (err != null && err.HttpStatus == 401) tokenRejected = true;
+                    Debug.LogWarning("[Backend] Wallet sync failed — keeping cached balance. " + err);
+                });
+
+            if (tokenRejected)
+            {
+                Save.Data.guestToken = string.Empty;
+                Backend.GuestToken = null;
+                Save.Save();
+                Debug.LogWarning("[BackendAuth] Saved token was rejected — cleared it. "
+                                 + "Registration runs again once the nickname is confirmed.");
+                FanMadeNoticePopup.TryShow();
+                yield break;
+            }
 
             // 3) Inventory — replace the local cached inventory wholesale (idempotent;
             //    no duplication on repeat sync).
@@ -289,29 +314,34 @@ namespace ValoCase.Core
         }
 
         /// <summary>
-        /// Creates the backend account for a brand-new player. Called only once the
-        /// nickname screen has a valid name, so no account exists until a person actually
-        /// asked for one. Persists the token, then pulls wallet and inventory.
+        /// Creates the backend account for a brand-new player. Called only once the setup
+        /// screen's CONFIRM was pressed, so no account exists until a person actually asked
+        /// for one. Persists the token, then pulls wallet and inventory.
         /// onFailed receives a player-safe message and nothing is saved.
         /// </summary>
         /// <param name="displayName">
         /// Already validated against the shared nickname rules. Sent with the request so
-        /// the account is born with its final name.
+        /// the account is born with its final name. Empty asks the server to assign one
+        /// (AgentXXXX) and is not an error — that name comes back in the response and is
+        /// adopted, so the client never has to make one up.
         /// </param>
         /// <param name="countryCode">
-        /// The country the player chose, as an ISO-3166-1 alpha-2 code. Normalised against
-        /// CountryCatalog here so an unassigned code can never reach the request.
+        /// The country the player chose, as an ISO-3166-1 alpha-2 code. Resolved through
+        /// CountryCatalog.ForWire here, so an unassigned code can never reach the request
+        /// and the request always states a country: anything unrecognised, including
+        /// nothing at all, becomes "AA" — asked, chose not to say.
         /// </param>
         /// <param name="onDone">
-        /// Receives true when the server actually applied the name, so the caller can skip
-        /// the separate rename call. False means the server ignored the field and the name
-        /// still has to be set the old way.
+        /// Receives true when the account's name is settled — echoed back, or assigned by
+        /// the server because none was asked for — so the caller can skip the separate
+        /// rename call. False means a name we sent was ignored and still has to be set the
+        /// old way.
         /// </param>
         public void RegisterGuestBackend(string displayName, string countryCode, Action<bool> onDone, Action<string> onFailed)
         {
             if (!BackendReady) { onFailed?.Invoke(BackendErrorMapper.Generic); return; }
             if (!string.IsNullOrEmpty(Save?.Data?.guestToken)) { onDone?.Invoke(false); return; }
-            StartCoroutine(RegisterGuestRoutine(displayName, CountryCatalog.Normalize(countryCode), onDone, onFailed));
+            StartCoroutine(RegisterGuestRoutine(displayName, CountryCatalog.ForWire(countryCode), onDone, onFailed));
         }
 
         IEnumerator RegisterGuestRoutine(string displayName, string countryCode, Action<bool> onDone, Action<string> onFailed)
@@ -348,11 +378,15 @@ namespace ValoCase.Core
                     Backend.GuestToken       = token;
                     SetDiamondBalance(res.diamondBalance);
 
-                    // Only treat the name as done when the server echoed the one we asked
-                    // for. An older backend ignores the field and answers AgentXXXX, in
-                    // which case the caller still has to rename.
-                    nameApplied = !string.IsNullOrEmpty(displayName) &&
-                                  string.Equals(res.displayName, displayName, StringComparison.OrdinalIgnoreCase);
+                    // The name is done when the server echoed the one we asked for, or —
+                    // when we asked for none — when it assigned one of its own. Either way
+                    // the account's real name is in res.displayName and that is what gets
+                    // cached; the client never invents a name to fill the gap. An older
+                    // backend that ignores a name we did send answers AgentXXXX instead,
+                    // which is not an echo, so the caller still has to rename.
+                    bool asked = !string.IsNullOrEmpty(displayName);
+                    nameApplied = !string.IsNullOrEmpty(res.displayName) &&
+                                  (!asked || string.Equals(res.displayName, displayName, StringComparison.OrdinalIgnoreCase));
                     if (nameApplied)
                     {
                         Save.Data.playerName = res.displayName;
@@ -362,9 +396,16 @@ namespace ValoCase.Core
                     // Prefer the server's echo; fall back to the code we sent so the
                     // profile can still show the country on a backend that stores it
                     // without returning it.
+                    //
+                    // Written unconditionally. The old guard skipped the write when there
+                    // was nothing to write, which quietly left the previous account's
+                    // country standing in the save — a player who picked nothing saw the
+                    // country of whoever this device registered last, and it looked random.
+                    // countryCode is now never empty (CountryCatalog.ForWire), so the new
+                    // account's country always replaces it.
                     var storedCountry = CountryCatalog.Normalize(res.countryCode);
                     if (storedCountry.Length == 0) storedCountry = countryCode;
-                    if (storedCountry.Length > 0) Save.Data.countryCode = storedCountry;
+                    Save.Data.countryCode = storedCountry;
 
                     Save.Save();
                     AdoptBackendAvatar(res.avatarId);
