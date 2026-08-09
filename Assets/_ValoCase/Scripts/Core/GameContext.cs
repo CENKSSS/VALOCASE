@@ -254,9 +254,20 @@ namespace ValoCase.Core
             //    with no session ever attached.
             if (string.IsNullOrEmpty(Save.Data.guestToken))
             {
-                Debug.Log("[BackendAuth] No saved token — deferring registration until the nickname is confirmed.");
-                FanMadeNoticePopup.TryShow();
-                yield break;
+                // Someone who has never been through setup is left alone, as above. But
+                // once setup is complete the nickname screen never opens again, so a device
+                // that has lost its token has no path back to an account at all: it would
+                // keep playing while every call went out unauthenticated.
+                if (!Save.Data.profileSetupCompleted)
+                {
+                    Debug.Log("[BackendAuth] No saved token — deferring registration until the nickname is confirmed.");
+                    FanMadeNoticePopup.TryShow();
+                    yield break;
+                }
+
+                Debug.LogWarning("[BackendAuth] Setup is complete but no token is saved — re-registering this device.");
+                yield return ReregisterDevice();
+                if (string.IsNullOrEmpty(Save.Data.guestToken)) yield break;
             }
 
             Backend.GuestToken = Save.Data.guestToken;
@@ -292,13 +303,24 @@ namespace ValoCase.Core
 
             if (tokenRejected)
             {
-                Save.Data.guestToken = string.Empty;
-                Backend.GuestToken = null;
-                Save.Save();
-                Debug.LogWarning("[BackendAuth] Saved token was rejected — cleared it. "
-                                 + "Registration runs again once the nickname is confirmed.");
-                FanMadeNoticePopup.TryShow();
-                yield break;
+                // Clearing the token is not enough on its own. Registration normally waits
+                // for the nickname screen, and that screen never reopens for anyone who has
+                // already been through it — FirstLaunchProfilePopup.IsSetupComplete returns
+                // true on profileSetupCompleted. The account would stay missing while every
+                // later call went out with no token at all, which reads as "Missing
+                // X-Guest-Token header" on every screen. Re-register here instead, reusing
+                // the name and country already on this device, so the player keeps playing.
+                Debug.LogWarning("[BackendAuth] Saved token was rejected — re-registering this device.");
+                yield return ReregisterDevice();
+
+                if (string.IsNullOrEmpty(Save.Data.guestToken))
+                {
+                    // Nothing to sync against. The next launch tries again.
+                    FanMadeNoticePopup.TryShow();
+                    yield break;
+                }
+
+                Debug.Log("[BackendAuth] Re-registered — continuing boot sync on the new account.");
             }
 
             // 3) Inventory — replace the local cached inventory wholesale (idempotent;
@@ -337,6 +359,31 @@ namespace ValoCase.Core
         /// rename call. False means a name we sent was ignored and still has to be set the
         /// old way.
         /// </param>
+        /// <summary>
+        /// Rebuilds the guest account for a device the server no longer recognises, reusing
+        /// the name and country already saved here so the player is not sent back through
+        /// setup. Progress on the old account is gone either way — it is the account that
+        /// vanished, not the save — but the alternative is a client that runs forever with
+        /// no token and refuses every action.
+        /// </summary>
+        IEnumerator ReregisterDevice()
+        {
+            Save.Data.guestToken     = string.Empty;
+            Save.Data.guestAccountId = string.Empty;
+            Backend.GuestToken       = null;
+            Save.Save();
+
+            bool done = false;
+            RegisterGuestBackend(Save.Data.playerName, Save.Data.countryCode,
+                _ => done = true,
+                err =>
+                {
+                    done = true;
+                    Debug.LogWarning("[BackendAuth] Re-registration failed — " + err);
+                });
+            while (!done) yield return null;
+        }
+
         public void RegisterGuestBackend(string displayName, string countryCode, Action<bool> onDone, Action<string> onFailed)
         {
             if (!BackendReady) { onFailed?.Invoke(BackendErrorMapper.Generic); return; }

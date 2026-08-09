@@ -69,6 +69,19 @@ build_settings_dump.txt
 ProjectSettings/AndroidResolverDependencies.xml
 ProjectSettings/GvhProjectSettings.xml
 
+# EDM4U's generated maven repo, rebuilt by every Android dependency resolve
+Assets/GeneratedLocalRepo/
+Assets/GeneratedLocalRepo.meta
+
+# Firebase editor binaries for platforms this project is not developed on. The macOS
+# bundle alone is 106 MB, past GitHub's hard per-file limit, and neither it nor the
+# Linux .so is used by a Windows editor or an Android build. The Windows .dll beside
+# them IS tracked. Re-importing FirebaseAnalytics.unitypackage restores the rest.
+Assets/Firebase/Plugins/x86_64/*.bundle
+Assets/Firebase/Plugins/x86_64/*.bundle.meta
+Assets/Firebase/Plugins/x86_64/*.so
+Assets/Firebase/Plugins/x86_64/*.so.meta
+
 # Agentic QE local state (memory.db, config)
 .agentic-qe/
 

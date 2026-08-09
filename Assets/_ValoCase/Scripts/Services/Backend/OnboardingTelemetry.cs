@@ -136,6 +136,10 @@ namespace ValoCase.Services.Backend
                     networkErrorCategory = networkErrorCategory ?? string.Empty,
                     httpStatus           = httpStatus
                 });
+
+                // Same step, reported to Firebase so Google Ads can bid on it. No-op
+                // until the SDK is imported and VALOCASE_FIREBASE is defined.
+                AdsConversions.Report(eventName);
             }
             catch (Exception e)
             {

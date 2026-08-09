@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "326671498370",
+    "project_id": "valocase-53",
+    "storage_bucket": "valocase-53.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:326671498370:android:7ec02f868887431852489b",
+        "android_client_info": {
+          "package_name": "com.valocase.game"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAnsakemYj1INSyHBJ0lOviDzHt5wXFTo8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
