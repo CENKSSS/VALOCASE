@@ -10,6 +10,22 @@ Durum: **UYGULANDI (2026-08-17, 1.0.28).** Aşağıdaki çözümlerden kod taraf
 - Çözüm 5 → telemetri, transient hatalarla tükenen olayı düşürmek yerine diske park edip sonraki açılışta yeniden deniyor. Crashlytics paketi ve kampanya conversion işaretlemesi konsol/SDK tarafında — kullanıcı aksiyonu.
 
 Orijinal analiz aşağıda değiştirilmeden duruyor.
+
+---
+
+## KESİN TEŞHİS — 17.08.2026, sunucu logu doğrulaması
+
+"~20 kurulum, oyuna giren 0" sorusu sunucu tarafından, Firebase'den bağımsız olarak cevaplandı. Kaynaklar: Kudu docker platform logları (8-9 Ağustos) + `spring.log.2026-08-10` (tam gün) + `onboarding_events`/`accounts` tabloları.
+
+**1. Sunucu sağlam; erişim de sağlam.** 10 Ağustos boyunca sayaç raporu her 5 dakikada saniyesi şaşmadan attı (JVM hiç durmadı), sıfır DB/bellek hatası (tüm ERROR'lar Always On'un `/` ping gürültüsü), ve cihazlardan 23 telemetri olayı kabul edildi. "Sunucuya ulaşamıyorlar" ve "sunucu cevap vermiyor" hipotezlerinin ikisi de yanlışlandı.
+
+**2. "Uyanma" yalnız restart sonrası gerçek.** Docker logları: her container açılışında warmup 76-167 sn sürüyor. 8-9 Ağustos'taki restart'lar sahibinin taşınma denemeleriydi; 9 Ağustos 12:19 UTC deploy'undan sonra hiç restart yok. Kalıcı bir "uyuyan sunucu" sorunu yok.
+
+**3. Funnel'ın öldüğü nokta: fan notice.** Deploy'dan itibaren kümülatif sunucu sayaçları: `app_launched 5→11`, `fan_notice_shown 1→7` gün boyu büyüdü; `fan_notice_accepted` ve sonrası **bütün gün 1'de dondu** (o 1'ler sahibinin kendi cihazının zinciri). Altı gerçek cihaz notice'ı gördüğünü sunucuya raporladı, hiçbiri OK'a basmadı. Alt sebepler: 1.0.26 kohortunda notice kapatılamaz güncelleme duvarının ALTINDA açılıyordu (tıklanamazdı); duvarsız 1.0.27'de ise ~22 sn ölü ekran sonrası gelen tek butonlu yabancı dilde metin terk ediliyor.
+
+**4. Düzeltilen hipotez:** 22-23 sn'lik ölü açılış "sunucu cevapsızdı" diye açıklanmıştı — 10 Ağustos logu sunucunun o saatlerde sağlıklı olduğunu gösterdi; health timeout'unun muhtemel sebebi cihaz tarafı yavaş şebeke. 1.0.29'daki paralel version-gate düzeltmesi iki durumda da geçerli.
+
+**Zincir:** reklam kurulumlarının çoğu hiç açılmıyor → açanlar ~22 sn boş ekran → duvar-altı/itici fan notice → OK yok → kayıt ekranı yok → oyuna giren 0. Kayıt sistemi, sunucu ve DB çalışıyor; oyuncu onlara ulaşamıyor. 1.0.29 değişiklikleri tam bu zinciri hedefliyor; yayın sonrası aynı sayaçlardan doğrulanacak.
 Yöntem: Her madde ya koddan (dosya:satır), ya veritabanından (`onboarding_events`), ya da Azure/Play panellerinden doğrulandı. Tahmin içeren hiçbir madde "çözüm" olarak yazılmadı; doğrulanamayanlar açıkça "doğrulanamadı" diye işaretli.
 
 Sorunun dört katmanı (17.08 tarihli araştırmadan):
