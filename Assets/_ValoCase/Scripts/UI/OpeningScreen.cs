@@ -76,7 +76,12 @@ namespace ValoCase.UI
             if (sprite != null) logoImage.sprite = sprite;
             else { logoImage.enabled = false; Debug.LogWarning("[OpeningScreen] Missing sprite at Resources/" + LogoResourcePath); }
 
-            var safe = NewChild("SafeArea", transform);
+            // NOT "SafeArea": every popup in the project finds its parent with
+            // GameObject.Find("SafeArea"), and Find's pick between two same-named
+            // objects is undefined. A popup that grabbed THIS one rode a canvas that
+            // destroys itself 3.4s later and vanished with it — a shown-but-never-seen
+            // fan notice. The unique name keeps this overlay out of that lookup.
+            var safe = NewChild("OpeningSafeArea", transform);
             StretchFull(safe);
             safe.gameObject.AddComponent<SafeAreaFitter>();
 

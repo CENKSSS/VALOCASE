@@ -20,16 +20,14 @@ namespace ValoCase.UI
     {
         public const string AcceptedKey = "valocase.legal.fanMadeNoticeAccepted";
 
-        // Device language, same rule as the rest of the first-launch flow. The wording is
-        // deliberately one short statement: the ad-driven player deciding whether to stay
-        // reads exactly one line, not a paragraph of legal distancing.
-        static bool IsTurkish => Application.systemLanguage == SystemLanguage.Turkish;
-
-        static string TitleText  => IsTurkish ? "Bilgilendirme" : "Fan-Made Notice";
-        static string BodyText   => IsTurkish
-            ? "Bu, hayranlarca yapılmış resmi olmayan bir oyundur.\nHiçbir şirket veya kuruluşla bağlantısı yoktur."
-            : "This is an unofficial fan-made game.\nNot affiliated with any company or organization.";
-        static string ButtonText => IsTurkish ? "TAMAM" : "OK";
+        // Always English, by the owner's call — 1.0.29 briefly localized this to the
+        // device language and that was reverted: one audience-wide wording, one string
+        // to reason about. Still deliberately one short statement: the ad-driven player
+        // deciding whether to stay reads a line, not a paragraph of legal distancing.
+        const string TitleText  = "Fan-Made Notice";
+        const string BodyText   =
+            "This is an unofficial fan-made game.\nNot affiliated with any company or organization.";
+        const string ButtonText = "OK";
 
         static readonly Color Backdrop = new Color(0f, 0f, 0f, 0.85f);
         static readonly Color CardBg   = new Color(0.051f, 0.067f, 0.090f, 1f);

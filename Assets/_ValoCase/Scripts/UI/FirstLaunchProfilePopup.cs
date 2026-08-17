@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using TMPro;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.UI;
 using ValoCase.Core;
 using ValoCase.Profile;
@@ -65,6 +66,11 @@ namespace ValoCase.UI
         string          _selectedKey;
         Sprite          _selectedSprite;
         bool            _saving;
+        // Taps on the dim area outside the card. The second one confirms — see
+        // OnBackdropTapped. Deliberately never reset: two stray taps minutes apart
+        // still mean the player is done with this panel, and everything on it is
+        // optional anyway.
+        int             _backdropTaps;
 
         // ── Entry point ───────────────────────────────────────────────────────
 
@@ -157,6 +163,18 @@ namespace ValoCase.UI
         }
 
         // ── Confirm flow ──────────────────────────────────────────────────────
+
+        // Two taps outside the card behave exactly like pressing CONFIRM. One tap is
+        // never enough on purpose — dismissing the keyboard taps this same area, and a
+        // single stray touch must not submit the form. The confirm path's own
+        // validation still runs, so a half-typed invalid name shows its error instead
+        // of being sent.
+        void OnBackdropTapped()
+        {
+            if (_saving) return;
+            _backdropTaps++;
+            if (_backdropTaps >= 2) OnConfirmClicked();
+        }
 
         void OnConfirmClicked()
         {
@@ -419,8 +437,18 @@ namespace ValoCase.UI
             dim.color         = Backdrop;
             dim.raycastTarget = true;
 
+            // Same family as the fan notice's tap-anywhere close, one notch more
+            // careful because this panel has a text field: the first outside tap is
+            // free (it is how the keyboard gets dismissed), the second acts as CONFIRM.
+            var dimBtn = gameObject.AddComponent<Button>();
+            dimBtn.transition = Selectable.Transition.None;
+            dimBtn.onClick.AddListener(OnBackdropTapped);
+
             var card = new GameObject("Card", typeof(RectTransform), typeof(Image), typeof(Outline));
             card.transform.SetParent(transform, false);
+            // Swallows taps on the card body so they never bubble up to the backdrop
+            // button: only genuine outside-the-panel taps count toward quick-confirm.
+            card.AddComponent<CardTapCatcher>();
             var cardRt = (RectTransform)card.transform;
             cardRt.anchorMin = cardRt.anchorMax = cardRt.pivot = new Vector2(0.5f, 0.5f);
             cardRt.sizeDelta = new Vector2(760f, 1140f);
@@ -754,5 +782,14 @@ namespace ValoCase.UI
         static string PlaceholderText => IsTurkish
             ? "Boş bırakabilirsin — sana isim verilir"
             : "Leave empty — we'll pick a name for you";
+
+        /// <summary>
+        /// Consumes pointer clicks without doing anything, so a tap on the card body
+        /// stops here instead of bubbling to the backdrop's quick-confirm button.
+        /// </summary>
+        sealed class CardTapCatcher : MonoBehaviour, IPointerClickHandler
+        {
+            public void OnPointerClick(PointerEventData eventData) { }
+        }
     }
 }
