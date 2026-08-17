@@ -34,8 +34,13 @@ namespace ValoCase.UI
         static readonly Color CellBg     = new Color(0.086f, 0.106f, 0.137f, 1f);
         static readonly Color Accent     = new Color(1f, 0.275f, 0.333f, 1f);
         static readonly Color AccentDim  = new Color(1f, 0.275f, 0.333f, 0.28f);
-        // Neutral grey for the confirm button before a valid nickname is typed.
-        static readonly Color ConfirmIdle = new Color(0.180f, 0.204f, 0.243f, 1f);
+        // Muted accent for the confirm button while the typed nickname breaks a rule.
+        // Was a neutral grey — which reads as DISABLED, and real installs showed players
+        // sitting on this panel without ever tapping the button that would have told
+        // them what was wrong. Dimmed-but-warm keeps it clearly tappable.
+        static readonly Color ConfirmIdle = new Color(0.478f, 0.169f, 0.196f, 1f);
+        // Label tone on the dimmed button: readable, warm, clearly not the ready state.
+        static readonly Color ConfirmIdleText = new Color(0.949f, 0.812f, 0.831f, 1f);
         // Warning line under the input. Deliberately a brighter red than the brand accent
         // so it reads as an error rather than decoration.
         static readonly Color ErrorRed   = new Color(1f, 0.325f, 0.325f, 1f);
@@ -44,6 +49,7 @@ namespace ValoCase.UI
         static readonly Color DarkText   = new Color(0.043f, 0.055f, 0.082f, 1f);
 
         TMP_InputField  _nameInput;
+        TextMeshProUGUI _counterLbl;
         TextMeshProUGUI _errorLbl;
         Button          _confirmBtn;
         Image           _confirmImg;
@@ -300,17 +306,44 @@ namespace ValoCase.UI
             if (_confirmBtn != null) _confirmBtn.interactable = !_saving;
             if (_confirmImg != null) _confirmImg.color = ready ? Accent : ConfirmIdle;
             if (_confirmLbl != null && !_saving)
-                _confirmLbl.color = ready ? DarkText : TextDim;
+                _confirmLbl.color = ready ? DarkText : ConfirmIdleText;
         }
 
-        // Clears a stale complaint as soon as the name stops breaking a rule — including
-        // when the field is emptied again, which is now an allowed state — so the red line
-        // does not linger under a field that is fine.
+        // Runs on every keystroke: the complaint appears WHILE the rule is being broken,
+        // not only after a tap on the confirm button. Players do not tap a button that
+        // looks off — the panel has to speak first.
         void OnNicknameChanged(string value)
         {
-            if (ProfileSetupGate.IsReady(value)) ShowError(null);
+            ShowLiveValidation(value);
+            UpdateCounter(value);
             ProfileSetupDraft.SetNickname(value);
             RefreshConfirmState();
+        }
+
+        // Everything except TooShort is worth interrupting the typing for. Someone two
+        // keys into a name does not need "at least 3 characters" yet — that message
+        // still arrives via the confirm tap if they genuinely stop short. Valid and
+        // blank both clear the line, so it never lingers under a field that is fine.
+        void ShowLiveValidation(string value)
+        {
+            var reason = NicknameValidator.Classify(value);
+            bool quiet = reason == NicknameRejectionReason.None ||
+                         reason == NicknameRejectionReason.Blank ||
+                         reason == NicknameRejectionReason.TooShort;
+            ShowError(quiet ? null : NicknameMessages.For(reason));
+        }
+
+        // "12/15" beside the NICKNAME label. The input field deliberately allows more
+        // UTF-16 units than 15 visible characters (grapheme clusters have no fixed
+        // size), so without this the only sign of an over-long name was the dimmed
+        // button. Hidden while empty; turns warning-red past the limit.
+        void UpdateCounter(string value)
+        {
+            if (_counterLbl == null) return;
+            var normalized = NicknameValidator.Normalize(value);
+            int length = NicknameValidator.GraphemeLength(normalized);
+            _counterLbl.text  = length == 0 ? string.Empty : $"{length}/{NicknameValidator.MaxLength}";
+            _counterLbl.color = length > NicknameValidator.MaxLength ? ErrorRed : TextDim;
         }
 
         void OnCountryButtonClicked()
@@ -411,6 +444,12 @@ namespace ValoCase.UI
             nameHint.characterSpacing = 3f;
             TopBand(nameHint.rectTransform, -158f, 26f, 60f);
 
+            // Same band as the NICKNAME label, right edge. Text and color are owned by
+            // UpdateCounter; starts empty so the untouched panel shows no numbers.
+            _counterLbl = UIBuild.MakeTmp(card.transform, "NameCount", "", 18f, FontStyles.Bold, TextDim);
+            _counterLbl.alignment = TextAlignmentOptions.MidlineRight;
+            TopBand(_counterLbl.rectTransform, -158f, 26f, 60f);
+
             BuildNameInput(card.transform);
 
             var countryHint = UIBuild.MakeTmp(card.transform, "CountryHint", "COUNTRY", 18f, FontStyles.Bold, TextDim);
@@ -474,7 +513,9 @@ namespace ValoCase.UI
             taRt.anchorMin = Vector2.zero; taRt.anchorMax = Vector2.one;
             taRt.offsetMin = new Vector2(24f, 10f); taRt.offsetMax = new Vector2(-24f, -10f);
 
-            var ph = UIBuild.MakeTmp(taGo.transform, "Placeholder", "Enter nickname…", 26f, FontStyles.Italic, TextDim);
+            // The subtitle already says everything is optional, but the field is where
+            // that has to be believed: an inviting blank beats a demand for input.
+            var ph = UIBuild.MakeTmp(taGo.transform, "Placeholder", PlaceholderText, 26f, FontStyles.Italic, TextDim);
             ph.alignment = TextAlignmentOptions.MidlineLeft;
             UIBuild.Stretch(ph.rectTransform);
 
@@ -709,5 +750,9 @@ namespace ValoCase.UI
         static string SubtitleText => IsTurkish
             ? "Hepsi isteğe bağlı — sonradan Ayarlar'dan değiştirebilirsin"
             : "All optional — you can change these later in Settings";
+
+        static string PlaceholderText => IsTurkish
+            ? "Boş bırakabilirsin — sana isim verilir"
+            : "Leave empty — we'll pick a name for you";
     }
 }

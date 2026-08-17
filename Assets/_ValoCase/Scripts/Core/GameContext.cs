@@ -226,25 +226,61 @@ namespace ValoCase.Core
                 gameConfig.RequestTimeoutSeconds,
                 Save.Data.guestToken);
 
+            // The version gate runs beside the boot sync, not in front of it. It used to
+            // be step 0 of BackendBootSync: one health call whose failure was ignored —
+            // so a slow or restarting server both held the first-launch UI hostage for
+            // the full request timeout AND silently skipped the mandatory update wall.
+            // Real installs measured 22-23s from launch to the first popup for exactly
+            // this reason. Now the popups appear immediately and the wall arrives
+            // whenever a health attempt lands; its LateUpdate keeps it on top of
+            // whatever opened in the meantime.
+            StartCoroutine(VersionGate());
             StartCoroutine(BackendBootSync());
+        }
+
+        /// <summary>
+        /// Fetches the store's current version and raises the mandatory update wall when
+        /// this build is behind. Three attempts with a deliberately short per-call
+        /// timeout: the wall must not depend on a single request surviving the exact
+        /// moment the server is cold — that is how outdated clients kept slipping past
+        /// it. Gives up quietly after the last attempt; the authenticated wallet sync
+        /// still carries latestVersion as a later chance for token holders.
+        /// </summary>
+        IEnumerator VersionGate()
+        {
+            const int Attempts = 3;
+            const int HealthTimeoutSeconds = 4;
+
+            for (int attempt = 1; attempt <= Attempts; attempt++)
+            {
+                bool done = false;
+                string latest = null;
+                yield return Backend.GetHealth(
+                    res => { done = true; latest = res != null ? res.latestVersion : null; },
+                    err => Debug.Log($"[Update] Version check attempt {attempt}/{Attempts} failed — "
+                                     + BackendErrorMapper.Map(err)),
+                    timeoutSeconds: HealthTimeoutSeconds);
+
+                if (done)
+                {
+                    UpdateAvailablePopup.TryShow(latest);
+                    yield break;
+                }
+
+                // Short, growing gap: enough for a restarting server to come up, short
+                // enough that an outdated client is walled within the first half minute.
+                if (attempt < Attempts)
+                    yield return new WaitForSecondsRealtime(3f * attempt);
+            }
         }
 
         IEnumerator BackendBootSync()
         {
             Debug.Log("[Backend] Boot sync started — baseUrl=" + gameConfig.BackendBaseUrl);
 
-            // 0) Version gate, before anything that needs a token. The update wall is
-            //    mandatory, so it has to reach the clients least able to ask for it: a
-            //    first-time install with no token yet, and — the case that actually
-            //    happened — a build whose saved token the server no longer accepts. Both
-            //    return from this method before /wallet is ever called, so a version check
-            //    that lived only there would never run for them.
-            //
-            //    Failure is ignored on purpose. An unreachable backend must not hold a
-            //    player at a wall; the notice simply does not appear this launch.
-            yield return Backend.GetHealth(
-                res => UpdateAvailablePopup.TryShow(res != null ? res.latestVersion : null),
-                err => Debug.Log("[Update] Version check skipped — " + BackendErrorMapper.Map(err)));
+            // The version gate that used to sit here as step 0 now runs as its own
+            // coroutine (see VersionGate) so the first-launch UI below is never held
+            // behind a health call against a slow server.
 
             // 1) Ensure a guest token. A first-time player has none: registration is NOT
             //    done here. It waits until they confirm a nickname, so an app that is
@@ -406,7 +442,29 @@ namespace ValoCase.Core
 
             OnboardingTelemetry.Emit(OnboardingTelemetry.RegistrationAttempted);
 
-            yield return Backend.RegisterGuest(displayName, countryCode,
+            // One quiet retry on a transient failure, nothing more. Real installs hit
+            // the server during its slow windows, where the first POST times out and the
+            // player is told to try again — and the data shows they mostly leave instead.
+            // The retry is the machine doing what a patient player would have done, so it
+            // repeats the SAME confirm press: one attempted event, one failure report at
+            // the end. Deliberately not a longer timeout — the player is watching a
+            // SAVING button, and a second short attempt beats one long stall.
+            // A retried timeout can in principle duplicate a server-side account the
+            // response never reached; a player pressing CONFIRM again has always had
+            // that property, and the orphan row is harmless next to a lost player.
+            for (int attempt = 1; attempt <= 2 && !registered && !tokenMissing; attempt++)
+            {
+                if (attempt > 1)
+                {
+                    // Same transiency rule the telemetry queue uses (and tests): resend
+                    // only when an identical request could plausibly answer differently.
+                    if (!OnboardingTelemetry.IsTransient(error)) break;
+                    Debug.Log("[BackendAuth] Registration attempt 1 failed transiently — retrying once. " + error);
+                    error = null;
+                    yield return new WaitForSecondsRealtime(2f);
+                }
+
+                yield return Backend.RegisterGuest(displayName, countryCode,
                 res =>
                 {
                     var token = res.ResolveToken();
@@ -459,6 +517,7 @@ namespace ValoCase.Core
                     Debug.Log($"[BackendAuth] Guest registered on nickname confirm — nameApplied={nameApplied}");
                 },
                 err => error = err);
+            }
 
             if (!registered)
             {

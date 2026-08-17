@@ -78,6 +78,17 @@ namespace ValoCase.Services.Backend
         int _droppedCount;
 
         /// <summary>
+        /// Set by <see cref="SendWithRetry"/> when it ran out of attempts against purely
+        /// transient failures. The drain then parks the event — leaves it queued and on
+        /// disk for the next launch — instead of dropping it. The events lost this way
+        /// were precisely the ones recorded against an unresponsive server, i.e. the
+        /// windows the funnel most needs to describe. eventId is the backend's
+        /// idempotency key, so a park that was actually stored server-side cannot
+        /// double-count. Still bounded: the queue cap and per-launch attempt caps hold.
+        /// </summary>
+        bool _lastSendGaveUpTransient;
+
+        /// <summary>
         /// Set whenever the queue changes; cleared once it has been written to disk. The
         /// write is coalesced through <see cref="PersistPump"/> rather than done inline so
         /// a burst of Emits during boot produces one file write instead of nine.
@@ -289,8 +300,20 @@ namespace ValoCase.Services.Backend
                 {
                     var request = _queue.Peek();
                     yield return SendWithRetry(request);
-                    // Delivered, permanently refused, or out of attempts — either way it
-                    // leaves the queue, so a stuck event cannot block the ones behind it.
+
+                    // Out of attempts against a server that only failed transiently:
+                    // park everything. The event stays at the head, the queue goes to
+                    // disk, and the next launch restores and retries it. Draining stops
+                    // because the events behind it would only burn their attempts
+                    // against the same unreachable server.
+                    if (_lastSendGaveUpTransient)
+                    {
+                        _dirty = true;
+                        break;
+                    }
+
+                    // Delivered or permanently refused — either way it leaves the queue,
+                    // so a refused event cannot block the ones behind it.
                     if (_queue.Count > 0 && ReferenceEquals(_queue.Peek(), request))
                     {
                         _queue.Dequeue();
@@ -310,6 +333,7 @@ namespace ValoCase.Services.Backend
 
         IEnumerator SendWithRetry(OnboardingEventRequest request)
         {
+            _lastSendGaveUpTransient = false;
             var backoff = RetryBaseSeconds;
 
             for (int attempt = 1; attempt <= MaxAttemptsPerEvent; attempt++)
@@ -358,8 +382,11 @@ namespace ValoCase.Services.Backend
                 }
             }
 
+            // Every attempt failed and every failure was transient. Not a drop any
+            // more — the caller parks the event for the next launch.
+            _lastSendGaveUpTransient = true;
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-            Debug.LogWarning($"[OnboardingTelemetry] {request.eventName} dropped after {MaxAttemptsPerEvent} attempts.");
+            Debug.LogWarning($"[OnboardingTelemetry] {request.eventName} parked after {MaxAttemptsPerEvent} attempts; will retry next launch.");
 #endif
         }
 

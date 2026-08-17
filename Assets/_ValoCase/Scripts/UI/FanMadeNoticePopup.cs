@@ -7,18 +7,29 @@ using ValoCase.Services.Backend;
 namespace ValoCase.UI
 {
     // One-time first-launch fan-made legal notice. Shown once per local install before
-    // the first-launch profile popup; on OK it persists an accepted flag and chains to
+    // the first-launch profile popup; accepting persists a flag and chains to
     // FirstLaunchProfilePopup. Runtime-built with zero prefab dependency, same pattern
     // as NoInternetPopup. Independent of backend; storage is local PlayerPrefs so a
     // save/data reset re-shows it.
+    //
+    // Any tap accepts — the OK button, the card body, or the backdrop. Real installs
+    // showed players who saw this screen and never pressed the one button on it, in two
+    // sessions two days apart; a notice must inform, not gatekeep, so every touch is the
+    // acknowledgement. The statement itself still renders, which is what the flag means.
     public sealed class FanMadeNoticePopup : MonoBehaviour
     {
         public const string AcceptedKey = "valocase.legal.fanMadeNoticeAccepted";
 
-        const string TitleText = "Fan-Made Notice";
-        const string BodyText =
-            "This is a fan-made game.\nWe are not affiliated with any company, publisher, or official organization.";
-        const string ButtonText = "OK";
+        // Device language, same rule as the rest of the first-launch flow. The wording is
+        // deliberately one short statement: the ad-driven player deciding whether to stay
+        // reads exactly one line, not a paragraph of legal distancing.
+        static bool IsTurkish => Application.systemLanguage == SystemLanguage.Turkish;
+
+        static string TitleText  => IsTurkish ? "Bilgilendirme" : "Fan-Made Notice";
+        static string BodyText   => IsTurkish
+            ? "Bu, hayranlarca yapılmış resmi olmayan bir oyundur.\nHiçbir şirket veya kuruluşla bağlantısı yoktur."
+            : "This is an unofficial fan-made game.\nNot affiliated with any company or organization.";
+        static string ButtonText => IsTurkish ? "TAMAM" : "OK";
 
         static readonly Color Backdrop = new Color(0f, 0f, 0f, 0.85f);
         static readonly Color CardBg   = new Color(0.051f, 0.067f, 0.090f, 1f);
@@ -32,6 +43,12 @@ namespace ValoCase.UI
 
         public static void TryShow()
         {
+            // Nothing spawns behind the mandatory update wall. A popup built under it can
+            // never be touched, yet its "shown" telemetry would still fire — the Aug 9-10
+            // cohort's funnel read "saw the notice" for players who only ever saw the
+            // wall. The walled player updates and relaunches; the chain runs then.
+            if (UpdateAvailablePopup.IsWallActive) return;
+
             if (_instance != null) return;
             if (IsAccepted()) { FirstLaunchProfilePopup.TryShow(); return; }
 
@@ -81,8 +98,16 @@ namespace ValoCase.UI
             return best != null ? best.transform : null;
         }
 
+        // Guards the tap-anywhere close: Destroy is deferred to end of frame, so two
+        // touches landing in the same frame would otherwise both run this — double
+        // telemetry and a double TryShow.
+        bool _accepted;
+
         void OnOkClicked()
         {
+            if (_accepted) return;
+            _accepted = true;
+
             OnboardingTelemetry.Emit(OnboardingTelemetry.FanNoticeAccepted);
             PlayerPrefs.SetInt(AcceptedKey, 1);
             PlayerPrefs.Save();
@@ -100,6 +125,13 @@ namespace ValoCase.UI
             var dim = gameObject.AddComponent<Image>();
             dim.color         = Backdrop;
             dim.raycastTarget = true;
+
+            // The whole overlay accepts. Taps on the card body have no handler of their
+            // own, so UGUI bubbles them up to this root button; the OK button below keeps
+            // its own listener and consumes its taps first. One path, one flag write.
+            var dimBtn = gameObject.AddComponent<Button>();
+            dimBtn.transition = Selectable.Transition.None;
+            dimBtn.onClick.AddListener(OnOkClicked);
 
             var card = new GameObject("Card", typeof(RectTransform), typeof(Image), typeof(Outline));
             card.transform.SetParent(transform, false);

@@ -38,6 +38,14 @@ namespace ValoCase.UI
         bool IsShowing => gameObject.activeSelf;
 
         /// <summary>
+        /// Whether the mandatory wall is currently up. The first-launch popups check this
+        /// before spawning: a notice built behind the wall can never be interacted with,
+        /// yet its "shown" telemetry would still fire — which is exactly the misleading
+        /// funnel data the Aug 9-10 cohort produced.
+        /// </summary>
+        public static bool IsWallActive => Instance != null && Instance.IsShowing;
+
+        /// <summary>
         /// Shows the wall when <paramref name="latestVersion"/> is newer than the running
         /// build. Safe to call on every boot and from more than one caller: it is a no-op
         /// when the server sent nothing, when the strings do not parse, or when this build

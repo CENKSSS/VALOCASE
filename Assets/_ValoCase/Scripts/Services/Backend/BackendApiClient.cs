@@ -104,8 +104,15 @@ namespace ValoCase.Services.Backend
         /// that updating is what fixes it. /wallet carries the same field but needs auth,
         /// which is exactly what such a client does not have.
         /// </summary>
-        public IEnumerator GetHealth(Action<HealthResponse> onSuccess, Action<BackendError> onError)
-            => Send("GET", ApiPrefix + "/health", null, auth: false, onSuccess, onError);
+        /// <param name="timeoutSeconds">
+        /// Per-call override; 0 keeps the shared default. The version gate polls this
+        /// endpoint with a short timeout so a slow or restarting server delays the boot
+        /// UI by seconds, not by the full request timeout.
+        /// </param>
+        public IEnumerator GetHealth(Action<HealthResponse> onSuccess, Action<BackendError> onError,
+                                     int timeoutSeconds = 0)
+            => Send("GET", ApiPrefix + "/health", null, auth: false, onSuccess, onError,
+                    timeoutSeconds: timeoutSeconds);
 
         public IEnumerator GetWallet(Action<WalletResponse> onSuccess, Action<BackendError> onError)
             => Send("GET", ApiPrefix + "/wallet", null, auth: true, onSuccess, onError);
@@ -381,7 +388,8 @@ namespace ValoCase.Services.Backend
 
         IEnumerator Send<T>(string method, string path, string body, bool auth,
                             Action<T> onSuccess, Action<BackendError> onError,
-                            string wrapArrayKey = null, string debugTag = null, bool silent = false) where T : class
+                            string wrapArrayKey = null, string debugTag = null, bool silent = false,
+                            int timeoutSeconds = 0) where T : class
         {
             var url = _baseUrl + path;
 
@@ -423,7 +431,7 @@ namespace ValoCase.Services.Backend
             using var req = new UnityWebRequest(url, method)
             {
                 downloadHandler = new DownloadHandlerBuffer(),
-                timeout = _timeoutSeconds
+                timeout = timeoutSeconds > 0 ? timeoutSeconds : _timeoutSeconds
             };
 
             if (!string.IsNullOrEmpty(body))
